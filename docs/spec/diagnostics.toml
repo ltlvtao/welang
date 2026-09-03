@@ -33,9 +33,17 @@ owner = "0300-control-flow"
 # Intra-segment structure (chapter 3): E0200 boundary reserve,
 # E0201-E0204 control-flow form errors (loop control, value
 # position, defer), E0205-E0299 reserved for later control-flow
-# productions (match arms, for, labels if ever ratified).
+# productions (for, labels if ever ratified). Match owns E03xx.
 
-[segments."E0300-E9999"]
+[segments."E0300-E0399"]
+domain = "match and patterns"
+owner = "0400-match"
+# Intra-segment structure (chapter 4): E0300 boundary reserve,
+# E0301-E0302 match form errors (arm count, or-pattern bindings),
+# E0303-E0399 reserved for typing-level match checks (exhaustiveness,
+# guard coverage, arm agreement) entering via amendments.
+
+[segments."E0400-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -226,4 +234,22 @@ description = "A defer statement is not a direct item of a function body's block
 remediation = "Move the defer to the top level of the enclosing function body, or release the resource through the mechanism the resource chapter ratifies instead of a nested defer."
 owner = "0300-control-flow"
 requirement = "Defer"
+allocated = "2026-09-03"
+
+[diagnostic.E0301]
+severity = "error"
+title = "match requires at least one arm"
+description = "A match expression's brace group holds no arms (`match c { }`). With zero arms no arm can be taken, so the match could never produce a value; the shape is rejected at the form layer rather than deferred to typing. Fires under: Match expression form."
+remediation = "Add at least one arm; when only a default outcome is needed, a single wildcard arm `_ => ...` covers all values."
+owner = "0400-match"
+requirement = "Match expression form"
+allocated = "2026-09-03"
+
+[diagnostic.E0302]
+severity = "error"
+title = "or-pattern branches must bind the same names"
+description = "The branches of one or-pattern bind different sets of names (for example `a | b`). All branches must bind exactly the same names so that whichever branch matches, the arm body sees one binding set; the check is syntactic (names only), and the bound names' type agreement is ratified by the types chapter. Fires under: Or-pattern binding consistency."
+remediation = "Give every branch the same binding names, or drop the bindings from the or-pattern (for example `200 | 404`); re-express per-branch bindings as separate arms."
+owner = "0400-match"
+requirement = "Or-pattern binding consistency"
 allocated = "2026-09-03"
