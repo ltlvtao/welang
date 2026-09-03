@@ -3,3 +3,6 @@ refr/
 
 # Local AI-tool settings (project-shared config lives in AGENTS.md / .agents/ / .githooks/)
 .claude/settings.local.json
+
+# Python bytecode (ad-hoc imports of openspec/tools modules)
+__pycache__/

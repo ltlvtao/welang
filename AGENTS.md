@@ -22,7 +22,7 @@ git config core.hooksPath .githooks
 ## 硬规则（优先级从高到低，违反任何一条立即停止并纠正）
 
 1. 【最高优先级】`refr/` 目录禁止提交到代码仓——任何 git 操作不得将其纳入提交。该规则优先于其他一切规则与指示。`.gitignore` 与 `pre-commit` 钩子双重拦截；钩子拦截时不得尝试绕过。
-2. 语言约定：交互使用中文；`docs/` 目录文档、代码注释、commit 日志使用英文；`AGENTS.md`、`openspec/`、`.agents/skills/` 使用中文。
+2. 语言约定：交互使用中文；`docs/` 目录文档提供双语同步支持——**英文为权威文本**，配对中文翻译 `<basename>.zh.md`（细则见 `docs/README.md` "Documentation Language"）；代码注释、commit 日志使用英文；`AGENTS.md`、`openspec/`、`.agents/skills/` 使用中文。
 3. 提交信息禁止出现 `Co-Authored-By`、"Generated with" 等任何署名信息（`commit-msg` 钩子强制拦截）。
 4. 不确定某类事实的归属时，先查 `docs/README.md` 职责表，把内容放进唯一权威位置，不在多处复制。
 5. 归档提升前，openspec 变更工件只是过程增量；长期权威事实必须提升到 `docs/spec/`、`docs/decisions/` 后才算落地。
@@ -53,7 +53,7 @@ candidate →（welang-spec-impact-audit）→ ready →（四件套 + welang-ch
 
 | diff 范围 | 必跑验证 |
 | --- | --- |
-| 仅文档 / 流程 / openspec 工件 | `python3 openspec/tools/validate.py --all --strict`；`git diff --check`；确认 staged 无 `refr/` |
+| 仅文档 / 流程 / openspec 工件 | `python3 openspec/tools/validate.py --all --strict`；`python3 openspec/tools/docs_sync.py`；`git diff --check`；确认 staged 无 `refr/` |
 | 语言规范（`docs/spec/`） | 规范一致性复核：诊断码全局唯一、§ 交叉引用有效、术语与既有章节一致；外加上一行全部 |
 | 编译器 / 工具链代码 | `go build ./...` + `go test ./...` + 受影响的 conformance 黄金用例 |
 | 诊断协议 | 协议快照测试（JSON Lines 字段稳定性） |

@@ -156,11 +156,17 @@ def validate_change(change_dir: Path, strict: bool) -> list[Fail]:
                 fails.append(Fail(rel(tasks), f"line {i + 1}: checkbox lacks '验证：' line"))
             elif strict and checked == "x":
                 # Strict mode: a checked task must carry non-empty verification.
-                verify_lines = [
-                    follow for follow in lookahead
-                    if follow.strip().startswith(("验证：", "验证:"))
-                ]
-                content = "".join(verify_lines).partition("：")[2].partition(":")[2].strip()
+                # Strip the 验证 prefix (fullwidth or ASCII colon variant) from
+                # each matching line and concatenate the remainder; do not
+                # partition on later colons inside the verification text.
+                parts: list[str] = []
+                for follow in lookahead:
+                    stripped = follow.strip()
+                    for prefix in ("验证：", "验证:"):
+                        if stripped.startswith(prefix):
+                            parts.append(stripped[len(prefix):])
+                            break
+                content = "".join(parts).strip()
                 if not content:
                     fails.append(Fail(rel(tasks), f"line {i + 1}: checked task has empty verification"))
 

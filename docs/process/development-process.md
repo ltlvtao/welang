@@ -86,12 +86,16 @@ Before commit or push, select the minimal credible set for the actual diff (skil
 
 | Diff scope | Required verification |
 | --- | --- |
-| Docs / process / openspec artifacts only | `python3 openspec/tools/validate.py --all --strict`; `git diff --check`; staged files contain no `refr/` |
+| Docs / process / openspec artifacts only | `python3 openspec/tools/validate.py --all --strict`; `python3 openspec/tools/docs_sync.py`; `git diff --check`; staged files contain no `refr/` |
 | Canonical spec (`docs/spec/`) | Spec consistency review: diagnostic codes globally unique, `§` cross-references valid, terminology consistent; plus the row above |
 | Compiler / tooling code | `go build ./...`; `go test ./...`; affected conformance golden cases |
 | Diagnostics protocol | Protocol snapshot tests (JSON Lines field stability) |
 
 Verification commands are fixed from day one and may only change through a process-layer change.
+
+### 4.1 Documentation language and bilingual sync
+
+Documentation under `docs/` ships with dual-language synchronized support: English is authoritative, and every document carries a paired Chinese translation `<basename>.zh.md` in the same directory. A change that creates or modifies a document under `docs/` updates its translation within the same change; `openspec/tools/docs_sync.py` (pairing, heading counts per level, fenced code block counts) must pass before the change reaches `complete`. The convention's authoritative statement lives in `docs/README.md`, section "Documentation Language".
 
 ## 5. Commit Protocol
 
@@ -113,7 +117,7 @@ Four layers, strongest first:
 
 When a change reaches `complete`, the `welang-archive-sync` skill promotes:
 
-- Spec deltas → merged into the canonical spec under `docs/spec/` (creating the directory/version on first need).
+- Spec deltas → promoted into their authoritative home: language-behavior capabilities into the canonical spec under `docs/spec/` (creating the directory/version on first need); other project capabilities into the authoritative location declared in the change's `proposal.md`.
 - Long-term tradeoffs → ADRs under `docs/decisions/`.
 - Execution state → roadmap (or `openspec/changes/` listing until a roadmap exists).
 - The change directory → `openspec/changes/archive/<name>/`.

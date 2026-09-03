@@ -4,7 +4,18 @@
 
 welang documentation follows "one authoritative location per class of fact". The language spec defines language behavior, ADRs record long-term tradeoffs, the roadmap manages execution state, and the process document governs how work happens. Nothing is duplicated across these locations.
 
-All files under `docs/` are written in English (project convention). Agent-facing operational files outside `docs/` (`AGENTS.md`, `openspec/`, `.agents/skills/`) are written in Chinese; conversation language is Chinese.
+Documents under `docs/` ship with dual-language synchronized support: English text plus a paired Chinese translation (`<basename>.zh.md`) — see [Documentation Language](#documentation-language). Agent-facing operational files outside `docs/` (`AGENTS.md`, `openspec/`, `.agents/skills/`) are written in Chinese; conversation language is Chinese.
+
+## Documentation Language
+
+Documentation under `docs/` ships with dual-language synchronized support:
+
+- Every `*.md` document has a paired Chinese translation in the same directory, named `<basename>.zh.md`. The translation carries every naming element of the source file, including numeric prefixes and ADR numbers.
+- English is the authoritative text. Where the English and Chinese renderings of a document disagree, English governs; the translation is corrected in the change that introduced the divergence.
+- Bilingual sync is part of a change's definition of done: a change that creates or modifies a document under `docs/` does not reach `complete` until its translation reflects the same change and `openspec/tools/docs_sync.py` passes.
+- `docs_sync.py` checks structure only (pair existence, heading counts per level, fenced code block counts). Semantic equivalence of translations is carried by change review, not by script.
+
+Files outside `docs/` are single-language by design: `AGENTS.md`, `openspec/`, and `.agents/` are Chinese; code comments and commit messages are English.
 
 ## Directory Responsibilities
 
@@ -15,7 +26,7 @@ All files under `docs/` are written in English (project convention). Agent-facin
 | `docs/spec/` | Canonical language specification, versioned (created when the first spec change is archived) | Implementation decisions, migration history, execution state |
 | `docs/decisions/` | Long-term ADRs: status, dependencies, rejected options (created when the first ADR is needed) | Requirements, task lists |
 | `docs/roadmap/` | Strategy, milestones, change catalog, execution state (created when the roadmap outgrows `openspec/changes/`) | Requirements, field-level design |
-| [`openspec/`](../openspec/README.md) | Change management: active/archived changes with proposal/spec-delta/design/tasks artifacts | Long-term authority of any fact (changes are process increments) |
+| [`openspec/`](../openspec/README.md) | Change management: active/archived changes with proposal/spec-delta/design/tasks artifacts; repo artifact checkers (`validate.py` for change structure, `docs_sync.py` for bilingual pairing) | Long-term authority of any fact (changes are process increments) |
 | [`refr/`](../.gitignore) | Private reference material (spec v0.8 draft + review). Never committed — top-priority rule, hook-enforced | Any authority; nothing in `refr/` defines language behavior |
 | [`.agents/`](../.agents/) | Project R&D skills (lifecycle review gates), tool-agnostic | Process authority (that lives in `docs/process/`), product-runtime assets |
 | [`.githooks/`](../.githooks/) | Versioned git hooks (mechanical enforcement: `refr/` ban, attribution ban), activated via `core.hooksPath` | Any policy that cannot be enforced at git level |
