@@ -21,10 +21,10 @@ Files outside `docs/` are single-language by design: `AGENTS.md`, `openspec/`, a
 
 Numeric prefixes encode reading order where order matters; semantic names carry identity where cross-referencing matters:
 
-- **Positional numbering for design corpora.** Canonical spec chapters under `docs/spec/` are `<nnnn>-<slug>.md` — four-digit zero-padded, stride 100 (`0000`, `0100`, `0200`, ...), so a new chapter inserts between neighbors without renumbering. `0000` is reserved for chapter 0 (foundations). ADRs use the same stride: `ADR-<nnnn>-<slug>.md`. Translations inherit every naming element (see Documentation Language).
+- **Positional numbering for design corpora.** Canonical spec chapters under `docs/spec/` are `<nnnn>-<slug>.md` — four-digit zero-padded, stride 100 (`0000`, `0100`, `0200`, ...), so a new chapter inserts between neighbors without renumbering. `0000` is reserved for chapter 0 (foundations); cross-cutting registry chapters count from the tail (`9900` is the diagnostics registry chapter), so content chapters growing upward and registry chapters anchored at the end never collide. ADRs use the same stride: `ADR-<nnnn>-<slug>.md`. Translations inherit every naming element (see Documentation Language).
 - **Date prefixes for append-only ledgers.** A change directory is renamed to `YYYY-MM-DD-<name>` when moved into `openspec/changes/archive/` — the date is the total order, needs no concurrency coordination, and `validate.py` does not check `archive/`.
 - **Semantic kebab names for identity.** Active change directories and `specs/<capability>/` capability names keep kebab-case semantic names — a change name is a join key referenced across artifacts, and the capability-to-chapter mapping is decided at promotion, not fixed in advance.
-- **Fixed structural names are exempt.** `README.md`, `AGENTS.md`, `SKILL.md`, `change.yaml`, and the four change-artifact filenames never carry prefixes — tooling and cross-tool conventions depend on these names.
+- **Fixed structural names are exempt.** `README.md`, `AGENTS.md`, `SKILL.md`, `change.yaml`, and the four change-artifact filenames never carry prefixes — tooling and cross-tool conventions depend on these names. The same exemption covers machine artifacts: `docs/spec/diagnostics.toml` (the diagnostic code registry) is a fixed structural name — English only, no paired translation, parsed directly by compilers, tools, and `validate.py`.
 
 ## Directory Responsibilities
 
@@ -32,7 +32,7 @@ Numeric prefixes encode reading order where order matters; semantic names carry 
 | --- | --- | --- |
 | [`AGENTS.md`](../AGENTS.md) | Agent entry point (cross-tool standard): hard rules, language invariants, workflow summary, verification ladder, commit protocol, environment setup | Language requirements, roadmap state, process details |
 | [`docs/process/`](process/development-process.md) | The R&D process (single authority for how work happens) | Language behavior, change-specific decisions |
-| `docs/spec/` | Canonical language specification, versioned (created when the first spec change is archived) | Implementation decisions, migration history, execution state |
+| `docs/spec/` | Canonical language specification, versioned, plus the machine-readable diagnostic code registry `diagnostics.toml` (single entry authority for every allocated code) | Implementation decisions, migration history, execution state |
 | `docs/decisions/` | Long-term ADRs: status, dependencies, rejected options (created when the first ADR is needed) | Requirements, task lists |
 | `docs/roadmap/` | Strategy, milestones, change catalog, execution state (created when the roadmap outgrows `openspec/changes/`) | Requirements, field-level design |
 | [`openspec/`](../openspec/README.md) | Change management: active/archived changes with proposal/spec-delta/design/tasks artifacts; repo artifact checkers (`validate.py` for change structure, `docs_sync.py` for bilingual pairing) | Long-term authority of any fact (changes are process increments) |

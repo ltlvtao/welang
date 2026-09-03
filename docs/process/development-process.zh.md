@@ -66,6 +66,8 @@ layers: [spec]            # 取值子集：spec | compiler | stdlib | tooling | 
 
 规范增量以**英文**书写：它是 `docs/spec/` 英文权威文本的字面片段，归档提升时必须可逐字合并。其余变更工件（`proposal.md`、`design.md`、`tasks.md`）遵循仓库语言约定（中文）。
 
+分配或认领诊断码的增量必须在同一变更内扩展 `docs/spec/diagnostics.toml`——在 `[segments]` 表认领区段，并为每个已分配码提供完整条目（注册表规则见规范第 99 章）。注册表文件直接编辑（非合并）；`validate.py` 在已提升表面上执法注册表与章节的一致性。
+
 ### 3.4 `tasks.md`
 
 每个勾选项（`- [ ]` / `- [x]`）后必须紧跟两行：

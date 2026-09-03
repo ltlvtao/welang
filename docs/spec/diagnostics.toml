@@ -1,0 +1,136 @@
+# We diagnostic code registry — the single registry of the diagnostic
+# code system (spec chapter 99: 9900-diagnostics-registry.md).
+#
+# Authority: this file is the entry authority for every allocated
+# diagnostic code and the segment authority for code ranges. Chapters
+# define when codes fire (trigger authority, in Requirements and
+# Scenarios); this file defines each code's complete entry.
+#
+# Machine artifact: English only, no paired translation. Extension
+# only via spec-layer changes in the same change that ratifies the
+# codes. Renumbering, deleting, or re-meaning allocated codes is
+# forbidden. Adding entry fields is backward-compatible; removing or
+# renaming fields is not.
+
+[segments."E0001-E0099"]
+domain = "lexical and naming"
+owner = "0100-lexical"
+# Intra-segment structure (chapter 1): E0001-E0009 token-level
+# errors, E0010 boundary reserve, E0011-E0019 naming block
+# (E0011-E0013 allocated), E0014-E0099 reserved for amendments.
+
+[segments."E0100-E0199"]
+domain = "grammar and parsing"
+owner = "0200-grammar" # pending ratification
+
+[segments."E0200-E9999"]
+domain = "later domains"
+owner = "unclaimed" # claimed by chapters via amendment
+
+[diagnostic.E0001]
+severity = "error"
+title = "invalid character"
+description = "A byte sequence is not valid UTF-8, or a character appears where only a token may form and matches nothing in the lexical inventory (for example $, @, a backtick, a bare # not followed by [), or a non-ASCII character is used in an identifier. Identifiers are ASCII-only by design: homoglyph confusability is a security surface, not a style matter. Fires under: Source files, Identifiers, Operators and punctuation."
+remediation = "Replace the offending character: use an ASCII letter/digit/underscore in identifiers, an operator or punctuation from the closed inventory, or move the non-ASCII text into a comment or literal."
+owner = "0100-lexical"
+requirement = "Source files"
+allocated = "2026-09-03"
+
+[diagnostic.E0002]
+severity = "error"
+title = "unterminated string literal"
+description = "A string literal is not closed with a closing double quote before the end of the line. String literals are single-line in We; a newline inside the literal is not part of it."
+remediation = "Close the literal with \" on the same line, or split the text into adjacent literals; multiline strings do not exist at this chapter."
+owner = "0100-lexical"
+requirement = "String and rune literals"
+allocated = "2026-09-03"
+
+[diagnostic.E0003]
+severity = "error"
+title = "unterminated rune literal"
+description = "A rune literal is not closed with a closing single quote on the same line. A rune literal holds exactly one character or one escape."
+remediation = "Close the literal with ' on the same line and ensure it holds exactly one character or one escape sequence."
+owner = "0100-lexical"
+requirement = "String and rune literals"
+allocated = "2026-09-03"
+
+[diagnostic.E0004]
+severity = "error"
+title = "unterminated block comment"
+description = "A /* block comment is not closed by */ before end of file. Block comments do not nest: the first */ closes the comment."
+remediation = "Add the closing */ or remove the /*; to comment out a region that itself contains block comments, comment it line by line with //."
+owner = "0100-lexical"
+requirement = "Comments"
+allocated = "2026-09-03"
+
+[diagnostic.E0005]
+severity = "error"
+title = "invalid escape sequence"
+description = "A backslash inside a string or rune literal is followed by a character outside the closed escape set. Permitted: \\n \\t \\r \\0 \\\" \\' \\u{h..} (1-6 hex digits, value <= U+10FFFF, surrogates forbidden)."
+remediation = "Use an escape from the closed set; for arbitrary code points use \\u{...}; to write a literal backslash use \\\\."
+owner = "0100-lexical"
+requirement = "String and rune literals"
+allocated = "2026-09-03"
+
+[diagnostic.E0006]
+severity = "error"
+title = "invalid numeric literal"
+description = "A numeric literal matches no ratified form: a base prefix (0x/0o/0b) without at least one digit of that base; an underscore separator that is not between two digits (leading, trailing, doubled, adjacent to prefix or suffix); a decimal literal with a leading zero; a float without a digit on each side of the dot; or an unknown suffix. Suffixes are a closed set: i8 i16 i32 i64 u8 u16 u32 u64 f32 f64."
+remediation = "Check: (1) 0x/0o/0b is followed by at least one digit of that base; (2) _ appears only between two digits; (3) decimal literals have no leading zero; (4) the suffix is one of i8..u64, f32, f64 written immediately after the last digit."
+owner = "0100-lexical"
+requirement = "Numeric literals"
+allocated = "2026-09-03"
+
+[diagnostic.E0007]
+severity = "error"
+title = "unbalanced interpolation braces"
+description = "Inside a string literal, ${ opens an interpolation hole whose braces are not balanced within the literal. A $ not followed by { is an ordinary character and never starts interpolation."
+remediation = "Balance the braces inside the ${...} hole, escaping literal braces if needed is not available — restructure the expression or build the string in parts; verify the hole contains a complete expression."
+owner = "0100-lexical"
+requirement = "String and rune literals"
+allocated = "2026-09-03"
+
+[diagnostic.E0008]
+severity = "error"
+title = "unknown attribute"
+description = "An attribute names a word not in the closed whitelist assembled from ratified chapters. Unknown attributes are compile errors, never silently ignored."
+remediation = "Remove the attribute or check its spelling against the whitelist of attributes ratified by the owning chapters; attribute names join the whitelist only through spec-layer changes."
+owner = "0100-lexical"
+requirement = "Attribute lexical unit"
+allocated = "2026-09-03"
+
+[diagnostic.E0009]
+severity = "error"
+title = "non-literal attribute argument"
+description = "An attribute argument is an expression, function call, or reference instead of a compile-time literal value (string, number, boolean, literal list). Attribute legality must stay locally decidable."
+remediation = "Replace the argument with a compile-time literal; compute dynamic configuration in ordinary code, not in attributes."
+owner = "0100-lexical"
+requirement = "Attribute lexical unit"
+allocated = "2026-09-03"
+
+[diagnostic.E0011]
+severity = "error"
+title = "type name must be PascalCase"
+description = "A type-name binding is not PascalCase. Naming conventions are errors, not style hints, so every We codebase reads with one convention."
+remediation = "Rename the type to PascalCase (for example UserRecord) and update references; conventions are enforced at the declaration."
+owner = "0100-lexical"
+requirement = "Naming conventions"
+allocated = "2026-09-03"
+
+[diagnostic.E0012]
+severity = "error"
+title = "variable, function, and method names must be camelCase"
+description = "A variable, function, or method binding is not camelCase (for example User_Id). Constants follow the variable rule; SCREAMING_CASE does not exist in We."
+remediation = "Rename the binding to camelCase (for example userId) and update references; constants also use camelCase."
+owner = "0100-lexical"
+requirement = "Naming conventions"
+allocated = "2026-09-03"
+
+[diagnostic.E0013]
+severity = "error"
+title = "module names must be lowercase"
+description = "A module name is not lowercase with dot separation. Module spelling is fixed by the naming conventions and checked at the declaration."
+remediation = "Rename the module to lowercase with dot separation (for example net.http.client) and update imports."
+owner = "0100-lexical"
+requirement = "Naming conventions"
+allocated = "2026-09-03"

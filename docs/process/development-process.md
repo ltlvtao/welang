@@ -66,6 +66,8 @@ A change that alters language behavior MUST include a spec delta. A change that 
 
 Spec deltas are written in **English**: they are literal fragments of the authoritative English text under `docs/spec/` and must be mergeable verbatim on promotion. The other change artifacts (`proposal.md`, `design.md`, `tasks.md`) follow the repo language convention (Chinese).
 
+A delta that allocates or claims diagnostic codes MUST extend `docs/spec/diagnostics.toml` in the same change — a claimed range in the `[segments]` table plus one complete entry per allocated code (spec chapter 99 defines the registry). The registry file is edited directly (not merged); `validate.py` enforces registry↔chapter consistency on promoted surfaces.
+
 ### 3.4 `tasks.md`
 
 Every checkbox line (`- [ ]` / `- [x]`) must be followed by two lines:

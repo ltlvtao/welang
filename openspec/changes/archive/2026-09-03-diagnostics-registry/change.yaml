@@ -1,0 +1,3 @@
+name: diagnostics-registry
+status: archived
+layers: [spec, process, docs]

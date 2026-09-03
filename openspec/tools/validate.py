@@ -2,9 +2,11 @@
 """Structural validator for welang openspec change directories.
 
 Checks artifact completeness per change status, required proposal headers,
-spec-delta scenario structure, and task verification format. Structural
-validation only; semantic review is carried by the welang-change-review and
-welang-code-review skills and is NOT replaced by this script.
+spec-delta scenario structure, task verification format, and consistency
+between docs/spec chapters and the diagnostic code registry
+(docs/spec/diagnostics.toml). Structural validation only; semantic review
+is carried by the welang-change-review and welang-code-review skills and
+is NOT replaced by this script.
 
 Usage:
     python3 openspec/tools/validate.py --all [--strict]
@@ -173,6 +175,89 @@ def validate_change(change_dir: Path, strict: bool) -> list[Fail]:
     return fails
 
 
+def validate_registry(docs_root: Path) -> list[Fail]:
+    """Consistency checks between docs/spec chapters and diagnostics.toml.
+
+    The registry is the entry authority for every allocated diagnostic code
+    and the segment authority for code ranges (spec chapter 99). Checks:
+    (a) TOML parses and every entry carries the seven required fields with
+    a key/severity prefix match; (b) every diagnostic usage in spec chapter
+    markdown (a code token immediately followed by ':') has a registry
+    entry — range endpoints like E0001-E0099 carry no colon and are not
+    usages; (c) every entry's owner file and Requirement title resolve;
+    (d) every entry's number lies in a segment owned by its owner chapter;
+    (e) E and W share one number space, so no number is allocated twice.
+    """
+    fails: list[Fail] = []
+    spec_dir = docs_root / "spec"
+    registry_path = spec_dir / "diagnostics.toml"
+    if not registry_path.is_file() or not spec_dir.is_dir():
+        return fails
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        return [Fail(registry_path, "registry checks require Python 3.11+ (tomllib)")]
+    try:
+        registry = tomllib.loads(registry_path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        return [Fail(registry_path, f"invalid TOML: {exc}")]
+
+    segments = registry.get("segments", {})
+    entries = registry.get("diagnostic", {})
+    required_fields = ("severity", "title", "description", "remediation", "owner", "requirement", "allocated")
+
+    parsed_segments: list[tuple[int, int, str]] = []
+    for key, data in segments.items():
+        match = re.fullmatch(r"([EW])(\d{4})-([EW])(\d{4})", key)
+        if not match:
+            fails.append(Fail(registry_path, f"segment key '{key}' is not a CODE-CODE range"))
+            continue
+        parsed_segments.append((int(match.group(2)), int(match.group(4)), str(data.get("owner", ""))))
+        for field in ("domain", "owner"):
+            if field not in data:
+                fails.append(Fail(registry_path, f"segment '{key}' lacks '{field}'"))
+
+    seen_numbers: dict[int, str] = {}
+    for code, entry in entries.items():
+        if not re.fullmatch(r"[EW]\d{4}", code):
+            fails.append(Fail(registry_path, f"entry key '{code}' is not an E/W + 4-digit code"))
+            continue
+        for field in required_fields:
+            if field not in entry or not str(entry[field]).strip():
+                fails.append(Fail(registry_path, f"entry '{code}' lacks non-empty '{field}'"))
+        severity = str(entry.get("severity", ""))
+        if severity not in ("error", "warning"):
+            fails.append(Fail(registry_path, f"entry '{code}' severity must be 'error' or 'warning'"))
+        elif severity != ("error" if code[0] == "E" else "warning"):
+            fails.append(Fail(registry_path, f"entry '{code}' prefix does not match severity '{severity}'"))
+        number = int(code[1:])
+        if number in seen_numbers:
+            fails.append(Fail(registry_path, f"entries '{seen_numbers[number]}' and '{code}' share number {number:04d}: E and W share one number space"))
+        else:
+            seen_numbers[number] = code
+        owner = str(entry.get("owner", ""))
+        owner_file = spec_dir / f"{owner}.md"
+        if not owner_file.is_file():
+            fails.append(Fail(registry_path, f"entry '{code}' owner file docs/spec/{owner}.md does not exist"))
+            continue
+        owner_text = owner_file.read_text(encoding="utf-8")
+        requirement = str(entry.get("requirement", ""))
+        if requirement and f"### Requirement: {requirement}" not in owner_text:
+            fails.append(Fail(registry_path, f"entry '{code}' requirement '{requirement}' not found in docs/spec/{owner}.md"))
+        if not any(lo <= number <= hi and seg_owner == owner for lo, hi, seg_owner in parsed_segments):
+            fails.append(Fail(registry_path, f"entry '{code}' does not lie in a segment owned by '{owner}'"))
+
+    # A diagnostic usage is a code token immediately followed by ':' — the
+    # invocation form used in Scenario text. The lookbehind excludes the
+    # upper endpoint of dash-written ranges (E0100-E0199: ...).
+    for md in sorted(spec_dir.rglob("*.md")):
+        text = md.read_text(encoding="utf-8")
+        for code in sorted(set(re.findall(r"(?<![-–])\b([EW]\d{4}):", text))):
+            if code not in entries:
+                fails.append(Fail(md, f"diagnostic usage '{code}:' has no registry entry in docs/spec/diagnostics.toml"))
+    return fails
+
+
 def main() -> int:
     args = sys.argv[1:]
     strict = "--strict" in args
@@ -201,13 +286,20 @@ def main() -> int:
     for target in targets:
         all_fails.extend(validate_change(target, strict))
 
+    registry_note = ""
+    docs_root = Path(__file__).resolve().parents[2] / "docs"
+    if docs_root.is_dir():
+        reg_fails = validate_registry(docs_root)
+        all_fails.extend(reg_fails)
+        registry_note = "; registry clean" if not reg_fails else f"; {len(reg_fails)} registry failure(s)"
+
     if all_fails:
         for fail in all_fails:
             print(f"FAIL: {fail}")
-        print(f"\n{len(all_fails)} failure(s) across {len(targets)} change(s); mode={'strict' if strict else 'default'}")
+        print(f"\n{len(all_fails)} failure(s) across {len(targets)} change(s){registry_note}; mode={'strict' if strict else 'default'}")
         return 1
 
-    print(f"OK: {len(targets)} change(s) valid; mode={'strict' if strict else 'default'}")
+    print(f"OK: {len(targets)} change(s) valid{registry_note}; mode={'strict' if strict else 'default'}")
     return 0
 
 

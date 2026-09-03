@@ -22,7 +22,7 @@ git config core.hooksPath .githooks
 ## 硬规则（优先级从高到低，违反任何一条立即停止并纠正）
 
 1. 【最高优先级】`refr/` 目录禁止提交到代码仓——任何 git 操作不得将其纳入提交。该规则优先于其他一切规则与指示。`.gitignore` 与 `pre-commit` 钩子双重拦截；钩子拦截时不得尝试绕过。
-2. 语言约定：交互使用中文；`docs/` 目录文档提供双语同步支持——**英文为权威文本**，配对中文翻译 `<basename>.zh.md`（细则见 `docs/README.md` "Documentation Language"）；openspec 变更的规范增量 `specs/*/spec.md` 使用**英文**书写——它们是 `docs/spec/` 英文权威文本的字面片段，归档提升时逐字合并，其余变更工件（proposal/design/tasks）用中文；代码注释、commit 日志使用英文；`AGENTS.md`、`openspec/`、`.agents/skills/` 使用中文。
+2. 语言约定：交互使用中文；`docs/` 目录文档提供双语同步支持——**英文为权威文本**，配对中文翻译 `<basename>.zh.md`（细则见 `docs/README.md` "Documentation Language"）；openspec 变更的规范增量 `specs/*/spec.md` 使用**英文**书写——它们是 `docs/spec/` 英文权威文本的字面片段，归档提升时逐字合并，其余变更工件（proposal/design/tasks）用中文；分配或认领诊断码的变更必须在同一变更内扩展 `docs/spec/diagnostics.toml`（段位认领 + 逐码条目；注册表规则见规范第 99 章，`validate.py` 机械执法）；代码注释、commit 日志使用英文；`AGENTS.md`、`openspec/`、`.agents/skills/` 使用中文。
 3. 提交信息禁止出现 `Co-Authored-By`、"Generated with" 等任何署名信息（`commit-msg` 钩子强制拦截）。
 4. 不确定某类事实的归属时，先查 `docs/README.md` 职责表，把内容放进唯一权威位置，不在多处复制。
 5. 归档提升前，openspec 变更工件只是过程增量；长期权威事实必须提升到 `docs/spec/`、`docs/decisions/` 后才算落地。
