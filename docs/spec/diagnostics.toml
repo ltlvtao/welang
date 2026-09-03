@@ -52,7 +52,15 @@ owner = "0600-declarations"
 # orphan documentation comments), E0406-E0499 reserved for
 # amendments of the declarations chapter.
 
-[segments."E0500-E9999"]
+[segments."E0500-E0599"]
+domain = "types"
+owner = "0700-types"
+# Intra-segment structure (chapter 7): E0500 boundary reserve,
+# E0501-E0503 type-agreement errors (mixed types across operands
+# and agreement positions, integer overflow, non-Bool conditions),
+# E0504-E0599 reserved for amendments of the types chapter.
+
+[segments."E0600-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -306,4 +314,31 @@ description = "A `///` documentation unit has no following top-level item before
 remediation = "Add the declaration the documentation describes, convert the lines to ordinary `//` comments, or remove them."
 owner = "0600-declarations"
 requirement = "Documentation comments"
+allocated = "2026-09-03"
+
+[diagnostic.E0501]
+severity = "error"
+title = "mixed types"
+description = "Two types that must agree do not. Covers operators whose operands differ (mixed widths, signed with unsigned, the two float widths, String/Bytes/Rune across families) and every agreement position: a binding's expression against its annotation, a call argument against its parameter, and a return expression against the declared return type. No coercion is ever inserted. Fires under: No implicit conversion."
+remediation = "Make the types agree at the source: use a literal suffix (42i32) or an explicit conversion method (toInt64(), toBytes()); the method inventory is the standard library's."
+owner = "0700-types"
+requirement = "No implicit conversion"
+allocated = "2026-09-03"
+
+[diagnostic.E0502]
+severity = "error"
+title = "integer overflow"
+description = "An integer expression overflows its type. A constant-evaluable overflow is a compile error; a runtime overflow is a checked trap that never produces a wrapped value (the trap's construct is named by the error-mechanism chapter). Wrapping is available only through explicit methods; float arithmetic follows IEEE 754 and is not checked. Fires under: Integer overflow semantics."
+remediation = "Widen the type (suffix or annotation), restructure the computation, or opt into wrapping explicitly (wrappingAdd() and siblings)."
+owner = "0700-types"
+requirement = "Integer overflow semantics"
+allocated = "2026-09-03"
+
+[diagnostic.E0503]
+severity = "error"
+title = "condition is not Bool"
+description = "A condition position — an if condition, a while condition, or a match guard — is not Bool. Fires under: Condition positions."
+remediation = "Make the condition a Bool expression: compare explicitly (n != 0), call a predicate, or apply a conversion method."
+owner = "0700-types"
+requirement = "Condition positions"
 allocated = "2026-09-03"
