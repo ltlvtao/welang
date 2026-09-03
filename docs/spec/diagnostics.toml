@@ -27,7 +27,15 @@ owner = "0200-grammar"
 # forms, precedence), E0106-E0199 reserved for later grammar
 # productions (control flow, declarations, collections).
 
-[segments."E0200-E9999"]
+[segments."E0200-E0299"]
+domain = "control flow"
+owner = "0300-control-flow"
+# Intra-segment structure (chapter 3): E0200 boundary reserve,
+# E0201-E0204 control-flow form errors (loop control, value
+# position, defer), E0205-E0299 reserved for later control-flow
+# productions (match arms, for, labels if ever ratified).
+
+[segments."E0300-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -182,4 +190,40 @@ description = "At the current parse position the token fits no ratified producti
 remediation = "Check the construct against the ratified surface forms of the grammar chapter; if the syntax belongs to an unratified chapter, re-express it with ratified forms until that chapter lands."
 owner = "0200-grammar"
 requirement = "Grammar diagnostics segment"
+allocated = "2026-09-03"
+
+[diagnostic.E0201]
+severity = "error"
+title = "break or continue outside a loop"
+description = "break or continue appears in a block that is not inside the body of a ratified loop (while or loop; the iteration chapter adds for). Both are bare forms tied to the innermost enclosing loop; outside one there is nothing to control. Fires under: Break and continue."
+remediation = "Remove the stray break/continue, or move it inside a loop body; to exit a block or function use the value/return forms instead of loop-control words."
+owner = "0300-control-flow"
+requirement = "Break and continue"
+allocated = "2026-09-03"
+
+[diagnostic.E0202]
+severity = "error"
+title = "valueless form in value position"
+description = "A form that produces no value is used where a value is required: an if without else, a while or loop statement, or another ratified valueless statement form appears in a let/var initializer, call argument, or other expression position. Recognized valueless forms report this code; tokens that form no ratified production remain chapter 2's unexpected token. Fires under: If and else expressions, While and loop."
+remediation = "Supply a value: add an else arm producing a value, or restructure so the valueless form is a statement item and the value comes from an expression, for example an accumulator binding."
+owner = "0300-control-flow"
+requirement = "If and else expressions"
+allocated = "2026-09-03"
+
+[diagnostic.E0203]
+severity = "error"
+title = "defer body must be a block"
+description = "A defer statement's operand is an expression instead of a block, for example defer cleanup(). The block form is the single ratified shape: it keeps multi-statement and ordering needs expressible and gives defer one form. Fires under: Defer."
+remediation = "Wrap the calls in a block: defer { cleanup() }; multiple statements and ordering belong inside the block."
+owner = "0300-control-flow"
+requirement = "Defer"
+allocated = "2026-09-03"
+
+[diagnostic.E0204]
+severity = "error"
+title = "defer placement"
+description = "A defer statement is not a direct item of a function body's block, for example inside a nested block expression or another statement. Defer runs at function exit in reverse order; only direct function-body placement keeps that single exit-point semantics. Fires under: Defer."
+remediation = "Move the defer to the top level of the enclosing function body, or release the resource through the mechanism the resource chapter ratifies instead of a nested defer."
+owner = "0300-control-flow"
+requirement = "Defer"
 allocated = "2026-09-03"

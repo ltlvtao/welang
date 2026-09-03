@@ -59,7 +59,7 @@ A block is `{`, then a sequence of items separated by inferred statement boundar
 
 ### Requirement: Statements
 
-Three statement forms are ratified at the skeleton level. Binding statements: `let name = expr` and `var name = expr`, each optionally with a type annotation `name: type` before `=`; the grammar of types is ratified by the types chapter. Assignment statements: `name = expr`, where richer assignment targets are ratified with their owning chapters. Expression statements: any expression as an item. Assignment is a statement, not an expression: it produces no value and MUST NOT appear where an expression is required.
+Statement forms are ratified family by family, each family by its owning chapter; the set of families and their members is closed per chapter and grows only through spec-layer changes in the owning chapter. This chapter ratifies: binding statements (`let name = expr` and `var name = expr`, each optionally with a type annotation `name: type` before `=`; the grammar of types is ratified by the types chapter), assignment statements (`name = expr`, where richer assignment targets are ratified with their owning chapters), and expression statements (any expression as an item). The control-flow chapter ratifies control-flow statements (if, while, loop, break, continue, return, defer). Assignment is a statement, not an expression: it produces no value and MUST NOT appear where an expression is required.
 
 #### Scenario: Assignment nested where an expression is required
 
@@ -73,8 +73,13 @@ Three statement forms are ratified at the skeleton level. Binding statements: `l
 
 #### Scenario: Expression statement
 
-- **WHEN** an expression that is neither a binding nor an assignment appears as a block item
+- **WHEN** an expression that is not a binding or an assignment appears as a block item
 - **THEN** it is an expression statement; when it is also the final item it is the block value per Blocks and block value
+
+#### Scenario: A statement family grows
+
+- **WHEN** a later chapter ratifies new statement forms
+- **THEN** they enter through a spec-layer change in that chapter's own scope; this chapter's ratified families are unchanged by it
 
 ### Requirement: Expression skeleton
 
