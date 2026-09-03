@@ -1,0 +1,5 @@
+# Never commit the refr/ directory (top-priority rule)
+refr/
+
+# Local AI-tool settings (project-shared config lives in AGENTS.md / .agents/ / .githooks/)
+.claude/settings.local.json

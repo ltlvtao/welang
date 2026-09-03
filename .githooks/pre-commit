@@ -1,0 +1,13 @@
+#!/bin/sh
+# welang pre-commit hook: block any commit that stages files under refr/.
+# The refr/ directory is private reference material and must never enter the
+# repository (top-priority project rule). Activated via core.hooksPath.
+
+if git diff --cached --name-only | grep -q '^refr/'; then
+    echo "BLOCKED by welang pre-commit hook:" >&2
+    echo "  staged files under refr/ detected:" >&2
+    git diff --cached --name-only | grep '^refr/' | sed 's/^/    /' >&2
+    echo "  refr/ must never be committed. Unstage with: git restore --staged refr/" >&2
+    exit 1
+fi
+exit 0

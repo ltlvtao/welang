@@ -1,0 +1,18 @@
+#!/bin/sh
+# welang commit-msg hook: reject commit messages containing attribution
+# trailers such as Co-Authored-By or "Generated with ...". Project rule:
+# commit messages carry no attribution of any kind.
+#
+# The match is anchored to the start of a line (allowing leading whitespace
+# and symbol prefixes such as an emoji) so that trailer-shaped lines are
+# blocked while prose that merely mentions the term (e.g. a Tested: line
+# describing the hook itself) is not.
+
+MSG_FILE="$1"
+if grep -qiE '^[[:space:]]*[^[:alnum:]]*[[:space:]]*(co-authored-by|generated with)' "$MSG_FILE"; then
+    echo "BLOCKED by welang commit-msg hook:" >&2
+    echo "  commit message contains forbidden attribution" >&2
+    echo "  (Co-Authored-By / Generated with). Remove it and commit again." >&2
+    exit 1
+fi
+exit 0
