@@ -278,20 +278,20 @@ def main() -> int:
     else:
         targets = sorted(p for p in changes_root.iterdir() if p.is_dir() and p.name != "archive") if changes_root.is_dir() else []
 
-    if not targets:
-        print("OK: no changes found (nothing to validate)")
-        return 0
-
-    all_fails: list[Fail] = []
-    for target in targets:
-        all_fails.extend(validate_change(target, strict))
-
     registry_note = ""
+    all_fails: list[Fail] = []
     docs_root = Path(__file__).resolve().parents[2] / "docs"
     if docs_root.is_dir():
         reg_fails = validate_registry(docs_root)
         all_fails.extend(reg_fails)
         registry_note = "; registry clean" if not reg_fails else f"; {len(reg_fails)} registry failure(s)"
+
+    if not targets:
+        print(f"OK: no changes found (nothing to validate){registry_note}")
+        return 1 if all_fails else 0
+
+    for target in targets:
+        all_fails.extend(validate_change(target, strict))
 
     if all_fails:
         for fail in all_fails:

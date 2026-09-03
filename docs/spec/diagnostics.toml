@@ -21,7 +21,11 @@ owner = "0100-lexical"
 
 [segments."E0100-E0199"]
 domain = "grammar and parsing"
-owner = "0200-grammar" # pending ratification
+owner = "0200-grammar"
+# Intra-segment structure (chapter 2): E0100 boundary reserve,
+# E0101-E0105 parse-level errors (ambiguity, line-joining, statement
+# forms, precedence), E0106-E0199 reserved for later grammar
+# productions (control flow, declarations, collections).
 
 [segments."E0200-E9999"]
 domain = "later domains"
@@ -133,4 +137,49 @@ description = "A module name is not lowercase with dot separation. Module spelli
 remediation = "Rename the module to lowercase with dot separation (for example net.http.client) and update imports."
 owner = "0100-lexical"
 requirement = "Naming conventions"
+allocated = "2026-09-03"
+
+[diagnostic.E0101]
+severity = "error"
+title = "parse ambiguity"
+description = "A token sequence admits two defensible parses under the ratified productions. The compiler rejects the sequence instead of choosing one interpretation and names the competing interpretations in the message (chapter 0, Principle 4). Fires under: Parse model and ambiguity rejection."
+remediation = "Rewrite the construct with explicit parentheses to force a single grouping, or split it across lines so an inferred statement boundary separates the two intended items; consult the precedence and associativity table for the intended grouping."
+owner = "0200-grammar"
+requirement = "Parse model and ambiguity rejection"
+allocated = "2026-09-03"
+
+[diagnostic.E0102]
+severity = "error"
+title = "statement begins with a continuation token"
+description = "At bracket depth zero a statement begins with a token that cannot begin a statement, for example a leading . before a member access or a binary-only operator. The previous line almost certainly ended a complete statement; only a trailing continuation token (binary operator, =, or .) at the previous line's end continues a statement across lines."
+remediation = "Move the operator or dot to the end of the previous line so it trails (for example svc. on the first line, query() on the next), or keep the construct on one line."
+owner = "0200-grammar"
+requirement = "Line-joining and semicolon inference"
+allocated = "2026-09-03"
+
+[diagnostic.E0103]
+severity = "error"
+title = "assignment is not an expression"
+description = "An assignment appeared where an expression is required: a let/var initializer, a call argument, or any other expression position. Assignment is a statement in We: it produces no value and cannot nest inside expressions, so chained (a = b = c) and conditional-value assignments do not exist."
+remediation = "Split into separate statements: assign to each target on its own line; for a call argument pass the value directly instead of assigning inside the call."
+owner = "0200-grammar"
+requirement = "Statements"
+allocated = "2026-09-03"
+
+[diagnostic.E0104]
+severity = "error"
+title = "chained non-associative operator"
+description = "Comparison and equality operators (< <= > >= == !=) are one non-associative precedence level: a < b < c and x == y == z are rejected at parse time instead of silently grouping as (a < b) < c."
+remediation = "Write the split form with explicit grouping, for example (a < b) && (b < c); each comparison must be a single explicit group."
+owner = "0200-grammar"
+requirement = "Operator precedence and associativity"
+allocated = "2026-09-03"
+
+[diagnostic.E0105]
+severity = "error"
+title = "unexpected token"
+description = "At the current parse position the token fits no ratified production, for example a stray closing bracket, or a construct whose syntax belongs to a chapter not yet ratified (an index form list[0] before the collections chapter ratifies index syntax). The message names the token and the productions considered at that position."
+remediation = "Check the construct against the ratified surface forms of the grammar chapter; if the syntax belongs to an unratified chapter, re-express it with ratified forms until that chapter lands."
+owner = "0200-grammar"
+requirement = "Grammar diagnostics segment"
 allocated = "2026-09-03"
