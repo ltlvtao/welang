@@ -43,7 +43,16 @@ owner = "0400-match"
 # E0303-E0399 reserved for typing-level match checks (exhaustiveness,
 # guard coverage, arm agreement) entering via amendments.
 
-[segments."E0400-E9999"]
+[segments."E0400-E0499"]
+domain = "declarations and modules"
+owner = "0600-declarations"
+# Intra-segment structure (chapter 6): E0400 boundary reserve,
+# E0401-E0405 declaration-form errors (return placement, value
+# return in a valueless function, top-level var, duplicate names,
+# orphan documentation comments), E0406-E0499 reserved for
+# amendments of the declarations chapter.
+
+[segments."E0500-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -252,4 +261,49 @@ description = "The branches of one or-pattern bind different sets of names (for 
 remediation = "Give every branch the same binding names, or drop the bindings from the or-pattern (for example `200 | 404`); re-express per-branch bindings as separate arms."
 owner = "0400-match"
 requirement = "Or-pattern binding consistency"
+allocated = "2026-09-03"
+
+[diagnostic.E0401]
+severity = "error"
+title = "return outside a function body"
+description = "A return appears where no function-body control flow exists: at the module top level, or inside a defer body (which runs at function exit, where no live control flow remains to exit). Fires under: Function bodies, return and defer."
+remediation = "Move the return inside the function whose value it carries; for exit-time cleanup use a defer body without control flow, and for module-level logic wrap it in a fn."
+owner = "0600-declarations"
+requirement = "Function bodies, return and defer"
+allocated = "2026-09-03"
+
+[diagnostic.E0402]
+severity = "error"
+title = "return with a value in a function that declares none"
+description = "A function without a declared return type contains `return expr`. The omitted return type states that the function produces no value; a value return contradicts the declaration and is rejected at the form layer. Fires under: Function bodies, return and defer."
+remediation = "Either declare the return type (`fn f() -> T`) so the value is the function's product, or drop the expression from the return (bare `return` exits a valueless function legally)."
+owner = "0600-declarations"
+requirement = "Function bodies, return and defer"
+allocated = "2026-09-03"
+
+[diagnostic.E0403]
+severity = "error"
+title = "var at the top level"
+description = "A `var` binding appears as a top-level item. Module-level mutable state does not exist in We: top-level bindings are `let` only, and `var` remains legal only inside blocks. Fires under: Top-level bindings."
+remediation = "Declare the top-level binding with `let`; move the mutable state inside a function (a local `var`), or model shared mutable state through the mechanism the concurrency chapter ratifies."
+owner = "0600-declarations"
+requirement = "Top-level bindings"
+allocated = "2026-09-03"
+
+[diagnostic.E0404]
+severity = "error"
+title = "duplicate name in one module"
+description = "Two declarations in one module introduce the same name: an fn name, a top-level let name, or a name introduced by an import declaration. One module has one name space shared by all three. Fires under: Module name space."
+remediation = "Rename one of the declarations, or give the import an alias (or drop an existing alias) so the introduced names differ; top-level names must be unique within the module."
+owner = "0600-declarations"
+requirement = "Module name space"
+allocated = "2026-09-03"
+
+[diagnostic.E0405]
+severity = "error"
+title = "orphan documentation comment"
+description = "A `///` documentation unit has no following top-level item before the end of the file. Documentation comments attach to declarations; a unit with nothing to document is rejected rather than silently dropped. Fires under: Documentation comments."
+remediation = "Add the declaration the documentation describes, convert the lines to ordinary `//` comments, or remove them."
+owner = "0600-declarations"
+requirement = "Documentation comments"
 allocated = "2026-09-03"
