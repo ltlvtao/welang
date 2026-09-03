@@ -13,13 +13,13 @@ description: Promote a completed welang change's long-term facts to their author
 
 ## 提升步骤（顺序执行）
 
-1. **规范提升**：将 spec 增量（ADDED/MODIFIED/REMOVED/RENAMED）合并进 `docs/spec/` 下的权威规范。目录或版本文件不存在时本次创建（如 `docs/spec/we-lang-spec-v0.9.md`），并保证：
+1. **规范提升**：将 spec 增量（ADDED/MODIFIED/REMOVED/RENAMED）合并进 `docs/spec/` 下的权威规范。章节文件不存在时本次创建，命名遵循 `docs/README.md` 文档命名约定（`<nnnn>-<slug>.md`，如 `docs/spec/0000-principles.md`），并保证：
    - 诊断码全局唯一，无与既有规范的冲突定义；
    - § 交叉引用在合并后仍然有效；
    - 术语与既有章节一致（同一概念不引入第二种称呼）。
-2. **决策提升**：design 中具有长期价值的取舍（被拒方案、原则例外、信任边界）提炼为 `docs/decisions/ADR-<nn>-<slug>.md`（首次创建目录与索引），包含：状态、背景、决策、后果、被拒替代方案。
+2. **决策提升**：design 中具有长期价值的取舍（被拒方案、原则例外、信任边界）提炼为 `docs/decisions/ADR-<nnnn>-<slug>.md`（首次创建目录与索引），包含：状态、背景、决策、后果、被拒替代方案。
 3. **状态提升**：执行状态（若已有 `docs/roadmap/`）同步更新；尚无 roadmap 时在 `openspec/changes/` 层面留档即可，不创建空目录。
-4. **移动归档**：`git mv openspec/changes/<name> openspec/changes/archive/<name>`；`change.yaml` 的 `status` 改为 `archived`。
+4. **移动归档**：移入时目录名加日期前缀——`git mv openspec/changes/<name> openspec/changes/archive/YYYY-MM-DD-<name>`（如 `2026-09-03-<name>`；归档命名约定见 `docs/README.md`）；`change.yaml` 的 `status` 改为 `archived`。
 5. **复验**：重跑 `python3 openspec/tools/validate.py --all --strict`，必须通过。
 
 ## 提交

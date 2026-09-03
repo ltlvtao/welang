@@ -64,6 +64,8 @@ layers: [spec]            # 取值子集：spec | compiler | stdlib | tooling | 
 
 改变语言行为的变更 MUST 携带规范增量。只影响内部实现的变更（重构、测试基础设施）MAY 省略 `specs/`，但 MUST 在 `## 影响层` 中以 `compiler`（或类似）层声明并说明理由。
 
+规范增量以**英文**书写：它是 `docs/spec/` 英文权威文本的字面片段，归档提升时必须可逐字合并。其余变更工件（`proposal.md`、`design.md`、`tasks.md`）遵循仓库语言约定（中文）。
+
 ### 3.4 `tasks.md`
 
 每个勾选项（`- [ ]` / `- [x]`）后必须紧跟两行：
@@ -118,9 +120,9 @@ layers: [spec]            # 取值子集：spec | compiler | stdlib | tooling | 
 变更到达 `complete` 后，`welang-archive-sync` 技能执行提升：
 
 - 规范增量 → 提升进权威位置：语言行为能力进 `docs/spec/` 下的正典规范（首次需要时创建目录/版本）；其他项目能力进变更 `proposal.md` 声明的权威位置。
-- 长期取舍 → `docs/decisions/` 下的 ADR。
+- 长期取舍 → `docs/decisions/` 下的 ADR，按文档命名约定（`docs/README.md`）命名为 `ADR-<nnnn>-<slug>.md`。
 - 执行状态 → roadmap（或 roadmap 出现前的 `openspec/changes/` 列表）。
-- 变更目录 → `openspec/changes/archive/<name>/`。
+- 变更目录 → `openspec/changes/archive/`，移入时改名为 `YYYY-MM-DD-<name>`（归档命名约定，见 `docs/README.md`）。
 - 提升后重跑校验器，必须通过。
 
 ## 8. 已知范围（当前限制）

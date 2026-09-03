@@ -64,6 +64,8 @@ Deltas use section headers `## ADDED Requirements` / `## MODIFIED Requirements` 
 
 A change that alters language behavior MUST include a spec delta. A change that only affects internals (refactor, test infrastructure) MAY omit `specs/` but MUST say so in `## 影响层` with layer `compiler` (or similar) and a justification.
 
+Spec deltas are written in **English**: they are literal fragments of the authoritative English text under `docs/spec/` and must be mergeable verbatim on promotion. The other change artifacts (`proposal.md`, `design.md`, `tasks.md`) follow the repo language convention (Chinese).
+
 ### 3.4 `tasks.md`
 
 Every checkbox line (`- [ ]` / `- [x]`) must be followed by two lines:
@@ -118,9 +120,9 @@ Four layers, strongest first:
 When a change reaches `complete`, the `welang-archive-sync` skill promotes:
 
 - Spec deltas → promoted into their authoritative home: language-behavior capabilities into the canonical spec under `docs/spec/` (creating the directory/version on first need); other project capabilities into the authoritative location declared in the change's `proposal.md`.
-- Long-term tradeoffs → ADRs under `docs/decisions/`.
+- Long-term tradeoffs → ADRs under `docs/decisions/`, named `ADR-<nnnn>-<slug>.md` per the document naming conventions (`docs/README.md`).
 - Execution state → roadmap (or `openspec/changes/` listing until a roadmap exists).
-- The change directory → `openspec/changes/archive/<name>/`.
+- The change directory → `openspec/changes/archive/`, renamed to `YYYY-MM-DD-<name>` on move (archive naming convention, `docs/README.md`).
 - Re-run the validator after promotion; it must pass.
 
 ## 8. Known Scope (Current Limitations)

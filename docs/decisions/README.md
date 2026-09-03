@@ -8,3 +8,4 @@ each record has a paired Chinese translation (`<name>.zh.md`).
 | ADR | Title | Status |
 | --- | --- | --- |
 | [ADR-0001](ADR-0001-english-authoritative-bilingual-docs.md) | English-authoritative bilingual documentation under docs/ | Accepted |
+| [ADR-0002](ADR-0002-llvm-first-commercial-runtime.md) | LLVM-first compilation with a self-built commercial runtime | Accepted |

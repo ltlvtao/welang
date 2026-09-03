@@ -17,6 +17,15 @@ Documentation under `docs/` ships with dual-language synchronized support:
 
 Files outside `docs/` are single-language by design: `AGENTS.md`, `openspec/`, and `.agents/` are Chinese; code comments and commit messages are English.
 
+## Document Naming Conventions
+
+Numeric prefixes encode reading order where order matters; semantic names carry identity where cross-referencing matters:
+
+- **Positional numbering for design corpora.** Canonical spec chapters under `docs/spec/` are `<nnnn>-<slug>.md` — four-digit zero-padded, stride 100 (`0000`, `0100`, `0200`, ...), so a new chapter inserts between neighbors without renumbering. `0000` is reserved for chapter 0 (foundations). ADRs use the same stride: `ADR-<nnnn>-<slug>.md`. Translations inherit every naming element (see Documentation Language).
+- **Date prefixes for append-only ledgers.** A change directory is renamed to `YYYY-MM-DD-<name>` when moved into `openspec/changes/archive/` — the date is the total order, needs no concurrency coordination, and `validate.py` does not check `archive/`.
+- **Semantic kebab names for identity.** Active change directories and `specs/<capability>/` capability names keep kebab-case semantic names — a change name is a join key referenced across artifacts, and the capability-to-chapter mapping is decided at promotion, not fixed in advance.
+- **Fixed structural names are exempt.** `README.md`, `AGENTS.md`, `SKILL.md`, `change.yaml`, and the four change-artifact filenames never carry prefixes — tooling and cross-tool conventions depend on these names.
+
 ## Directory Responsibilities
 
 | Directory or file | Authoritative responsibility | Does NOT carry |

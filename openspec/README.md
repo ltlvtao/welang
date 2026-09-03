@@ -76,5 +76,5 @@ python3 openspec/tools/validate.py --all --strict
 
 - 规范增量合并进 `docs/spec/`（首次需要时创建）；
 - 长期取舍提升为 `docs/decisions/` 下的 ADR；
-- 变更目录移入 `changes/archive/<name>/`；
+- 变更目录移入 `changes/archive/`，移入时目录名加 `YYYY-MM-DD-` 日期前缀（归档命名约定，见 `docs/README.md`）；
 - 重新跑校验，必须通过。
