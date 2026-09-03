@@ -16,7 +16,7 @@ The unit of parsing is a source file's token stream as ratified by chapter 1, an
 
 ### Requirement: Line-joining and semicolon inference
 
-Statement boundaries are inferred, not written; the source carries no semicolons. Inside round brackets `( ... )` and square brackets — including attribute units `#[ ... ]` — line breaks carry no significance. Inside braces, which delimit blocks and are not brackets for this Requirement, the depth-zero rule applies. At bracket depth zero, a statement boundary is present after the last token of every source line UNLESS that token is in the continuation set: a binary operator (`+ - * / % == != < <= > >= && || & | ^ << >>`), `=`, or `.`. The continuation set is closed; extending it is a spec change. Tokens that begin statements are a fixed class: identifiers, literals, keywords, `(`, `{`, and the prefix operators `!`, `-`, `~`.
+Statement boundaries are inferred, not written; the source carries no semicolons. Inside round brackets `( ... )` and square brackets — including attribute units `#[ ... ]` — line breaks carry no significance. Inside braces, which delimit blocks and are not brackets for this Requirement, the depth-zero rule applies. At bracket depth zero, a statement boundary is present after the last token of every source line UNLESS that token is in the continuation set: a binary operator (`+ - * / % == != < <= > >= && || & | ^ << >> ..`), `=`, or `.`. The continuation set is closed; extending it is a spec change. Tokens that begin statements are a fixed class: identifiers, literals, keywords, `(`, `{`, and the prefix operators `!`, `-`, `~`.
 
 #### Scenario: Operator at end of line continues the statement
 
@@ -59,7 +59,7 @@ A block is `{`, then a sequence of items separated by inferred statement boundar
 
 ### Requirement: Statements
 
-Statement forms are ratified family by family, each family by its owning chapter; the set of families and their members is closed per chapter and grows only through spec-layer changes in the owning chapter. This chapter ratifies: binding statements (`let name = expr` and `var name = expr`, each optionally with a type annotation `name: type` before `=`; the grammar of types is ratified by the types chapter), assignment statements (`name = expr`, where richer assignment targets are ratified with their owning chapters), and expression statements (any expression as an item). The control-flow chapter ratifies control-flow statements (if, while, loop, break, continue, return, defer). Assignment is a statement, not an expression: it produces no value and MUST NOT appear where an expression is required.
+Statement forms are ratified family by family, each family by its owning chapter; the set of families and their members is closed per chapter and grows only through spec-layer changes in the owning chapter. This chapter ratifies: binding statements (`let name = expr` and `var name = expr`, each optionally with a type annotation `name: type` before `=`; the grammar of types is ratified by the types chapter), assignment statements (`name = expr`, where richer assignment targets are ratified with their owning chapters), and expression statements (any expression as an item). The control-flow chapter ratifies control-flow statements (if, while, loop, break, continue, return, defer); the iteration chapter ratifies the for statement. Assignment is a statement, not an expression: it produces no value and MUST NOT appear where an expression is required.
 
 #### Scenario: Assignment nested where an expression is required
 
@@ -102,7 +102,7 @@ Primary expressions are: identifiers, literals ratified by chapter 1, and parent
 
 ### Requirement: Operator precedence and associativity
 
-Binary operator precedence is the following closed table, tightest first; associativity is as listed per level, and the comparison and equality level is non-associative:
+Binary operator precedence is the following closed table, tightest first; associativity is as listed per level, and the comparison and equality level and the range level are non-associative:
 
 | Level | Operators | Associativity |
 | --- | --- | --- |
@@ -117,6 +117,7 @@ Binary operator precedence is the following closed table, tightest first; associ
 | 9 | `<` `<=` `>` `>=` `==` `!=` | none |
 | 10 | `&&` | left |
 | 11 | `\|\|` | left |
+| 12 | `..` | none |
 
 The table is closed: adding an operator, changing a level, or changing associativity is a spec change. `=`, `.`, `->`, and `=>` are not binary operators and never appear inside expressions at this chapter's scope.
 
@@ -139,6 +140,11 @@ The table is closed: adding an operator, changing a level, or changing associati
 
 - **WHEN** `(a < b) && (b < c)` is parsed
 - **THEN** each comparison is a single explicit group and no `E0104:` fires
+
+#### Scenario: Chained range is rejected
+
+- **WHEN** `a..b..c` is parsed
+- **THEN** the compiler rejects it with `E0104:` chained non-associative operator; each range must be a single explicit group
 
 ### Requirement: Grammar diagnostics segment
 
