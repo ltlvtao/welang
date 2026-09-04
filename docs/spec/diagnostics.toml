@@ -141,8 +141,8 @@ owner = "1600-effects"
 # E1401-E1405 undeclared-call / value-vs-type mismatch / builtin-name
 # conflict / impl-vs-interface disagreement / initializer impurity.
 # E1406-E1499 reserved for amendments (the testing codes landed in
-# chapter 20's E18xx segment; the FFI codes landed in chapter 19's
-# E17xx segment).
+# chapter 20's E18xx segment; the FFI codes landed in chapter 19's E17xx
+# segment; the toolchain codes landed in chapter 21's E19xx segment).
 
 [segments."E1500-E1599"]
 domain = "collections"
@@ -174,7 +174,16 @@ owner = "2000-testing"
 # E1801-E1806 test-module / mock-declaration / advanceTime-position
 # diagnostics; E1807-E1899 reserved for amendments.
 
-[segments."E1900-E9999"]
+[segments."E1900-E1999"]
+domain = "toolchain"
+owner = "2100-toolchain"
+# Intra-segment structure (chapter 21): E1901-E1907 command-surface /
+# pipeline / manifest / linkage / exploration errors; W1910-W1912 the
+# three named advisories (E and W share the number space, chapter 99,
+# numbers 1910-1912 being the warnings' own); numbers 1900, 1908-1909,
+# and 1913-1999 reserved for amendments.
+
+[segments."E2000-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -1409,4 +1418,94 @@ description = "advanceTime is called outside a test block body. The name is prel
 remediation = "Advance the clock inside the test that observes it; plain code has no clock to advance."
 owner = "2000-testing"
 requirement = "advanceTime"
+allocated = "2026-09-04"
+
+[diagnostic.E1901]
+severity = "error"
+title = "exploration detected nondeterminism"
+description = "The same test under exploration yielded divergent observable interleavings: something outside the virtualized determinism is acting (a real wait, an unmocked effect's real behavior). The deterministic promise of chapter 20 excludes it, and the probe found the exclusion. Fires under: Exploration."
+remediation = "Mock the effect or wait that reaches outside the virtual clock, or accept that the test is not deterministic and stop exploring it."
+owner = "2100-toolchain"
+requirement = "Exploration"
+allocated = "2026-09-04"
+
+[diagnostic.E1902]
+severity = "error"
+title = "unmocked effect executed during exploration"
+description = "An exploration run executed a call of a custom effect tag with no mock on its path. The real call's behavior breaks the probe's premise of reproducible interleavings - the same condition W1910 advises about in an ordinary run is an error under exploration. Fires under: Exploration."
+remediation = "Mock the custom-effect function the explored path calls, so the run stays on the virtual clock's determinism."
+owner = "2100-toolchain"
+requirement = "Exploration"
+allocated = "2026-09-04"
+
+[diagnostic.E1903]
+severity = "error"
+title = "invalid toolchain configuration value"
+description = "A value in the project manifest's configuration tables falls outside its legal domain: a [vet] entry not one of warning, error, ignore; a type not executable or library; an explore-iterations that is not a positive integer. The message names the key, the legal values, and what was found. Fires under: The project manifest, Advisory diagnostics and we vet."
+remediation = "Set the named key to one of the legal values the diagnostic lists."
+owner = "2100-toolchain"
+requirement = "The project manifest"
+allocated = "2026-09-04"
+
+[diagnostic.E1904]
+severity = "error"
+title = "invalid project name"
+description = "A project name outside chapter 1's naming convention - we new's argument, or the manifest's name field. One rule, two entry points. Fires under: The we command surface, The project manifest."
+remediation = "Use lowercase letters, digits, and hyphens per chapter 1's naming convention."
+owner = "2100-toolchain"
+requirement = "The we command surface"
+allocated = "2026-09-04"
+
+[diagnostic.E1905]
+severity = "error"
+title = "project manifest missing or incomplete"
+description = "A project invocation - a directory-path command - found no we.toml, or a manifest missing the name, version, or type key. The message names the missing key. Fires under: The project manifest."
+remediation = "Create we.toml with the name, version, and type keys, or run we new to write the skeleton."
+owner = "2100-toolchain"
+requirement = "The project manifest"
+allocated = "2026-09-04"
+
+[diagnostic.E1906]
+severity = "error"
+title = "unresolved native symbol"
+description = "At build time a name declared in a foreign block bound to no discoverable native symbol of the platform C ABI. The message names the declaration and the symbol sought. we check does not link, so this code cannot fire under it. Fires under: Linkage of foreign declarations."
+remediation = "Provide the native library or symbol the declaration names, or correct the declaration to the symbol that exists."
+owner = "2100-toolchain"
+requirement = "Linkage of foreign declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E1907]
+severity = "error"
+title = "command path not found"
+description = "A [path] argument of a we subcommand names no file or directory. Fires under: The we command surface."
+remediation = "Pass a project directory, a .we file, or nothing (the working directory)."
+owner = "2100-toolchain"
+requirement = "The we command surface"
+allocated = "2026-09-04"
+
+[diagnostic.W1910]
+severity = "warning"
+title = "unmocked custom effect in a test"
+description = "A test's code path calls a function of a custom effect tag with no mock on that path - the call is real, chapter 20 says so, and the finding advises the mock. Advisory: never stops the pipeline unless promoted to error by the manifest's [vet] table. Fires under: Advisory diagnostics and we vet."
+remediation = "Mock the custom-effect function on the test's path, or accept the real call deliberately."
+owner = "2100-toolchain"
+requirement = "Advisory diagnostics and we vet"
+allocated = "2026-09-04"
+
+[diagnostic.W1911]
+severity = "warning"
+title = "possible indirect nested access to one shared value"
+description = "A function called within a shared value's callback body may access the same binding again - chapter 18's E1613 sees direct calls only, and this heuristic looks one call through. Conservative by design, false-positive-tolerant: a survey, never a verification. Advisory unless promoted. Fires under: Advisory diagnostics and we vet."
+remediation = "Review the called function; if it touches the same shared value, restructure so the callback completes before the nested access."
+owner = "2100-toolchain"
+requirement = "Advisory diagnostics and we vet"
+allocated = "2026-09-04"
+
+[diagnostic.W1912]
+severity = "warning"
+title = "function may block on a wait"
+description = "A function body directly calls one of the five operations whose waits block - Semaphore.acquire, Cond.wait, Channel.send, Channel.receive, TaskHandle.await, per chapter 18's semantics. Information chapter 16 deliberately keeps out of the effect system; the informational note is informational in character. Advisory unless promoted. Fires under: Advisory diagnostics and we vet."
+remediation = "No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded."
+owner = "2100-toolchain"
+requirement = "Advisory diagnostics and we vet"
 allocated = "2026-09-04"
