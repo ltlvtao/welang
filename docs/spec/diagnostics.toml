@@ -79,7 +79,19 @@ owner = "0900-sum-types"
 # payload category, Never position, bare payloaded constructor),
 # E0705-E0799 reserved for amendments of the sum-types chapter.
 
-[segments."E0800-E9999"]
+[segments."E0800-E0899"]
+domain = "interfaces and generics"
+owner = "1000-interfaces"
+# Intra-segment structure (chapter 10): E0800 boundary reserve,
+# E0801-E0831 interface/impl/receiver/member-resolution errors
+# (receivers, associated types, impl completeness/uniqueness/
+# locality, receiver field assignment, member resolution), Dyn
+# and derive errors, generic declaration/reference/inference and
+# where-clause errors. E0826's rule is ratified with no nesting
+# surface yet. E0832-E0899 reserved for amendments (Shareable,
+# codecs).
+
+[segments."E0900-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -495,4 +507,283 @@ description = "A variant declared with payload appears as a bare name in value p
 remediation = "Construct with the payload (`Circle(1.0)`); first-class constructor values arrive, if at all, with the function-types chapter."
 owner = "0900-sum-types"
 requirement = "Variant constructors"
+allocated = "2026-09-04"
+
+[diagnostic.E0801]
+severity = "error"
+title = "method declares no receiver"
+description = "An interface method signature or an impl-block method definition omits the bare first receiver parameter (`self` or `mut self`), for example `fn describe(d: Describable) -> String`. The receiver is positional and bare: its type is fixed by the impl head and never written. Fires under: Interface declarations, Method receivers."
+remediation = "Write the receiver first and bare (`fn describe(self) -> String`); annotated parameters follow it."
+owner = "1000-interfaces"
+requirement = "Interface declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0802]
+severity = "error"
+title = "method receiver must be named self"
+description = "An impl-block method's bare first parameter is spelled other than `self` (for example `fn upper(me)`). The spelling is enforced the way chapter 1 enforces its case conventions, keeping every method body uniform; `self` remains an ordinary identifier elsewhere. Fires under: Method receivers."
+remediation = "Rename the receiver to `self`; it is a binding like any other inside the body."
+owner = "1000-interfaces"
+requirement = "Method receivers"
+allocated = "2026-09-04"
+
+[diagnostic.E0803]
+severity = "error"
+title = "associated type count above four"
+description = "An interface declares five or more associated types. Four is the ceiling: an interface naming more type holes is doing too much for one capability. Fires under: Associated types."
+remediation = "Split the interface, or replace later associated types with generic parameters on the interface declaration."
+owner = "1000-interfaces"
+requirement = "Associated types"
+allocated = "2026-09-04"
+
+[diagnostic.E0804]
+severity = "error"
+title = "associated type declares an upper bound"
+description = "An associated-type declaration carries an upper bound (`type Element: Eq`). Bounds belong in where clauses at use sites, not on the hole's declaration. Fires under: Associated types."
+remediation = "Drop the bound from the declaration; constrain at impls or calls with `where` clauses."
+owner = "1000-interfaces"
+requirement = "Associated types"
+allocated = "2026-09-04"
+
+[diagnostic.E0805]
+severity = "error"
+title = "impl misses an associated type binding"
+description = "An impl of an interface declaring associated types defines no binding for one of them (`type Element = ...`). The hole must be fixed by every implementation. Fires under: Associated types."
+remediation = "Add the binding item (`type Element = Int64`) before the impl's method definitions."
+owner = "1000-interfaces"
+requirement = "Associated types"
+allocated = "2026-09-04"
+
+[diagnostic.E0806]
+severity = "error"
+title = "associated type binding after a method definition"
+description = "An impl places an associated-type binding item below a method definition. Bindings come first so the method signatures can read them. Fires under: Associated types."
+remediation = "Move the `type Name = TypeRef` items above every method definition of the impl."
+owner = "1000-interfaces"
+requirement = "Associated types"
+allocated = "2026-09-04"
+
+[diagnostic.E0807]
+severity = "error"
+title = "impl misses a non-defaulted interface method"
+description = "An impl defines no body for an interface method that has no default. An interface's non-defaulted methods are obligations; defaulted ones may be omitted. Fires under: Impl declarations."
+remediation = "Define the missing method (the diagnostic names it), or give the interface method a default body through a spec change."
+owner = "1000-interfaces"
+requirement = "Impl declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0808]
+severity = "error"
+title = "impl method signature mismatches the interface method"
+description = "A defined impl method differs from its interface method in name, receiver mutability, parameter count or types in order, or return type (parameter names may differ). Fires under: Impl declarations."
+remediation = "Align the definition with the interface signature; the receiver mutability is part of the contract."
+owner = "1000-interfaces"
+requirement = "Impl declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0809]
+severity = "error"
+title = "duplicate impl of one interface for one type"
+description = "One interface is implemented twice for one head type, counting substitutions: a concrete impl overlapping a generic impl's instantiations is equally a duplicate. Fires under: Impl declarations."
+remediation = "Keep one impl; widen a generic impl instead of adding overlapping concrete ones."
+owner = "1000-interfaces"
+requirement = "Impl declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0810]
+severity = "error"
+title = "orphan impl"
+description = "An impl is written in a module that declares neither the interface nor the head type (for an inherent impl: a module that does not declare the head). Foreign interface for foreign type is the orphan; extension of foreign types by inherent methods does not exist. Fires under: Impl declarations, Inherent impls."
+remediation = "Move the impl into a module declaring the interface or the type, or declare a local interface and implement it for the foreign type."
+owner = "1000-interfaces"
+requirement = "Impl declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0811]
+severity = "error"
+title = "impl head is not a nominal type"
+description = "The head of an impl is a tuple, a base type, or a bare generic parameter instead of a record, newtype, or sum name or a generic application of one. This discharges chapter 8's obligation: tuples implement no interfaces. Fires under: Impl declarations."
+remediation = "Implement for a nominal type; wrap tuple data in a record or newtype first."
+owner = "1000-interfaces"
+requirement = "Impl declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0812]
+severity = "error"
+title = "mut self receiver on a value-category type"
+description = "An impl on a byval record or sum declares a `mut self` receiver. Value semantics copies; a value copy has nothing to mutate in place. Fires under: Method receivers."
+remediation = "Drop `mut` (produce a new value instead), or change the declaration's category so in-place mutation is honest."
+owner = "1000-interfaces"
+requirement = "Method receivers"
+allocated = "2026-09-04"
+
+[diagnostic.E0813]
+severity = "error"
+title = "field write outside a mut self method body"
+description = "`self.field = expr` appears inside a plain `self` method, a plain fn, or at the top level. The receiver field assignment is the language's one field-assignment form and lives only inside mut-self bodies. Fires under: Receiver field assignment."
+remediation = "Declare the receiver `mut self`, or produce a new value with the update expression."
+owner = "1000-interfaces"
+requirement = "Receiver field assignment"
+allocated = "2026-09-04"
+
+[diagnostic.E0814]
+severity = "error"
+title = "member name collision on one type"
+description = "One type would carry two members of one name: a field against a method, an inherent method against an interface method, methods of two interfaces, or an inherent method against an inherited default. One name, one meaning. Fires under: Member name resolution, Default methods."
+remediation = "Rename one member, or define the method in the for-form impl instead of relying on an inherent one or a default."
+owner = "1000-interfaces"
+requirement = "Member name resolution"
+allocated = "2026-09-04"
+
+[diagnostic.E0815]
+severity = "error"
+title = "method call outside the receiver's method set"
+description = "A member call on a receiver whose static position is an interface - a `Dyn<I>` value, or `self` inside a default method body - names a method outside that interface's set. The erased type's own members are not reachable there. Fires under: Member name resolution, Dyn values."
+remediation = "Call interface methods only through the box, or rebind the concrete value and call its own member."
+owner = "1000-interfaces"
+requirement = "Member name resolution"
+allocated = "2026-09-04"
+
+[diagnostic.E0816]
+severity = "error"
+title = "no such member on the receiver's type"
+description = "Member access names neither a field, an inherent method, an interface method, nor a generated derive method of the receiver's type. Grounds chapter 8's record side: unknown names are one rule, one code. Fires under: Member name resolution, Receiver field assignment."
+remediation = "Fix the name, or declare the member; unknown-field access on records lands here too."
+owner = "1000-interfaces"
+requirement = "Member name resolution"
+allocated = "2026-09-04"
+
+[diagnostic.E0817]
+severity = "error"
+title = "method call on an unconstrained generic parameter"
+description = "A method is called on a value of an unconstrained generic parameter type. An unconstrained parameter is opaque: it has no members. Fires under: Member name resolution, Generic parameter declarations."
+remediation = "Add a where bound naming an interface (`where T: Describable`); its method set becomes available inside."
+owner = "1000-interfaces"
+requirement = "Member name resolution"
+allocated = "2026-09-04"
+
+[diagnostic.E0818]
+severity = "error"
+title = "Dyn construction from a non-implementing type"
+description = "`Dyn<Interface>(expr)` is constructed with an expression whose type does not implement the interface. The box carries an implementing value only. Fires under: Dyn values."
+remediation = "Box a value of an implementing type, or implement the interface for the type first."
+owner = "1000-interfaces"
+requirement = "Dyn values"
+allocated = "2026-09-04"
+
+[diagnostic.E0819]
+severity = "error"
+title = "Dyn of an interface with associated types"
+description = "`Dyn<Interface>` names an interface that declares associated types. The erased value could not honor the binding: dispatch would not know the type. Fires under: Associated types, Dyn values."
+remediation = "Use the interface generically (`where T: Stream`) instead of erasing it, or drop the associated types."
+owner = "1000-interfaces"
+requirement = "Dyn values"
+allocated = "2026-09-04"
+
+[diagnostic.E0820]
+severity = "error"
+title = "Dyn argument is not an interface type"
+description = "The `<...>` argument of a `Dyn` form names a base type, a record, a sum, or a generic parameter instead of a declared interface. Fires under: Dyn values."
+remediation = "Erase an interface: `Dyn<Describable>`; other types occupy type slots directly."
+owner = "1000-interfaces"
+requirement = "Dyn values"
+allocated = "2026-09-04"
+
+[diagnostic.E0821]
+severity = "error"
+title = "interface name used as a value type"
+description = "A bare interface name appears in a value type slot (`let d: Describable`, a parameter `x: Describable`). An interface is not a value type; it occupies type slots only as the erased box. Fires under: Dyn values."
+remediation = "Write `Dyn<Describable>` for erased values, or a bounded generic parameter for parametric ones."
+owner = "1000-interfaces"
+requirement = "Dyn values"
+allocated = "2026-09-04"
+
+[diagnostic.E0822]
+severity = "error"
+title = "manual impl of a builtin derive target"
+description = "A manual `impl Eq for ...` (or Hash, Show) appears. The derive targets are builtin: their methods are generated by the derives clause, never hand-written - this keeps composite equality one story with the base-types-only `==`. Fires under: Derives."
+remediation = "Write the clause instead: `record Point { ... } derives Eq`; hand-written logic belongs in your own interface."
+owner = "1000-interfaces"
+requirement = "Derives"
+allocated = "2026-09-04"
+
+[diagnostic.E0823]
+severity = "error"
+title = "derive field requirement unmet"
+description = "An `Eq` or `Hash` derive names a type whose fields, underlying type, or payload types do not carry the capability (base types carry it; composites carry it through their own derives). On generic declarations the check runs at each instantiation. Fires under: Derives, Record declarations of chapter 8 as amended, Sum declarations as amended."
+remediation = "Derive the requirement on the field type too, or drop the target; `Show` asks nothing."
+owner = "1000-interfaces"
+requirement = "Derives"
+allocated = "2026-09-04"
+
+[diagnostic.E0824]
+severity = "error"
+title = "unknown or duplicate derive target"
+description = "A derives clause names a target outside the closed set `Eq`, `Hash`, `Show`, or names one twice. Fires under: Derives."
+remediation = "Use targets from the closed set, each once; Encodable/Decodable arrive with the JSON change, Shareable with the concurrency chapter."
+owner = "1000-interfaces"
+requirement = "Derives"
+allocated = "2026-09-04"
+
+[diagnostic.E0825]
+severity = "error"
+title = "generic parameter count above eight"
+description = "A generic parameter clause declares nine or more parameters - the arity mirror of the composite chapters' eights. Fires under: Generic parameter declarations."
+remediation = "Reduce the clause; a type or function needing more parameters is doing too much."
+owner = "1000-interfaces"
+requirement = "Generic parameter declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0826]
+severity = "error"
+title = "generic parameter shadows an enclosing parameter"
+description = "A generic clause redeclares a name of an enclosing clause. No nesting context is ratified at chapter 10 (generic methods are not ratified); the rule binds from the moment one arrives. Fires under: Generic parameter declarations."
+remediation = "Rename the inner parameter; shadowing across clauses is rejected even where nesting exists."
+owner = "1000-interfaces"
+requirement = "Generic parameter declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0827]
+severity = "error"
+title = "generic call does not determine its type arguments"
+description = "A generic call or construction leaves a type argument undetermined: the arguments' types do not mention it and no explicit form is written. Expected-type inference does not exist - determination is single-direction, from the call's own text. Fires under: Generic type references and inference."
+remediation = "Write the explicit form: `empty<Int64>()`, `Pair<Int64, String> { ... }`."
+owner = "1000-interfaces"
+requirement = "Generic type references and inference"
+allocated = "2026-09-04"
+
+[diagnostic.E0828]
+severity = "error"
+title = "type argument arity mismatch"
+description = "An explicit type-argument list or a generic application's arguments differ in count from the declaration's clause. Fires under: Generic type references and inference."
+remediation = "Match the declaration's arity, or fix the declaration's clause."
+owner = "1000-interfaces"
+requirement = "Generic type references and inference"
+allocated = "2026-09-04"
+
+[diagnostic.E0829]
+severity = "error"
+title = "where bound is not a declared interface"
+description = "A where-clause bound names a record, sum, base type, or generic parameter instead of a declared interface. Bounds grant interface method sets; only interfaces have them. Fires under: Where clauses."
+remediation = "Bound by an interface, or express the constraint differently (associated-type equalities are separate constraints)."
+owner = "1000-interfaces"
+requirement = "Where clauses"
+allocated = "2026-09-04"
+
+[diagnostic.E0830]
+severity = "error"
+title = "type argument does not satisfy a where bound"
+description = "At a call or instantiation, a type argument does not implement a where bound of the declaration. Bounds are checked at every use. Fires under: Where clauses, Generic type references and inference."
+remediation = "Pass an implementing type, or implement the interface for it, or widen the declaration's constraints."
+owner = "1000-interfaces"
+requirement = "Where clauses"
+allocated = "2026-09-04"
+
+[diagnostic.E0831]
+severity = "error"
+title = "associated-type equality right side is not concrete"
+description = "A where-clause equality `T.Assoc == X` has a right side that is not a concrete type (a base type, a nominal type, or a generic application of them) - for example `== U` or `== T`. Fires under: Where clauses."
+remediation = "Write a concrete type on the right side; parameterized equalities are not ratified."
+owner = "1000-interfaces"
+requirement = "Where clauses"
 allocated = "2026-09-04"

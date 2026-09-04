@@ -2,11 +2,11 @@
 
 ### Requirement: File structure and module identity
 
-A source file is a module. The file's top level is a sequence of top-level items: import declarations, fn declarations, record and newtype declarations per chapter 8, sum type declarations per chapter 9, and top-level let bindings. Items may appear in any order; ordering conventions are the formatter's business, not the grammar's. Statements and expressions MUST NOT appear as top-level items — they exist only inside blocks — and a top-level token sequence fitting no item production MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). The module's name is the dotted lowercase path naming it per chapter 1's naming conventions; how a path resolves to a file (directory mapping, standard-library priority, dependency cache) is ratified by the module-system chapter.
+A source file is a module. The file's top level is a sequence of top-level items: import declarations, fn declarations, record and newtype declarations per chapter 8, sum type declarations per chapter 9, interface declarations and impl blocks per chapter 10, and top-level let bindings. Items may appear in any order; ordering conventions are the formatter's business, not the grammar's. Statements and expressions MUST NOT appear as top-level items — they exist only inside blocks — and a top-level token sequence fitting no item production MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). The module's name is the dotted lowercase path naming it per chapter 1's naming conventions; how a path resolves to a file (directory mapping, standard-library priority, dependency cache) is ratified by the module-system chapter.
 
 #### Scenario: A file parses as one module
 
-- **WHEN** a source file holds imports, fn declarations, record, newtype, and sum type declarations, and top-level let bindings
+- **WHEN** a source file holds imports, fn declarations, record, newtype, and sum type declarations, interface declarations and impl blocks, and top-level let bindings
 - **THEN** each parses as one top-level item and the file is one module; nothing else is accepted at the top level
 
 #### Scenario: A statement at the top level is rejected
@@ -40,7 +40,7 @@ An import declaration is `import path` or `import path as name`. The path MUST b
 
 ### Requirement: Function declarations
 
-A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, optionally prefixed by `pub`. The name is an identifier under chapter 1's naming conventions (`E0012`). The parameter list is zero or more `name: type` pairs separated by commas; every parameter MUST carry a type annotation — a bare parameter name fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`), which names the `name: type` production. A declared return type after `->` states that the function produces a value; its absence states that the function produces none. The grammar of types filling the annotation slots is ratified by the types chapter. Generic parameters, effect annotations, `mut` parameters, and foreign declarations are ratified by their owning chapters.
+A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, optionally prefixed by `pub`. The name is an identifier under chapter 1's naming conventions (`E0012`). The parameter list is zero or more `name: type` pairs separated by commas; every parameter MUST carry a type annotation — a bare parameter name fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`), which names the `name: type` production. A declared return type after `->` states that the function produces a value; its absence states that the function produces none. The grammar of types filling the annotation slots is ratified by the types chapter. Generic parameters are ratified by chapter 10: `fn name<T1, ..., Tk>(params)` carries the clause between the name and the parameter list, and a where clause may trail the signature before the body; the one bare-parameter exception is the chapter-10 method receiver — inside impl blocks the first parameter is `self` or `mut self`, written bare, its type fixed by the impl head. Effect annotations, `mut` parameters, and foreign declarations are ratified by their owning chapters.
 
 #### Scenario: A function with a full signature
 
@@ -56,6 +56,11 @@ A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, 
 
 - **WHEN** `fn log(m: String) { emit(m) }` appears
 - **THEN** it parses as a fn declaration that produces no value; the omitted return type states this and no `->` clause is required
+
+#### Scenario: A generic function parses
+
+- **WHEN** `fn identity<T>(x: T) -> T { x }` appears as a top-level item
+- **THEN** it parses as one fn declaration with a one-parameter generic clause per chapter 10; the clause sits between the name and the parameter list and the rest follows this chapter's forms
 
 ### Requirement: Function bodies, return and defer
 

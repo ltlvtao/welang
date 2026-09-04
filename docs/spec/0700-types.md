@@ -83,7 +83,7 @@ Integer arithmetic is checked; it MUST NOT silently wrap. A compile-time-detecta
 
 ### Requirement: Type references
 
-A type reference — the form filling every type-annotation slot ratified by chapters 2 and 6 — is a named type or a structural composite: a named type is a PascalCase identifier, optionally module-qualified as `module.Name` reaching an imported module's public type per chapter 6; a tuple type is `(T1, T2, ..., Tn)` with n from 2 to 8, each element itself a type reference; the unit type is `()`. Function types, generic applications, and every other type syntax do not exist yet; each arrives with its owning chapter through this chapter's amendment. A type slot holding anything but a named reference, a tuple type, or the unit type MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). Whether a well-formed name resolves to a ratified type is decided with module resolution by the module-system chapter.
+A type reference — the form filling every type-annotation slot ratified by chapters 2 and 6 — is a named type or a structural composite: a named type is a PascalCase identifier, optionally module-qualified as `module.Name` reaching an imported module's public type per chapter 6, and optionally a generic application `Name<T1, ..., Tk>` per chapter 10, the arguments type references and the arity the declaration's own clause's; a tuple type is `(T1, T2, ..., Tn)` with n from 2 to 8, each element itself a type reference; the unit type is `()`; and `Dyn<Interface>` per chapter 10 names a type-erased interface box. Function types and every other type syntax do not exist yet; each arrives with its owning chapter through this chapter's amendment. A type slot holding anything but a named reference, a generic application, a `Dyn<Interface>` form, a tuple type, or the unit type MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). Whether a well-formed name resolves to a ratified type is decided with module resolution by the module-system chapter.
 
 #### Scenario: A qualified type reference
 
@@ -95,10 +95,20 @@ A type reference — the form filling every type-annotation slot ratified by cha
 - **WHEN** an annotation holds `(Int64, String)`
 - **THEN** it is the type reference of a two-element tuple, per chapter 8's arity bounds
 
+#### Scenario: A generic application in an annotation slot
+
+- **WHEN** an annotation holds `Box<Int64>` with `record Box<T>` declared
+- **THEN** it is the type reference of the generic application, `T` taken as `Int64` per chapter 10
+
+#### Scenario: A Dyn form in an annotation slot
+
+- **WHEN** an annotation holds `Dyn<Describable>` with `Describable` a declared interface
+- **THEN** it is the type reference of the type-erased box per chapter 10
+
 #### Scenario: Unratified type syntax is rejected
 
-- **WHEN** a type slot holds function-type or generic syntax, for example `fn(Int64) -> Int64` or `List<Int64>`
-- **THEN** the compiler rejects it with `E0105:` unexpected token at the slot; those forms arrive with their owning chapters
+- **WHEN** a type slot holds function-type syntax, for example `fn(Int64) -> Int64`
+- **THEN** the compiler rejects it with `E0105:` unexpected token at the slot; the form arrives with its owning chapter
 
 ### Requirement: Condition positions
 
@@ -130,7 +140,7 @@ A block with a value has the type of its final expression item; a block without 
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–7. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Protocols, generics, and the conversion/wrapping method inventory are annotated as pending their chapters.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–7. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Protocols, fn types, and the conversion/wrapping method inventory are annotated as pending their chapters.
 
 ### Literals and defaults
 
@@ -214,9 +224,11 @@ match next() {
 ### Pending later chapters
 
 ```we
-// List<T> and fn types arrive with the generics and function-types
-// slices; String's logical iteration protocol (for c in str yielding
-// Rune) with the iterable-protocols chapter:
+// Fn types arrive with the function-types chapter; the collection
+// types (List among them) with the collections chapter — the generic
+// application form they use is chapter 10's; String's logical
+// iteration protocol (for c in str yielding Rune) with the
+// iterable-protocols chapter:
 //
 // let ids: List<UserId> = build()
 // fn forEach(items: List<Int64>) { }

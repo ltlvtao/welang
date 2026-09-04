@@ -16,7 +16,7 @@
 
 ### Requirement: record 声明
 
-record 声明是顶层项 `record Name { fields }`，可选地带 `byval` 或 `byres` 前缀与 `pub` 前缀；字段为零个或多个以逗号分隔的 `name: type` 对，每个类型是第 7 章之下（经本章修订）的类型引用；字段名遵循第 1 章变量规则——camelCase（`E0012`）；record 名为 PascalCase（`E0011`）。零字段的 record 合法。record 与 newtype 名加入第 6 章模块的唯一名字空间，MUST NOT 与任何其他名字冲突（`E0404`）。
+record 声明是顶层项 `record Name { fields }`，可选地带 `byval` 或 `byres` 前缀与 `pub` 前缀，并可选按第 10 章在名字后携带泛型参数子句、在花括号组后携带 derives 子句；字段为零个或多个以逗号分隔的 `name: type` 对，每个类型是第 7 章之下（经本章与第 10 章修订）的类型引用；字段名遵循第 1 章变量规则——camelCase（`E0012`）；record 名为 PascalCase（`E0011`）。零字段的 record 合法。泛型字段的类别诚实与派生要求按第 10 章在每次实例化处检查。record 与 newtype 名加入第 6 章模块的唯一名字空间，MUST NOT 与任何其他名字冲突（`E0404`）。
 
 #### Scenario: record 作为顶层项解析
 
@@ -32,6 +32,11 @@ record 声明是顶层项 `record Name { fields }`，可选地带 `byval` 或 `b
 
 - **WHEN** 模块声明 `record User { ... }` 与 `fn User() { ... }`
 - **THEN** 编译器以 `E0404:` duplicate name in one module 拒绝第二个声明
+
+#### Scenario: 带 derives 子句的泛型 record 解析
+
+- **WHEN** `record Box<T> { value: T } derives Eq` 出现在顶层
+- **THEN** 它按第 10 章声明单参数 gc record，其 `.equals` 对 `T` 的要求在每次实例化处检查
 
 ### Requirement: record 构造表达式
 
@@ -54,7 +59,7 @@ record 构造表达式是 `TypeRef { field: expr, ... }`：头 `TypeRef` 是命�
 
 ### Requirement: 更新表达式
 
-更新表达式是 `TypeRef { field: expr, ..., with &old }`，头形式与构造相同：它产出头 record 类型的一个新值，其中被指名字段取给定表达式，每个未指名字段从 `old` 复制。基 `old` MUST 是恰为头 record 类型的表达式（否则 `E0603`）；被指名字段集 MUST 只指名已声明字段（`E0604`），每个给定表达式 MUST 匹配其字段类型（`E0501`）。基值不受影响：更新绝不改写它。更新表达式只存在于 gc 与 value record：资源记录有身份，MUST NOT 以此方式更新（`E0606`）；其字段只经 resource 章与接口章的机制改变。
+更新表达式是 `TypeRef { field: expr, ..., with &old }`，头形式与构造相同：它产出头 record 类型的一个新值，其中被指名字段取给定表达式，每个未指名字段从 `old` 复制。基 `old` MUST 是恰为头 record 类型的表达式（否则 `E0603`）；被指名字段集 MUST 只指名已声明字段（`E0604`），每个给定表达式 MUST 匹配其字段类型（`E0501`）。基值不受影响：更新绝不改写它。更新表达式只存在于 gc 与 value record：资源记录有身份，MUST NOT 以此方式更新（`E0606`）；其字段只经 resource 章的释放机制与第 10 章的接收者字段赋值改变——本章推迟给它们的机制，现已落地。
 
 #### Scenario: 更新复制未指名的字段
 
@@ -73,22 +78,22 @@ record 构造表达式是 `TypeRef { field: expr, ... }`：头 `TypeRef` 是命�
 
 ### Requirement: 字段访问
 
-对 record 类型值的后缀成员访问 `receiver.name` 指名该 record 的字段，为第 2 章悬置的字段或方法判定落定 record 一侧：接收者类型指名 record，被访问名是其字段之一，表达式的类型是该字段声明的类型。访问 record 未声明的名字被拒绝（`E0604`）；接收者不是 record 不在此处覆盖——方法与其他被访问形式随接口章到达。字段访问只读：语言中任何地方都不存在对字段的赋值——`obj.field = value` 不合任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，无论可见性、类别或模块。
+对 record 类型值的后缀成员访问 `receiver.name` 指名该 record 的字段，为第 2 章悬置的字段或方法判定落定 record 一侧：接收者类型指名 record，被访问名是其字段之一，表达式的类型是该字段声明的类型。完整候选集——字段连同固有方法、接口方法与生成的派生方法——是第 10 章的成员名字解析：既非接收者类型的字段亦非其方法的名字在那里被拒绝（`E0816`），方法调用归第 10 章。字段访问只读：mut self 方法体外，语言中任何地方都不存在对字段的赋值——`obj.field = value` 不合任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，无论可见性、类别或模块；体内，第 10 章恰批准 `self.field = expr` 为接收者字段赋值——本章推迟给接口章的通道。
 
 #### Scenario: 字段访问读取字段
 
 - **WHEN** `u.name` 出现且 `u: User` 声明 `name: String`
 - **THEN** 它是类型为 `String`、指名该字段值的表达式
 
-#### Scenario: 字段赋值不存在
+#### Scenario: 方法之外不存在字段赋值
 
-- **WHEN** `u.name = "bob"` 出现在任何地方
-- **THEN** 编译器以 `E0105:` unexpected token 拒绝；修改是更新表达式，它产出新值
+- **WHEN** `u.name = "bob"` 出现在 mut self 方法体之外
+- **THEN** 编译器以 `E0105:` unexpected token 拒绝；唯一的字段赋值形式是第 10 章的 mut self 体内 `self.field`——`u` 不是接收者——方法之外的修改是产出新值的更新表达式
 
-#### Scenario: 未知字段访问被拒绝
+#### Scenario: 未知成员访问被拒绝
 
-- **WHEN** `u.email` 出现且 `User` 未声明 `email`
-- **THEN** 编译器以 `E0604:` the record declares no such field 拒绝
+- **WHEN** `u.email` 出现且 `User` 未声明名为 `email` 的字段或方法
+- **THEN** 编译器按第 10 章成员名字解析以 `E0816:` no such member on the receiver's type 拒绝
 
 ### Requirement: 值记录
 
@@ -120,7 +125,7 @@ record 构造表达式是 `TypeRef { field: expr, ... }`：头 `TypeRef` 是命�
 
 ### Requirement: newtype 声明
 
-newtype 声明是顶层项 `newtype Name(Underlying)`，可选地带 `pub` 前缀：`Name` 是新类型，属 newtype 所有权类别，其运行时布局是其底层类型的并被擦除——零开销、双向无隐式转换。构造是调用形式 `Name(expr)`，`expr` 属底层类型；被调用者指名 newtype 的调用是构造（第 6 章唯一名字空间保证一个名字绝不同时是函数与 newtype，故调用形式绝无歧义）。解包是字段访问 `.value`，其类型是底层类型。newtype 与其底层类型——或与任何其他类型——混合以第 7 章 `E0501` 拒绝。derives 随接口章到达。
+newtype 声明是顶层项 `newtype Name(Underlying)`，可选地带 `pub` 前缀：`Name` 是新类型，属 newtype 所有权类别，其运行时布局是其底层类型的并被擦除——零开销、双向无隐式转换。构造是调用形式 `Name(expr)`，`expr` 属底层类型；被调用者指名 newtype 的调用是构造（第 6 章唯一名字空间保证一个名字绝不同时是函数与 newtype，故调用形式绝无歧义）。解包是字段访问 `.value`，其类型是底层类型。newtype 与其底层类型——或与任何其他类型——混合以第 7 章 `E0501` 拒绝。newtype MAY 按第 10 章携带 derives 子句——`newtype UserId(Int64) derives Eq` 生成 `.equals`；泛型 newtype 未批准。本章记录的 derives 推迟至此落地。
 
 #### Scenario: 构造与解包
 
@@ -136,6 +141,11 @@ newtype 声明是顶层项 `newtype Name(Underlying)`，可选地带 `pub` 前�
 
 - **WHEN** `UserId(42)` 出现且模块同时声明 `fn UserId(x: Int64)`——并不存在，因为 `E0404` 禁止该冲突
 - **THEN** 唯一名字空间使构造读法成为唯一读法；无需歧义规则
+
+#### Scenario: 带 derives 子句的 newtype 解析
+
+- **WHEN** `newtype UserId(Int64) derives Eq, Show` 出现在顶层
+- **THEN** 它按第 10 章声明带生成 `.equals` 与 `.toDebugString` 方法的 newtype
 
 ### Requirement: 元组类型与表达式
 
@@ -253,7 +263,7 @@ unit 类型是 `()`；它恰有一个值，写作 `()`，不携带数据。无�
 
 ## 示例（非权威）
 
-下面的示例只用第 1–8 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。方法、接口、derives、sum 类型与引用模型标注为待其各自章节。
+下面的示例只用第 1–8 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。引用模型标注为待其章节。
 
 ### record、构造、更新
 
@@ -353,13 +363,10 @@ fn trim(a: String) -> String {
 ### 待后续章节
 
 ```we
-// Methods (mut self, inherent), interfaces, impl, and derives
-// (Eq, Hash on newtype) arrive with the interfaces chapter;
-// variant patterns and Never with sum types; Ref/Shared with the
-// concurrency chapters; List<T> and indexing with collections:
+// Ref/Shared with the concurrency chapters; List, indexing, and the
+// other collection types with the collections chapter — methods,
+// interfaces, impl, and derives landed with chapter 10:
 //
-// impl Eq for UserId { ... }
-// match shape { Circle(r) => r, _ => 0 }
 // let xs: List<Int64> = build()
 ```
 

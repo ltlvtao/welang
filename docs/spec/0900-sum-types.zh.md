@@ -2,7 +2,7 @@
 
 ### Requirement: sum 类型声明
 
-sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一，可选以 `pub` 与 `byval` 为前缀：`Name` 是 sum 类型的名字，每个 `Vi` 是一个变体——单元变体写作 `Unit` 单独出现，或 `Unit(T1, T2, ..., Tk)`，k 从 1 到 8，每个 `Ti` 是第 7 章下的类型引用。首变体之前没有 `|`。载荷数超过八以 `E0701` 拒绝——修复是 record 载荷，其为字段命名。类型名与每个变体名均为 PascalCase（`E0011`），并加入第 6 章的模块唯一名字空间，不得与任何其他名字冲突（`E0404`）。排版遵循第 2 章：变体间的 `|` 是运算符 token，故跨行声明在每行行尾携带 `=` 或 `|`——完整变体之后以 `|` 起行的行按第 2 章续行诊断（`E0102`）拒绝。sum 类型是第 8 章下的复合类型：`type` 为 `gc` 类别、`byval type` 为 `value` 类别；resource 与 newtype 类别不适用于 sum，且 sum 类型 MUST NOT 在声明后改变类别。
+sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一，可选以 `pub` 与 `byval` 为前缀，并可选按第 10 章在名字后携带泛型参数子句、在末变体后携带 derives 子句：`Name` 是 sum 类型的名字，每个 `Vi` 是一个变体——单元变体写作 `Unit` 单独出现，或 `Unit(T1, T2, ..., Tk)`，k 从 1 到 8，每个 `Ti` 是第 7 章修订下的类型引用。首变体之前没有 `|`。载荷数超过八以 `E0701` 拒绝——修复是 record 载荷，其为字段命名。类型名与每个变体名均为 PascalCase（`E0011`），并加入第 6 章的模块唯一名字空间，不得与任何其他名字冲突（`E0404`）。排版遵循第 2 章：变体间的 `|` 是运算符 token，故跨行声明在每行行尾携带 `=` 或 `|`——完整变体之后以 `|` 起行的行按第 2 章续行诊断（`E0102`）拒绝。sum 类型是第 8 章下的复合类型：`type` 为 `gc` 类别、`byval type` 为 `value` 类别；resource 与 newtype 类别不适用于 sum，且 sum 类型 MUST NOT 在声明后改变类别。泛型载荷的类别诚实与派生要求按第 10 章在每次实例化处检查。
 
 #### Scenario: sum 声明解析为顶层项
 
@@ -33,6 +33,11 @@ sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一�
 
 - **WHEN** 出现 `byval type Axis = X(Float64) | Y(Float64)`
 - **THEN** 它在第 8 章所有权类别下声明一个 value 类别的 sum 类型
+
+#### Scenario: 带 derives 子句的泛型 sum 解析
+
+- **WHEN** `type Result<T> = Ok(T) | Err(String) derives Eq` 出现在顶层
+- **THEN** 它按第 10 章声明单参数 gc sum，其 `.equals` 对 `T` 的要求在每次实例化处检查
 
 ### Requirement: 变体构造器
 
@@ -98,7 +103,7 @@ sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一�
 
 ## 示例（非权威）
 
-下面的示例只用第 1–9 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。接口、derives、产出 `Never` 的错误形式与一等构造器标注为待其各自章节。
+下面的示例只用第 1–9 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。产出 `Never` 的错误形式与一等构造器标注为待其各自章节。
 
 ### 声明与构造
 
@@ -200,11 +205,10 @@ fn find(id: Int64) -> Int64 {
 
 ```we
 // The forms that produce Never (panic, todo, trap names) arrive with
-// the error-mechanism chapter; Eq/Show derives on sums and Dyn<...>
-// open sets with the interfaces chapter; first-class constructors
-// with the function-types chapter:
+// the error-mechanism chapter; first-class constructors with the
+// function-types chapter — Eq/Show derives on sums and Dyn<...> open
+// sets landed with the interfaces chapter:
 //
-// derives Eq for Shape { ... }
 // let g = Circle                        // pending first-class constructors
 ```
 

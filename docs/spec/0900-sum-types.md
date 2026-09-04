@@ -2,7 +2,7 @@
 
 ### Requirement: Sum declarations
 
-A sum type declaration is a top-level item `type Name = V1 | V2 | ... | Vn` with n at least one, optionally prefixed by `pub` and `byval`: `Name` is the sum type's name and each `Vi` a variant — `Unit` alone for a unit variant, or `Unit(T1, T2, ..., Tk)` with k from 1 to 8, each `Ti` a type reference under chapter 7. There is no `|` before the first variant. A payload arity above eight is rejected with `E0701` — the fix is a record payload, which names its fields. The type's name and every variant's name are PascalCase (`E0011`) and join the module's one name space under chapter 6, colliding with no other name (`E0404`). Layout follows chapter 2: the `|` between variants is an operator token, so a declaration spanning lines carries `=` or `|` at each line's end — a line starting with `|` after a complete variant is rejected under chapter 2's continuation diagnostic (`E0102`). A sum type is a composite type under chapter 8: `type` is the `gc` category and `byval type` the `value` category; the resource and newtype categories do not apply to sums, and a sum type MUST NOT change category after declaration.
+A sum type declaration is a top-level item `type Name = V1 | V2 | ... | Vn` with n at least one, optionally prefixed by `pub` and `byval`, and optionally carrying a generic parameter clause after the name and a derives clause after the last variant, both per chapter 10: `Name` is the sum type's name and each `Vi` a variant — `Unit` alone for a unit variant, or `Unit(T1, T2, ..., Tk)` with k from 1 to 8, each `Ti` a type reference under chapter 7 as amended. There is no `|` before the first variant. A payload arity above eight is rejected with `E0701` — the fix is a record payload, which names its fields. The type's name and every variant's name are PascalCase (`E0011`) and join the module's one name space under chapter 6, colliding with no other name (`E0404`). Layout follows chapter 2: the `|` between variants is an operator token, so a declaration spanning lines carries `=` or `|` at each line's end — a line starting with `|` after a complete variant is rejected under chapter 2's continuation diagnostic (`E0102`). A sum type is a composite type under chapter 8: `type` is the `gc` category and `byval type` the `value` category; the resource and newtype categories do not apply to sums, and a sum type MUST NOT change category after declaration. A generic payload's category honesty and derive requirements are checked at each instantiation under chapter 10.
 
 #### Scenario: A sum declaration parses as a top-level item
 
@@ -33,6 +33,11 @@ A sum type declaration is a top-level item `type Name = V1 | V2 | ... | Vn` with
 
 - **WHEN** `byval type Axis = X(Float64) | Y(Float64)` appears
 - **THEN** it declares a value-category sum type under chapter 8's ownership categories
+
+#### Scenario: A generic sum with a derives clause parses
+
+- **WHEN** `type Result<T> = Ok(T) | Err(String) derives Eq` appears at the top level
+- **THEN** it declares a one-parameter gc sum per chapter 10 whose `.equals` requirement on `T` is checked at each instantiation
 
 ### Requirement: Variant constructors
 
@@ -98,7 +103,7 @@ A `byval type` has value semantics under chapter 8's value category: constructio
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–9. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Interfaces, derives, the error forms that produce `Never`, and first-class constructors are annotated as pending their chapters.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–9. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. The error forms that produce `Never` and first-class constructors are annotated as pending their chapters.
 
 ### Declarations and construction
 
@@ -200,11 +205,10 @@ fn find(id: Int64) -> Int64 {
 
 ```we
 // The forms that produce Never (panic, todo, trap names) arrive with
-// the error-mechanism chapter; Eq/Show derives on sums and Dyn<...>
-// open sets with the interfaces chapter; first-class constructors
-// with the function-types chapter:
+// the error-mechanism chapter; first-class constructors with the
+// function-types chapter — Eq/Show derives on sums and Dyn<...> open
+// sets landed with the interfaces chapter:
 //
-// derives Eq for Shape { ... }
 // let g = Circle                        // pending first-class constructors
 ```
 

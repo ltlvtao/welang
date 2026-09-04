@@ -2,11 +2,11 @@
 
 ### Requirement: 文件结构与模块同一性
 
-源文件即模块。文件顶层是顶层项的序列：import 声明、fn 声明、依第 8 章的 record 与 newtype 声明、依第 9 章的 sum 类型声明、顶层 let 绑定。各项次序任意；排序约定是格式化器的事，不是文法的事。语句与表达式 MUST NOT 作为顶层项出现——它们只存在于块内——不适配任何项产生式的顶层 token 序列 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。模块名是按第 1 章命名约定指名它的点分小写路径；路径如何解析到文件（目录映射、标准库优先、依赖缓存）由模块系统章节批准。
+源文件即模块。文件顶层是顶层项的序列：import 声明、fn 声明、依第 8 章的 record 与 newtype 声明、依第 9 章的 sum 类型声明、依第 10 章的接口声明与 impl 块、顶层 let 绑定。各项次序任意；排序约定是格式化器的事，不是文法的事。语句与表达式 MUST NOT 作为顶层项出现——它们只存在于块内——不适配任何项产生式的顶层 token 序列 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。模块名是按第 1 章命名约定指名它的点分小写路径；路径如何解析到文件（目录映射、标准库优先、依赖缓存）由模块系统章节批准。
 
 #### Scenario: 一个文件解析为一个模块
 
-- **WHEN** 源文件持有 import、fn 声明、record、newtype 与 sum 类型声明、顶层 let 绑定
+- **WHEN** 源文件持有 import、fn 声明、record、newtype 与 sum 类型声明、接口声明与 impl 块、顶层 let 绑定
 - **THEN** 各解析为一个顶层项，文件是一个模块；顶层不接受其他内容
 
 #### Scenario: 顶层语句被拒绝
@@ -40,7 +40,7 @@ import 声明是 `import path` 或 `import path as name`。path MUST 是点分�
 
 ### Requirement: fn 声明
 
-fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可选前缀 `pub`。名字是第 1 章命名约定下的标识符（`E0012`）。参数列表是零或多个以逗号分隔的 `name: type` 对；每个参数 MUST 携带类型注解——裸参数名不适配任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，消息具名 `name: type` 产生式。`->` 后声明的返回类型表示函数产出值；其缺失表示不产出。填充注解槽的类型文法由类型章节批准。泛型参数、effect 标注、`mut` 参数、foreign 声明由其归属章节批准。
+fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可选前缀 `pub`。名字是第 1 章命名约定下的标识符（`E0012`）。参数列表是零或多个以逗号分隔的 `name: type` 对；每个参数 MUST 携带类型注解——裸参数名不适配任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，消息具名 `name: type` 产生式。`->` 后声明的返回类型表示函数产出值；其缺失表示不产出。填充注解槽的类型文法由类型章节批准。泛型参数由第 10 章批准：`fn name<T1, ..., Tk>(params)` 把子句携带于名字与参数列表之间，where 子句可尾随签名于体之前；唯一的裸参数例外是第 10 章的方法接收者——impl 块内第一个参数是 `self` 或 `mut self`，裸写，其类型由 impl 头固定。effect 标注、`mut` 参数、foreign 声明由其归属章节批准。
 
 #### Scenario: 完整签名的函数
 
@@ -56,6 +56,11 @@ fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可�
 
 - **WHEN** 出现 `fn log(m: String) { emit(m) }`
 - **THEN** 解析为不产出值的 fn 声明；返回类型省略即表明此意，无需 `->` 子句
+
+#### Scenario: 泛型函数解析
+
+- **WHEN** `fn identity<T>(x: T) -> T { x }` 作为顶层项出现
+- **THEN** 它解析为按第 10 章携带单参数泛型子句的一个 fn 声明；子句位于名字与参数列表之间，其余循本章形式
 
 ### Requirement: 函数体、return 与 defer
 
