@@ -1,0 +1,7 @@
+{
+  "name": "no-subcommand",
+  "args": [],
+  "exit": 2,
+  "stdout": "",
+  "stderr": "usage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n"
+}

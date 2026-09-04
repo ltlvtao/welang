@@ -92,22 +92,26 @@ def validate_change(change_dir: Path, strict: bool) -> list[Fail]:
     # Language-behavior changes must carry a spec delta; enforce the cheap
     # structural half here (behavioral layers listed without 'spec').
     behavior_layers = layers & {"compiler", "stdlib", "tooling"}
+    proposal = change_dir / "proposal.md"
+    proposal_text = proposal.read_text(encoding="utf-8") if proposal.is_file() else ""
+    # Internals-only justification markers: the proposal must declare that the
+    # change carries no spec delta; the justification itself is checked by
+    # semantic review, the markers only open the mechanical exemption.
+    # Deliberately NOT the header "非目标" (a substring of the mandatory
+    # "## 目标与非目标" header, which would make the check vacuous).
+    spec_exempt = any(marker in proposal_text for marker in ("不改变语言行为", "无规范增量"))
     if strict and behavior_layers and "spec" not in layers:
         # Allowed only when proposal explicitly justifies an internals-only
         # change; the justification itself is checked by semantic review.
-        proposal = change_dir / "proposal.md"
-        text = proposal.read_text(encoding="utf-8") if proposal.is_file() else ""
-        if "非目标" not in text and "不改变语言行为" not in text:
+        if not spec_exempt:
             fails.append(Fail(rel(yaml_path), "layers touch compiler/stdlib/tooling without 'spec'; justify internals-only scope in proposal"))
 
     # --- proposal.md ---------------------------------------------------
-    proposal = change_dir / "proposal.md"
     if not proposal.is_file():
         fails.append(Fail(rel(change_dir), "missing proposal.md"))
     else:
-        text = proposal.read_text(encoding="utf-8")
         for header in PROPOSAL_HEADERS:
-            if header not in text:
+            if header not in proposal_text:
                 fails.append(Fail(rel(proposal), f"missing required header '{header}'"))
 
     # --- full artifacts for ready/active/complete -----------------------
@@ -116,8 +120,11 @@ def validate_change(change_dir: Path, strict: bool) -> list[Fail]:
             if not (change_dir / required).is_file():
                 fails.append(Fail(rel(change_dir), f"status '{status}' requires {required}"))
         spec_files = sorted((change_dir / "specs").glob("*/spec.md")) if (change_dir / "specs").is_dir() else []
-        if not spec_files:
-            fails.append(Fail(rel(change_dir), f"status '{status}' requires at least one specs/<capability>/spec.md"))
+        if not spec_files and not spec_exempt:
+            # An internals-only change (no spec delta) may omit specs/ when its
+            # proposal carries the justification markers; design.md and
+            # tasks.md remain required. Matches openspec/README.md's table.
+            fails.append(Fail(rel(change_dir), f"status '{status}' requires at least one specs/<capability>/spec.md (or an internals-only justification in proposal.md)"))
 
     # --- spec deltas ----------------------------------------------------
     for spec_file in sorted(change_dir.glob("specs/*/spec.md")):

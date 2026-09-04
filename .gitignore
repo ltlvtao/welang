@@ -6,3 +6,7 @@ refr/
 
 # Python bytecode (ad-hoc imports of openspec/tools modules)
 __pycache__/
+
+# Go build artifacts (reference toolchain)
+/we
+*.test

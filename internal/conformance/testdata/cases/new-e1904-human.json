@@ -1,0 +1,11 @@
+{
+  "name": "new-e1904-human",
+  "args": [
+    "new",
+    "My_Project"
+  ],
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error[E1904]: invalid project name — \"My_Project\"\n",
+  "files": {}
+}

@@ -1,0 +1,11 @@
+{
+  "name": "new-extra-arg",
+  "args": [
+    "new",
+    "a",
+    "b"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "stderr": "we: usage: we new <name>\nusage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n"
+}

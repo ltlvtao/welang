@@ -28,7 +28,7 @@ candidate →（welang-spec-impact-audit）→ ready →（四件套 + welang-ch
 | 状态 | 工件要求（validate.py 强制） |
 | --- | --- |
 | `candidate` | `change.yaml` + `proposal.md`（五个必需标题齐全） |
-| `ready` / `active` / `complete` | 四件套齐全：`proposal.md`、`design.md`、`tasks.md`、至少一个 `specs/*/spec.md` |
+| `ready` / `active` / `complete` | 四件套齐全：`proposal.md`、`design.md`、`tasks.md`、至少一个 `specs/*/spec.md`（纯内部变更豁免 specs/：提案含「不改变语言行为」/「无规范增量」标记即可，design/tasks 仍必需） |
 | `archived` | 目录必须已移入 `changes/archive/` |
 
 ## `change.yaml` 字段

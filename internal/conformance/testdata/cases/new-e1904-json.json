@@ -1,0 +1,12 @@
+{
+  "name": "new-e1904-json",
+  "args": [
+    "new",
+    "My_Project",
+    "--json"
+  ],
+  "exit": 1,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"error\",\"code\":\"E1904\",\"message\":\"invalid project name — \\\"My_Project\\\"\",\"file\":\"\",\"line\":0,\"column\":0,\"help\":\"Use lowercase letters, digits, and hyphens per chapter 1's naming convention.\"}\n",
+  "stderr": "",
+  "files": {}
+}

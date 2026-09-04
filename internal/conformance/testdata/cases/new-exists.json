@@ -1,0 +1,15 @@
+{
+  "name": "new-exists",
+  "args": [
+    "new",
+    "demo"
+  ],
+  "setup": {
+    "dirs": [
+      "demo"
+    ]
+  },
+  "exit": 2,
+  "stdout": "",
+  "stderr": "we: target directory \"demo\" already exists\nusage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n"
+}

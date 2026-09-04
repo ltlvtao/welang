@@ -1,0 +1,10 @@
+{
+  "name": "check-boundary-json",
+  "args": [
+    "check",
+    "--json"
+  ],
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: check is not implemented in this reference build yet\n"
+}

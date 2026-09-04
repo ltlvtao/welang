@@ -1,0 +1,15 @@
+{
+  "name": "new-skeleton",
+  "args": [
+    "new",
+    "demo"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/we.toml": "# file: we.toml — the skeleton chapter 21 fixes; [dependencies] is\n# chapter 22's table — optional, absent means an empty dependency set\nname = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "demo/src/main.we": "// file: src/main.we — the root module; chapter 15 fixes its main shape\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "demo/tests/main_test.we": "// file: tests/main_test.we — one empty test module; the default test set is\n// every *_test.we under tests/, recursively, and this one holds no test block\n"
+  }
+}

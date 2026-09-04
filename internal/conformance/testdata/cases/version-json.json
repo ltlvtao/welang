@@ -1,0 +1,10 @@
+{
+  "name": "version-json",
+  "args": [
+    "version",
+    "--json"
+  ],
+  "exit": 0,
+  "stdout": "{\"type\":\"version\",\"compiler\":\"0.1.0\",\"spec\":\"0.9.0\"}\n",
+  "stderr": ""
+}

@@ -1,0 +1,11 @@
+{
+  "name": "build-e1907-json",
+  "args": [
+    "build",
+    "nosuchdir",
+    "--json"
+  ],
+  "exit": 1,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"error\",\"code\":\"E1907\",\"message\":\"command path not found — \\\"nosuchdir\\\"\",\"file\":\"\",\"line\":0,\"column\":0,\"help\":\"Pass a project directory, a .we file, or nothing (the working directory).\"}\n",
+  "stderr": ""
+}

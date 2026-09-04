@@ -1,0 +1,11 @@
+{
+  "name": "color-invalid",
+  "args": [
+    "version",
+    "--color",
+    "strict"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "stderr": "we: invalid --color value \"strict\" (want auto, always, or never)\nusage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n"
+}

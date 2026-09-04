@@ -1,0 +1,10 @@
+{
+  "name": "vet-e1907-human",
+  "args": [
+    "vet",
+    "no/such/path"
+  ],
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error[E1907]: command path not found — \"no/such/path\"\n"
+}

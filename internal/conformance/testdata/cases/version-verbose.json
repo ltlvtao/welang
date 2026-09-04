@@ -1,0 +1,10 @@
+{
+  "name": "version-verbose",
+  "args": [
+    "version",
+    "--verbose"
+  ],
+  "exit": 0,
+  "stdout": "we 0.1.0\nspec 0.9.0\ngo go1.26.6\nllvm 21.1.8\n",
+  "stderr": ""
+}

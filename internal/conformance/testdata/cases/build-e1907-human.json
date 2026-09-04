@@ -1,0 +1,10 @@
+{
+  "name": "build-e1907-human",
+  "args": [
+    "build",
+    "nosuchdir"
+  ],
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error[E1907]: command path not found — \"nosuchdir\"\n"
+}

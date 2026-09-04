@@ -1,0 +1,10 @@
+{
+  "name": "version-extra-arg",
+  "args": [
+    "version",
+    "x"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "stderr": "we: version takes no arguments\nusage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n"
+}

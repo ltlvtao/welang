@@ -1,0 +1,9 @@
+{
+  "name": "version-human",
+  "args": [
+    "version"
+  ],
+  "exit": 0,
+  "stdout": "we 0.1.0\nspec 0.9.0\n",
+  "stderr": ""
+}
