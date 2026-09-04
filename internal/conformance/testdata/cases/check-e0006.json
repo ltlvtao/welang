@@ -1,0 +1,18 @@
+{
+  "name": "check-e0006",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "let n = 1__0\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:9: error[E0006]: invalid numeric literal — \"1__0\": _ separates digit groups only between two digits\n",
+  "files": {
+    "demo/main.we": "let n = 1__0\n"
+  }
+}

@@ -13,7 +13,7 @@ This document is the single authority for reference-toolchain execution state: t
 | ID | Change | Implements | State |
 | --- | --- | --- | --- |
 | M0 | `compiler-bootstrap` | Chapter 21 CLI surface subset: closed subcommand table, global options, `we version` / `we new` (E1904), E1907, JSON Lines diagnostic events, conformance harness | done 2026-09-05 |
-| M1 | `lexical` | Chapter 1 token model, literals, comments, keywords; `we check <file>` runs the lexical stage (E0001–E0009) | pending |
+| M1 | `lexical` | Chapter 1 token model, literals, comments, keywords; `we check <file>` runs the lexical stage (E0001–E0009) | done 2026-09-05 |
 | M2 | `parser-core` | Chapter 2 grammar skeleton and chapter 6 declarations; `we check` runs lexing and parsing (E0101, E0102, declaration diagnostics) | pending |
 | M3 | `types-and-main` | Chapter 7 types subset, chapter 15 root module and main shape, chapter 14 `Result`; `we check .` green on the `we new` skeleton | pending |
 | M4 | `native-vertical` | Minimal LLVM IR emission, minimal C runtime (startup, allocator), `we build` and `we run` end to end on the skeleton program | pending |

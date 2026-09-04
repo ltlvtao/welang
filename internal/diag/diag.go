@@ -92,9 +92,15 @@ func (d Diagnostic) JSON() string {
 }
 
 // Human renders the human-readable one-line form, matching chapter 21's
-// example shape `error[E0102]: ...`. The caller adds the newline.
+// example shape `error[E0102]: ...`. A positioned diagnostic (line != 0)
+// carries the conventional file:line:column prefix; command-level
+// diagnostics keep the bare shape. The caller adds the newline.
 func (d Diagnostic) Human() string {
-	return string(d.severity) + "[" + d.code + "]: " + d.message
+	prefix := ""
+	if d.line != 0 {
+		prefix = d.file + ":" + strconv.Itoa(d.line) + ":" + strconv.Itoa(d.column) + ": "
+	}
+	return prefix + string(d.severity) + "[" + d.code + "]: " + d.message
 }
 
 // jsonString encodes one string value with encoding/json so escaping is

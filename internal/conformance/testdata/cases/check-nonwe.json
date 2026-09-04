@@ -1,0 +1,18 @@
+{
+  "name": "check-nonwe",
+  "args": [
+    "check",
+    "demo/main.txt"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.txt": "let x = 1\n"
+    }
+  },
+  "exit": 2,
+  "stdout": "",
+  "stderr": "we: check wants a .we file, got \"demo/main.txt\"\nusage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n",
+  "files": {
+    "demo/main.txt": "let x = 1\n"
+  }
+}

@@ -38,7 +38,7 @@ var subcommands = map[string]struct {
 }{
 	"new":     {takesPath: false, implemented: true},
 	"build":   {takesPath: true},
-	"check":   {takesPath: true},
+	"check":   {takesPath: true, implemented: true},
 	"run":     {takesPath: true},
 	"test":    {takesPath: true},
 	"fmt":     {takesPath: true},
@@ -75,6 +75,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if code != exitOK {
 		return code
 	}
+	var info os.FileInfo // the resolved [path], for takesPath subcommands
 	if sub.takesPath {
 		// The [path] argument is resolved before dispatch, so E1907 fires
 		// on not-yet-implemented subcommands too (R1: `we build nosuchdir`).
@@ -85,7 +86,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		if len(positional) == 1 {
 			path = positional[0]
 		}
-		if _, err := os.Stat(path); err != nil {
+		var err error
+		info, err = os.Stat(path)
+		if err != nil {
 			e.report(diag.Error("E1907", fmt.Sprintf("command path not found — %q", path)).
 				WithHelp("Pass a project directory, a .we file, or nothing (the working directory)."))
 			return exitDiagnostic
@@ -100,6 +103,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.runVersion(positional)
 	case "new":
 		return e.runNew(positional)
+	case "check":
+		path := "."
+		if len(positional) == 1 {
+			path = positional[0]
+		}
+		return e.runCheck(path, info)
 	}
 	// Unreachable: every implemented subcommand is handled above.
 	return e.usageErr("unknown subcommand %q", name)

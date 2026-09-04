@@ -1,0 +1,19 @@
+{
+  "name": "check-e0006-json",
+  "args": [
+    "check",
+    "demo/main.we",
+    "--json"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "let n = 1__0\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"error\",\"code\":\"E0006\",\"message\":\"invalid numeric literal — \\\"1__0\\\": _ separates digit groups only between two digits\",\"file\":\"demo/main.we\",\"line\":1,\"column\":9,\"help\":\"_ only between two digits; no leading decimal zero; a digit on each side of the dot; suffixes i8-u64, f32, f64.\"}\n",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "let n = 1__0\n"
+  }
+}

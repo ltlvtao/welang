@@ -1,0 +1,18 @@
+{
+  "name": "check-e0008",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "#[inline]\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:1: error[E0008]: unknown attribute — \"inline\" is not in the closed whitelist\n",
+  "files": {
+    "demo/main.we": "#[inline]\n"
+  }
+}

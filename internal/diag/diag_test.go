@@ -53,6 +53,20 @@ func TestHumanSnapshot(t *testing.T) {
 	}
 }
 
+// TestHumanPositionSnapshot pins the positioned human one-liner: a
+// diagnostic that carries At gets the conventional file:line:column prefix
+// (the position rendering is the toolchain's mechanism; chapter 21 fixes
+// only the error[code]: shape and the JSON protocol). An unpositioned
+// diagnostic keeps the command-level shape pinned above.
+func TestHumanPositionSnapshot(t *testing.T) {
+	got := Error("E0006", `invalid numeric literal — "1__0": _ separates digit groups only between two digits`).
+		At("demo/main.we", 1, 9).Human()
+	want := `demo/main.we:1:9: error[E0006]: invalid numeric literal — "1__0": _ separates digit groups only between two digits`
+	if got != want {
+		t.Fatalf("positioned human rendering mismatch:\n got: %s\nwant: %s", got, want)
+	}
+}
+
 // TestJSONEscapingRoundTrip checks that messages carrying characters JSON
 // must escape still encode to a valid single-line object that parses back
 // to the same fields — the event is machine-parseable line by line.

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0004",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "/* never closed\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:1: error[E0004]: unterminated block comment — /* is not closed by */ before end of file\n",
+  "files": {
+    "demo/main.we": "/* never closed\n"
+  }
+}

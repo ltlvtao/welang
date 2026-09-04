@@ -1,0 +1,18 @@
+{
+  "name": "check-e0002",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "let s = \"abc\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:9: error[E0002]: unterminated string literal — not closed before the end of the line\n",
+  "files": {
+    "demo/main.we": "let s = \"abc\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-bom-crlf",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "﻿pub fn main() -> Result<(), AppError> {\r\n    return Ok(())\r\n}\r\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: parsing is not implemented in this reference build yet\n",
+  "files": {
+    "demo/main.we": "﻿pub fn main() -> Result<(), AppError> {\r\n    return Ok(())\r\n}\r\n"
+  }
+}

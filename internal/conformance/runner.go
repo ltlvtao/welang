@@ -16,9 +16,11 @@ import (
 	"github.com/ltlvtao/welang/internal/cli"
 )
 
-// Setup prepares the case's working directory before the run.
+// Setup prepares the case's working directory before the run: directories
+// first, then files (so a file may live inside a setup directory).
 type Setup struct {
-	Dirs []string `json:"dirs,omitempty"`
+	Dirs  []string          `json:"dirs,omitempty"`
+	Files map[string]string `json:"files,omitempty"`
 }
 
 // Case is one golden CLI case.
@@ -56,6 +58,15 @@ func Execute(c *Case, workdir string) Result {
 			panic(err)
 		}
 	}
+	for _, f := range c.Setup.SortedFiles() {
+		p := filepath.FromSlash(f.Path)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(p, []byte(f.Content), 0o644); err != nil {
+			panic(err)
+		}
+	}
 	var out, errb bytes.Buffer
 	code := cli.Run(c.Args, &out, &errb)
 	res := Result{
@@ -76,6 +87,29 @@ func (s *Setup) GetDirs() []string {
 		return nil
 	}
 	return s.Dirs
+}
+
+// SetupFile is one setup file's slash-separated path and exact content.
+type SetupFile struct {
+	Path    string
+	Content string
+}
+
+// SortedFiles returns setup files sorted by path, so setup is deterministic.
+func (s *Setup) SortedFiles() []SetupFile {
+	if s == nil {
+		return nil
+	}
+	paths := make([]string, 0, len(s.Files))
+	for p := range s.Files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	files := make([]SetupFile, 0, len(paths))
+	for _, p := range paths {
+		files = append(files, SetupFile{Path: p, Content: s.Files[p]})
+	}
+	return files
 }
 
 // LoadCases reads every case file in dir, sorted by name.

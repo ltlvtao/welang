@@ -1,0 +1,3 @@
+name: lexical
+status: archived
+layers: [compiler, tooling]

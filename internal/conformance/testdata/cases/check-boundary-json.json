@@ -6,5 +6,5 @@
   ],
   "exit": 70,
   "stdout": "",
-  "stderr": "we: check is not implemented in this reference build yet\n"
+  "stderr": "we: project compilation is not implemented in this reference build yet\n"
 }

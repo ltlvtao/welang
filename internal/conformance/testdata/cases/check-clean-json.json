@@ -1,0 +1,19 @@
+{
+  "name": "check-clean-json",
+  "args": [
+    "check",
+    "demo/main.we",
+    "--json"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: parsing is not implemented in this reference build yet\n",
+  "files": {
+    "demo/main.we": "pub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+  }
+}
