@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-index",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn first(list: Int64) {\n    let first = list[0]\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:21: error[E0105]: unexpected token — \"[\" fits no postfix production: postfix is .name or (args); indexing is by named methods (the collections chapter)\n",
+  "files": {
+    "demo/main.we": "fn first(list: Int64) {\n    let first = list[0]\n}\n"
+  }
+}

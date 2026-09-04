@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-bare-param",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn bad(x) { }\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:8: error[E0105]: unexpected token — parameter \"x\" carries no annotation: parameters are name: type; parameter types are never inferred\n",
+  "files": {
+    "demo/main.we": "fn bad(x) { }\n"
+  }
+}

@@ -92,27 +92,53 @@ type Token struct {
 	AttrArgs string
 }
 
+// DocUnit is one /// documentation unit (chapter 6): a maximal run of
+// consecutive /// lines. StartLine and EndLine are the unit's 1-based line
+// span; Lines holds each line's text after the /// (one leading space
+// trimmed). Units are collected as a side channel — comments still produce
+// no tokens (chapter 1) — and attachment is the parser's to resolve.
+type DocUnit struct {
+	StartLine int
+	EndLine   int
+	Lines     []string
+}
+
 // stop unwinds the scan at the first lexical error (first-error-stop,
 // chapter 1: no token stream is produced).
 type stop struct{ d diag.Diagnostic }
 
 // lexer holds the scan state. col is the 1-based rune column of the next
-// unconsumed rune; a line break resets it.
+// unconsumed rune; a line break resets it. docs/docOpen track the ///
+// side channel: docOpen indexes the unit that consecutive /// lines still
+// extend, -1 when a blank line or ordinary comment has broken the run.
 type lexer struct {
 	name string
 	src  string
 	off  int
 	line int
 	col  int
+
+	docs    []DocUnit
+	docOpen int
+	docLast int
 }
 
 // File lexes one source file. It returns the token stream (ending in an
 // eof token) and nil on success, or nil and the first diagnostic on any
-// lexical error. name is carried verbatim into diagnostics.
+// lexical error. name is carried verbatim into diagnostics. Callers that
+// also need the /// documentation units use Scan.
 func File(name string, src []byte) (toks []Token, first *diag.Diagnostic) {
-	l := &lexer{name: name, src: string(src), line: 1, col: 1}
+	toks, _, first = Scan(name, src)
+	return toks, first
+}
+
+// Scan lexes one source file, returning the token stream (ending in an
+// eof token) and the /// documentation units alongside it, or the first
+// lexical diagnostic with no tokens and no units.
+func Scan(name string, src []byte) (toks []Token, docs []DocUnit, first *diag.Diagnostic) {
+	l := &lexer{name: name, src: string(src), line: 1, col: 1, docOpen: -1}
 	if d := l.checkEncoding(); d != nil {
-		return nil, d
+		return nil, nil, d
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -120,10 +146,11 @@ func File(name string, src []byte) (toks []Token, first *diag.Diagnostic) {
 			if !ok {
 				panic(r)
 			}
-			toks, first = nil, &s.d
+			toks, docs, first = nil, nil, &s.d
 		}
 	}()
-	return l.scanAll(), nil
+	toks = l.scanAll()
+	return toks, l.docs, nil
 }
 
 // fail reports one lexical diagnostic and stops the scan. The message
@@ -240,10 +267,9 @@ func (l *lexer) scanAll() []Token {
 			case c == ' ' || c == '\t' || c == '\n' || c == '\r':
 				l.advance()
 			case c == '/' && l.peek2() == '/':
-				for !l.eof() && l.peek() != '\n' {
-					l.advance()
-				}
+				l.skipLineComment()
 			case c == '/' && l.peek2() == '*':
+				l.docOpen = -1
 				l.skipBlockComment()
 			default:
 				goto token
@@ -270,6 +296,33 @@ func (l *lexer) scanAll() []Token {
 			t = l.scanOperator() // '/' not starting a comment lands here too
 		}
 		toks = append(toks, t)
+	}
+}
+
+// skipLineComment consumes one // or /// comment to the end of the line. A
+// /// comment feeds the documentation side channel: consecutive /// lines
+// extend one DocUnit; an ordinary // comment breaks the run.
+func (l *lexer) skipLineComment() {
+	start := l.off
+	line := l.line
+	for !l.eof() && l.peek() != '\n' {
+		l.advance()
+	}
+	text := strings.TrimRight(l.src[start:l.off], "\r")
+	switch {
+	case strings.HasPrefix(text, "///"):
+		text = strings.TrimPrefix(text[3:], " ")
+		if l.docOpen >= 0 && l.docLast == line-1 {
+			u := &l.docs[l.docOpen]
+			u.Lines = append(u.Lines, text)
+			u.EndLine = line
+		} else {
+			l.docs = append(l.docs, DocUnit{StartLine: line, EndLine: line, Lines: []string{text}})
+			l.docOpen = len(l.docs) - 1
+		}
+		l.docLast = line
+	default:
+		l.docOpen = -1
 	}
 }
 

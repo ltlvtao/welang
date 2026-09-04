@@ -1,0 +1,18 @@
+{
+ "name": "check-e0401",
+ "args": [
+  "check",
+  "demo/main.we"
+ ],
+ "setup": {
+  "files": {
+   "demo/main.we": "fn done() {\n    return\n}\n\nreturn 1\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "",
+ "stderr": "demo/main.we:5:1: error[E0401]: return outside a function body — no function context encloses this return; module-level logic belongs in a fn\n",
+ "files": {
+  "demo/main.we": "fn done() {\n    return\n}\n\nreturn 1\n"
+ }
+}

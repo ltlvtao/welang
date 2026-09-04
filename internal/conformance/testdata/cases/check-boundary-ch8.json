@@ -1,18 +1,18 @@
 {
-  "name": "check-clean",
+  "name": "check-boundary-ch8",
   "args": [
     "check",
     "demo/main.we"
   ],
   "setup": {
     "files": {
-      "demo/main.we": "pub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+      "demo/main.we": "fn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    id\n}\n"
     }
   },
   "exit": 70,
   "stdout": "",
   "stderr": "we: chapter 8 (composites) forms are not implemented in this reference build yet\n",
   "files": {
-    "demo/main.we": "pub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    "demo/main.we": "fn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    id\n}\n"
   }
 }

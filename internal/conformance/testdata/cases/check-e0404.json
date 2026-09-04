@@ -1,0 +1,18 @@
+{
+ "name": "check-e0404",
+ "args": [
+  "check",
+  "demo/main.we"
+ ],
+ "setup": {
+  "files": {
+   "demo/main.we": "fn f() {\n}\n\nfn f() {\n}\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "",
+ "stderr": "demo/main.we:4:4: error[E0404]: duplicate name in one module — \"f\" is already declared at line 1; one module has one name space\n",
+ "files": {
+  "demo/main.we": "fn f() {\n}\n\nfn f() {\n}\n"
+ }
+}

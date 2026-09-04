@@ -1,0 +1,18 @@
+{
+  "name": "check-e0013",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "import Models.User\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:8: error[E0013]: module names must be lowercase — \"Models\" is not a lowercase dotted path segment\n",
+  "files": {
+    "demo/main.we": "import Models.User\n"
+  }
+}

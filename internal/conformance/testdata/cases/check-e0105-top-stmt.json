@@ -1,0 +1,18 @@
+{
+ "name": "check-e0105-top-stmt",
+ "args": [
+  "check",
+  "demo/main.we"
+ ],
+ "setup": {
+  "files": {
+   "demo/main.we": "fn run() {\n    compute()\n}\n\ncompute()\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "",
+ "stderr": "demo/main.we:5:1: error[E0105]: unexpected token — \"compute\" fits no top-level item production: top-level items are import, fn, and let declarations (optionally pub); statements exist only inside blocks\n",
+ "files": {
+  "demo/main.we": "fn run() {\n    compute()\n}\n\ncompute()\n"
+ }
+}

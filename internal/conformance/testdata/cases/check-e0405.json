@@ -1,0 +1,18 @@
+{
+ "name": "check-e0405",
+ "args": [
+  "check",
+  "demo/main.we"
+ ],
+ "setup": {
+  "files": {
+   "demo/main.we": "fn f() {\n}\n\n/// Orphan documentation.\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "",
+ "stderr": "demo/main.we:4:1: error[E0405]: orphan documentation comment — the /// unit documents no following top-level item; add the declaration or use ordinary // comments\n",
+ "files": {
+  "demo/main.we": "fn f() {\n}\n\n/// Orphan documentation.\n"
+ }
+}

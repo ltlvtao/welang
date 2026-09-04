@@ -1,0 +1,18 @@
+{
+  "name": "check-e0012",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn Bad_Name() { }\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:4: error[E0012]: variable, function, and method names must be camelCase — \"Bad_Name\" is not camelCase\n",
+  "files": {
+    "demo/main.we": "fn Bad_Name() { }\n"
+  }
+}

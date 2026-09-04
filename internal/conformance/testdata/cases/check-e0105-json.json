@@ -1,0 +1,19 @@
+{
+  "name": "check-e0105-json",
+  "args": [
+    "check",
+    "demo/main.we",
+    "--json"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn bad(x) { }\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"error\",\"code\":\"E0105\",\"message\":\"unexpected token — parameter \\\"x\\\" carries no annotation: parameters are name: type; parameter types are never inferred\",\"file\":\"demo/main.we\",\"line\":1,\"column\":8,\"help\":\"Check the construct against the ratified surface forms of the grammar chapter; a construct no chapter ratifies — bracketed indexing among them — is re-expressed with ratified forms.\"}\n",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn bad(x) { }\n"
+  }
+}

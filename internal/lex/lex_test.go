@@ -373,3 +373,52 @@ func TestFirstErrorStop(t *testing.T) {
 		t.Fatalf("the first offender must be named, got %q", d.Message())
 	}
 }
+
+// TestDocUnits pins the /// side channel: consecutive /// lines form one
+// unit, blank lines and ordinary comments break the run, one leading space
+// of text is trimmed, and — with no /// present — Scan returns no units
+// while File stays byte-for-byte equivalent over the same input.
+func TestDocUnits(t *testing.T) {
+	src := "/// One unit: first line.\n" +
+		"/// Second line.\n" +
+		"\n" +
+		"/// New unit after a blank line.\n" +
+		"fn f() {}\n" +
+		"// ordinary comment breaks\n" +
+		"/// Third unit.\n" +
+		"/* block */ /// the block comment breaks: new unit.\n"
+	toks, docs, d := Scan("test.we", []byte(src))
+	if d != nil {
+		t.Fatalf("unexpected diagnostic: %s", d.Human())
+	}
+	if toks == nil || toks[len(toks)-1].Kind != KindEOF {
+		t.Fatalf("stream must end in eof, got %v", toks)
+	}
+	if len(toks) != 7 { // fn f ( ) { } + eof
+		t.Fatalf("token count %d, want 7: %+v", len(toks), toks)
+	}
+	want := []DocUnit{
+		{StartLine: 1, EndLine: 2, Lines: []string{"One unit: first line.", "Second line."}},
+		{StartLine: 4, EndLine: 4, Lines: []string{"New unit after a blank line."}},
+		{StartLine: 7, EndLine: 7, Lines: []string{"Third unit."}},
+		{StartLine: 8, EndLine: 8, Lines: []string{"the block comment breaks: new unit."}},
+	}
+	if len(docs) != len(want) {
+		t.Fatalf("unit count %d, want %d: %+v", len(docs), len(want), docs)
+	}
+	for i := range want {
+		if docs[i].StartLine != want[i].StartLine || docs[i].EndLine != want[i].EndLine ||
+			strings.Join(docs[i].Lines, "|") != strings.Join(want[i].Lines, "|") {
+			t.Fatalf("unit %d: got %+v, want %+v", i, docs[i], want[i])
+		}
+	}
+
+	toks2, d2 := File("test.we", []byte(src))
+	if d2 != nil || len(toks2) != len(toks) {
+		t.Fatalf("File must remain equivalent over the same input")
+	}
+	toks3, docs3, d3 := Scan("test.we", []byte("let x = 1\n// note\n"))
+	if d3 != nil || docs3 != nil || len(toks3) != 5 { // let x = 1 + eof
+		t.Fatalf("no /// means no units: toks=%v docs=%v d=%v", toks3, docs3, d3)
+	}
+}

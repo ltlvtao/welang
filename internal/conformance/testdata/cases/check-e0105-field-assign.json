@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-field-assign",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn set(u: Int64) {\n    u.name = \"bob\"\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:12: error[E0105]: unexpected token — \"=\" after a complete expression statement: assignment targets are bare names (the one field form, self.field, belongs to a method receiver)\n",
+  "files": {
+    "demo/main.we": "fn set(u: Int64) {\n    u.name = \"bob\"\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0403",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "var count = 0\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:1: error[E0403]: var at the top level — module-level mutable state does not exist; declare the top-level binding with let (var is legal inside blocks)\n",
+  "files": {
+    "demo/main.we": "var count = 0\n"
+  }
+}
