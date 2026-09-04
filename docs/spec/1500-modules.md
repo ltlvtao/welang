@@ -32,7 +32,7 @@ A module path is a dotted lowercase module path under chapter 1's module naming 
 
 ### Requirement: The prelude
 
-The prelude is a fixed set of standard-scope names visible in every module without import: the base type names of chapter 7, `Never` of chapter 9, `Dyn` of chapter 10, the result type names `Result`, `Ok`, and `Err`, the option type names `Option`, `Some`, and `None`, the collection type names `List`, `Map`, and `Set` of the collections chapter, the termination function names `panic`, `todo`, and `assert` of chapter 14, the compiler-attached marker `Shareable` of the concurrency chapter, and the cancellation accessor `currentCancelSignal` of the concurrency chapter. The set is closed: adding a name to it is a spec change to this chapter, not a standard-library release. A module's own declarations shadow prelude names — the prelude is an outer scope and explicit declarations win, chapter 0's Principle 5; shadowing a prelude name is legal and raises no diagnostic, for `E0404` governs duplicates among one module's own names only. Everything else the standard library holds is an ordinary module under `std.`, reached by import alone.
+The prelude is a fixed set of standard-scope names visible in every module without import: the base type names of chapter 7, `Never` of chapter 9, `Dyn` of chapter 10, the result type names `Result`, `Ok`, and `Err`, the option type names `Option`, `Some`, and `None`, the collection type names `List`, `Map`, and `Set` of the collections chapter, the termination function names `panic`, `todo`, and `assert` of chapter 14, the compiler-attached marker `Shareable` of the concurrency chapter, the cancellation accessor `currentCancelSignal` of the concurrency chapter, and the time control `advanceTime` of the testing chapter. The set is closed: adding a name to it is a spec change to this chapter, not a standard-library release. A module's own declarations shadow prelude names — the prelude is an outer scope and explicit declarations win, chapter 0's Principle 5; shadowing a prelude name is legal and raises no diagnostic, for `E0404` governs duplicates among one module's own names only. Everything else the standard library holds is an ordinary module under `std.`, reached by import alone.
 
 #### Scenario: Prelude names need no import
 
@@ -48,6 +48,11 @@ The prelude is a fixed set of standard-scope names visible in every module witho
 
 - **WHEN** `currentCancelSignal()` is called inside a task block body, and again in a plain function body outside any task block
 - **THEN** the first resolves to the prelude's accessor; the second is the concurrency chapter's `E1608` — the prelude carries the name, that chapter fixes where it is legal
+
+#### Scenario: advanceTime's legality is the testing chapter's
+
+- **WHEN** `advanceTime(50)` is called inside a test block body, and again in a plain function body outside any test block
+- **THEN** the first resolves to the prelude's time control; the second is the testing chapter's `E1806` — the prelude carries the name, that chapter fixes where it is legal
 
 #### Scenario: The rest of the standard library is imported
 

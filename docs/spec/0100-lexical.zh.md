@@ -56,9 +56,10 @@ interface impl where derives
 scope resource
 effect
 task select case timeout collectAll
+test mock
 ```
 
-新增关键字是修订本清单的 spec 层变更。清单只收录其语法已被或必然被某章批准的词；特性专属词（效应、类型、并发、测试）随批准它的章节一同进入清单。复合类型章节在其自身变更中加入 `record byval byres newtype with`——按破坏性变更如实记录：这五个词此前是标识符，自本清单修订起成为关键字。sum 类型章节在其自身变更中加入 `type`——同样如实记录：该词此前是标识符，自本清单修订起成为关键字。接口与泛型章节以同样方式加入 `interface impl where derives`：这四个词此前是标识符，自本清单修订起成为关键字。资源章节以同样方式加入 `scope resource`：这两个词此前是标识符，自本清单修订起成为关键字——`scope` 将引导更多复合形式，其预留先于那些使用，如 `mut` 之预留。效果章节以同样方式加入 `effect`：该词此前是标识符，自本清单修订起成为关键字——它按第 16 章引入效果声明与声明效果段。并发章节以同样方式加入 `task select case timeout collectAll`：这五个词此前是标识符，自本清单修订起成为关键字——它们引导 task 块、select 表达式与在那儿批准的 scope 块形式，`scope` 已由资源章节先于这些复合使用预留，如其修订所记。`mut` 自初始清单即在，其语法随第 10 章 `mut self` 接收者兑付——其预留先于其使用。`foreign` 自初始清单即在，其语法随第 19 章 foreign 块兑付——其预留先于其使用，如 `mut` 之预留。
+新增关键字是修订本清单的 spec 层变更。清单只收录其语法已被或必然被某章批准的词；特性专属词（效应、类型、并发、测试）随批准它的章节一同进入清单。复合类型章节在其自身变更中加入 `record byval byres newtype with`——按破坏性变更如实记录：这五个词此前是标识符，自本清单修订起成为关键字。sum 类型章节在其自身变更中加入 `type`——同样如实记录：该词此前是标识符，自本清单修订起成为关键字。接口与泛型章节以同样方式加入 `interface impl where derives`：这四个词此前是标识符，自本清单修订起成为关键字。资源章节以同样方式加入 `scope resource`：这两个词此前是标识符，自本清单修订起成为关键字——`scope` 将引导更多复合形式，其预留先于那些使用，如 `mut` 之预留。效果章节以同样方式加入 `effect`：该词此前是标识符，自本清单修订起成为关键字——它按第 16 章引入效果声明与声明效果段。并发章节以同样方式加入 `task select case timeout collectAll`：这五个词此前是标识符，自本清单修订起成为关键字——它们引导 task 块、select 表达式与在那儿批准的 scope 块形式，`scope` 已由资源章节先于这些复合使用预留，如其修订所记。测试章节以同样方式加入 `test mock`：这两个词此前是标识符，自本清单修订起成为关键字——它们引领第 20 章之下的 test 块与 mock 声明，开篇句的测试至此有其章。`mut` 自初始清单即在，其语法随第 10 章 `mut self` 接收者兑付——其预留先于其使用。`foreign` 自初始清单即在，其语法随第 19 章 foreign 块兑付——其预留先于其使用，如 `mut` 之预留。
 
 #### Scenario: 关键字被用作名字
 
@@ -99,6 +100,11 @@ task select case timeout collectAll
 
 - **WHEN** `task`、`select`、`case`、`timeout` 或 `collectAll` 出现在要求标识符的位置（例如名为 `task` 的变量）
 - **THEN** 解析器报告具名该保留字的语法诊断；这五个词依并发章节的修订成为关键字
+
+#### Scenario: 测试关键字被保留
+
+- **WHEN** `test` 或 `mock` 出现在要求标识符的位置（例如名为 `test` 的变量）
+- **THEN** 解析器报告语法诊断，指出保留字；这两个词依测试章节的修订成为关键字
 
 ### Requirement: 数值字面量
 

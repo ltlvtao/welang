@@ -31,7 +31,7 @@
 - **THEN** 编译器以 `E1301:` circular module dependency 拒绝；没有前向声明，修复是两者都 import 的第三模块
 
 ### Requirement: 预导入
-预导入是每个模块免 import 可见的固定标准作用域名字集：第 7 章的基础类型名、第 9 章的 `Never`、第 10 章的 `Dyn`、结果类型名 `Result`、`Ok` 与 `Err`、选项类型名 `Option`、`Some` 与 `None`、集合章节的集合类型名 `List`、`Map` 与 `Set`、第 14 章的终止函数名 `panic`、`todo` 与 `assert`、并发章的编译器附加标记 `Shareable`，以及并发章的取消访问器 `currentCancelSignal`。该集封闭：向其增名是对本章的 spec 变更，不是标准库发版。模块自身的声明遮蔽预导入名——预导入是外层作用域，显式声明胜出，即第 0 章 Principle 5；遮蔽预导入名合法且不触发诊断，因为 `E0404` 只管一个模块自有名字之间的重复。标准库其余的一切是 `std.` 下的普通模块，只能经 import 到达。
+预导入是每个模块免 import 可见的固定标准作用域名字集：第 7 章的基础类型名、第 9 章的 `Never`、第 10 章的 `Dyn`、结果类型名 `Result`、`Ok` 与 `Err`、选项类型名 `Option`、`Some` 与 `None`、集合章节的集合类型名 `List`、`Map` 与 `Set`、第 14 章的终止函数名 `panic`、`todo` 与 `assert`、并发章的编译器附加标记 `Shareable`、并发章的取消访问器 `currentCancelSignal`，以及测试章的时间控制 `advanceTime`。该集封闭：向其增名是对本章的 spec 变更，不是标准库发版。模块自身的声明遮蔽预导入名——预导入是外层作用域，显式声明胜出，即第 0 章 Principle 5；遮蔽预导入名合法且不触发诊断，因为 `E0404` 只管一个模块自有名字之间的重复。标准库其余的一切是 `std.` 下的普通模块，只能经 import 到达。
 
 #### Scenario: 预导入名无需 import
 
@@ -52,6 +52,11 @@
 
 - **WHEN** 一个模块不经 `import std.io` 使用 `std.io` 的名字
 - **THEN** 该使用以 `E1304` 未解析名拒绝；预导入之外的标准库模块只能经 import 到达
+
+#### Scenario: advanceTime 的合法性归测试章
+
+- **WHEN** `advanceTime(50)` 在 test 块体内被调用，又在任何 test 块之外的普通函数体内被调用
+- **THEN** 前者解析到预导入的时间控制；后者是测试章的 `E1806`——预导入携名，该章定其合法之处
 
 ### Requirement: 跨模块可见性
 

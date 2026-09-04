@@ -115,7 +115,7 @@ The standard library declares the termination forms as ordinary functions: `pub 
 
 ### Requirement: Unwinding
 
-A panic in flight unwinds the call stack: every block in progress exits as a block exit. Scope-resource blocks release per chapter 13's guarantee — exactly one `release` call per binding, in reverse declaration order — and a function's defers run in reverse statement order after the inner blocks' releases, the inner block exiting first; the ordering is the one chapter 13 fixed for normal exits, extended to unwound exits by this requirement. Resources transfer nothing during unwinding: the releases are the scope-exit machinery's alone (chapter 13's single release trigger holds on every exit kind). When no frames remain, the process aborts with the panic's message; the abort is the capture boundary this specification defines — no expression of the language observes a panic. The concurrency chapter binds task-internal panics to this same mechanism (chapter 0, Principle 9): inside the task, unwinding runs this requirement's ordering — scope releases, then defers — and the task boundary is the second capture boundary this specification defines, where the unwinding panic becomes the `Err` a handle's `await` yields; no second channel enters.
+A panic in flight unwinds the call stack: every block in progress exits as a block exit. Scope-resource blocks release per chapter 13's guarantee — exactly one `release` call per binding, in reverse declaration order — and a function's defers run in reverse statement order after the inner blocks' releases, the inner block exiting first; the ordering is the one chapter 13 fixed for normal exits, extended to unwound exits by this requirement. Resources transfer nothing during unwinding: the releases are the scope-exit machinery's alone (chapter 13's single release trigger holds on every exit kind). When no frames remain, the process aborts with the panic's message; the abort is the capture boundary this specification defines — no expression of the language observes a panic. The concurrency chapter binds task-internal panics to this same mechanism (chapter 0, Principle 9): inside the task, unwinding runs this requirement's ordering — scope releases, then defers — and the task boundary is the second capture boundary this specification defines, where the unwinding panic becomes the `Err` a handle's `await` yields; no second channel enters. The testing chapter's amendment adds the third: inside a test block the flight ends at the test boundary — that test fails, the process does not abort — chapter 20's requirement carries the full rule.
 
 #### Scenario: Unwinding releases resources
 
@@ -136,6 +136,11 @@ A panic in flight unwinds the call stack: every block in progress exits as a blo
 
 - **WHEN** a panic fires inside a task body
 - **THEN** the task's own blocks release and its defers run under this requirement's ordering, and at the task boundary the flight converts into the `Err` the handle's `await` yields — chapter 18's requirement carries the full rule
+
+#### Scenario: A test panic unwinds then fails the test
+
+- **WHEN** a panic fires inside a test block
+- **THEN** the test's own blocks release and its defers run under this requirement's ordering, and at the test boundary the flight converts into that test's failure — chapter 20's requirement carries the full rule
 
 ### Requirement: The single error mechanism
 

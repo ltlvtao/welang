@@ -140,8 +140,9 @@ owner = "1600-effects"
 # Intra-segment structure (chapter 16): E1400 boundary reserve,
 # E1401-E1405 undeclared-call / value-vs-type mismatch / builtin-name
 # conflict / impl-vs-interface disagreement / initializer impurity.
-# E1406-E1499 reserved for amendments (test-virtualization-era codes;
-# the FFI codes landed in chapter 19's E17xx segment).
+# E1406-E1499 reserved for amendments (the testing codes landed in
+# chapter 20's E18xx segment; the FFI codes landed in chapter 19's
+# E17xx segment).
 
 [segments."E1500-E1599"]
 domain = "collections"
@@ -166,7 +167,14 @@ owner = "1900-ffi"
 # diagnostics; E1708-E1799 reserved for amendments (the callback family
 # among them, when its registered questions are answered).
 
-[segments."E1800-E9999"]
+[segments."E1800-E1899"]
+domain = "testing"
+owner = "2000-testing"
+# Intra-segment structure (chapter 20): E1800 boundary reserve,
+# E1801-E1806 test-module / mock-declaration / advanceTime-position
+# diagnostics; E1807-E1899 reserved for amendments.
+
+[segments."E1900-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -1347,4 +1355,58 @@ description = "A construction or update expression targets an opaque foreign typ
 remediation = "Obtain the value from a foreign function's declared return; the native side mints the handle."
 owner = "1900-ffi"
 requirement = "Opaque foreign types"
+allocated = "2026-09-04"
+
+[diagnostic.E1801]
+severity = "error"
+title = "test block outside a test module"
+description = "A test block appears in a file whose name does not end _test.we. The _test.we suffix is the module-identity fact that makes test blocks legal (chapter 20); a plain module holds none."
+remediation = "Move the test into a *_test.we file, or delete the block; a test module is otherwise an ordinary module under chapter 15."
+owner = "2000-testing"
+requirement = "Test modules and test blocks"
+allocated = "2026-09-04"
+
+[diagnostic.E1802]
+severity = "error"
+title = "mock declaration outside a test block"
+description = "A mock declaration appears anywhere but a direct item of a test block body — at the top level or inside a plain function. Mocks exist only inside tests."
+remediation = "Move the mock into the test block whose calls it should intercept."
+owner = "2000-testing"
+requirement = "Mock declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E1803]
+severity = "error"
+title = "mock signature does not match its target"
+description = "The mock's parameter list (names, types, order), declared return, and effect segment do not match the target declaration verbatim. A mock restates the target's contract; it does not redesign it."
+remediation = "Copy the target's signature — parameters, return, and segment — exactly; adapt the body, not the contract."
+owner = "2000-testing"
+requirement = "Mock declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E1804]
+severity = "error"
+title = "mock target is not a mockable function"
+description = "The mock names a generic fn, an impl or interface method, a constructor, or a name that is not a module-level monomorphic fn. Only those are mockable; generics, receivers, and field initialization have no ratified mock semantics."
+remediation = "Mock a module-level monomorphic fn — own-module bare name or imported pub qualified name; wrap richer targets in such a fn and mock the wrapper."
+owner = "2000-testing"
+requirement = "Mock declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E1805]
+severity = "error"
+title = "duplicate mock of one target in a test block"
+description = "One test block holds two mocks of the same target. One block mocks one target at most once."
+remediation = "Keep one mock per target per block; a second test block may mock the same target for itself."
+owner = "2000-testing"
+requirement = "Mock declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E1806]
+severity = "error"
+title = "advanceTime called outside a test block"
+description = "advanceTime is called outside a test block body. The name is prelude (chapter 15); chapter 20 fixes where it is legal — inside test blocks only, the virtual clock being bound to them."
+remediation = "Advance the clock inside the test that observes it; plain code has no clock to advance."
+owner = "2000-testing"
+requirement = "advanceTime"
 allocated = "2026-09-04"
