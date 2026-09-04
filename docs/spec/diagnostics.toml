@@ -60,7 +60,16 @@ owner = "0700-types"
 # and agreement positions, integer overflow, non-Bool conditions),
 # E0504-E0599 reserved for amendments of the types chapter.
 
-[segments."E0600-E9999"]
+[segments."E0600-E0699"]
+domain = "composite types and ownership"
+owner = "0800-composites"
+# Intra-segment structure (chapter 8): E0600 boundary reserve,
+# E0601-E0606 composite-form errors (value-category field, tuple
+# arity, non-record construction/update head or base, field-set
+# mismatch, dropped non-unit value, resource update), E0607-E0699
+# reserved for amendments of the composites chapter.
+
+[segments."E0700-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -157,7 +166,7 @@ allocated = "2026-09-03"
 [diagnostic.E0012]
 severity = "error"
 title = "variable, function, and method names must be camelCase"
-description = "A variable, function, or method binding is not camelCase (for example User_Id). Constants follow the variable rule; SCREAMING_CASE does not exist in We."
+description = "A variable, function, or method binding is not camelCase (for example User_Id); record field names follow the variable rule (chapter 8). Constants follow the variable rule; SCREAMING_CASE does not exist in We."
 remediation = "Rename the binding to camelCase (for example userId) and update references; constants also use camelCase."
 owner = "0100-lexical"
 requirement = "Naming conventions"
@@ -301,7 +310,7 @@ allocated = "2026-09-03"
 [diagnostic.E0404]
 severity = "error"
 title = "duplicate name in one module"
-description = "Two declarations in one module introduce the same name: an fn name, a top-level let name, or a name introduced by an import declaration. One module has one name space shared by all three. Fires under: Module name space."
+description = "Two declarations in one module introduce the same name: an fn name, a top-level let name, a name introduced by an import declaration, a record or newtype name (chapter 8), or one name bound twice in a single pattern (chapter 8). One module has one name space shared by all of these. Fires under: Module name space."
 remediation = "Rename one of the declarations, or give the import an alias (or drop an existing alias) so the introduced names differ; top-level names must be unique within the module."
 owner = "0600-declarations"
 requirement = "Module name space"
@@ -319,7 +328,7 @@ allocated = "2026-09-03"
 [diagnostic.E0501]
 severity = "error"
 title = "mixed types"
-description = "Two types that must agree do not. Covers operators whose operands differ (mixed widths, signed with unsigned, the two float widths, String/Bytes/Rune across families) and every agreement position: a binding's expression against its annotation, a call argument against its parameter, and a return expression against the declared return type. No coercion is ever inserted. Fires under: No implicit conversion."
+description = "Two types that must agree do not. Covers operators whose operands differ (mixed widths, signed with unsigned, the two float widths, String/Bytes/Rune across families) and every agreement position: a binding's expression against its annotation, a call argument against its parameter, a return expression against the declared return type, a construction or update field value against its field's declared type (chapter 8), a tuple expression against its element types element-wise (chapter 8), and one if arm against the other (chapter 8). No coercion is ever inserted. Fires under: No implicit conversion."
 remediation = "Make the types agree at the source: use a literal suffix (42i32) or an explicit conversion method (toInt64(), toBytes()); the method inventory is the standard library's."
 owner = "0700-types"
 requirement = "No implicit conversion"
@@ -342,3 +351,57 @@ remediation = "Make the condition a Bool expression: compare explicitly (n != 0)
 owner = "0700-types"
 requirement = "Condition positions"
 allocated = "2026-09-03"
+
+[diagnostic.E0601]
+severity = "error"
+title = "value record field is not of the value category or a base type"
+description = "A byval record declares a field whose type is neither a base type nor of the value ownership category (for example a gc record field in a byval record). A copy is only honest when everything in it is copyable by value. Fires under: Value records."
+remediation = "Make the record gc (drop byval), or store value-category/base data in the field; if reference semantics are needed, the record is not a value record."
+owner = "0800-composites"
+requirement = "Value records"
+allocated = "2026-09-04"
+
+[diagnostic.E0602]
+severity = "error"
+title = "tuple arity above eight"
+description = "A tuple type or expression has more than eight elements. The arity bound forces naming: the longer the tuple, the more it wants to be a record. Fires under: Tuple types and expressions."
+remediation = "Declare a record with named fields instead of the long tuple."
+owner = "0800-composites"
+requirement = "Tuple types and expressions"
+allocated = "2026-09-04"
+
+[diagnostic.E0603]
+severity = "error"
+title = "construction or update head or base is not the record type"
+description = "A record construction or update expression's head does not name a record type, or an update expression's base does not have exactly the head's record type. Fires under: Record construction expressions and Update expressions."
+remediation = "Name the record type at the head and give an update base of that same type; other forms are not constructible or updatable records."
+owner = "0800-composites"
+requirement = "Record construction expressions"
+allocated = "2026-09-04"
+
+[diagnostic.E0604]
+severity = "error"
+title = "field set does not match the record"
+description = "A construction or update names a field the record does not declare, leaves a declared field out of a full construction, names a field twice, or a member access names an undeclared field. Fires under: Record construction expressions, Update expressions, and Field access."
+remediation = "Match the record's declared field set exactly in a construction, name only declared fields in an update, or access a field the record declares."
+owner = "0800-composites"
+requirement = "Record construction expressions"
+allocated = "2026-09-04"
+
+[diagnostic.E0605]
+severity = "error"
+title = "non-unit value dropped"
+description = "A value whose type is not the unit type stands where its value is not consumed: an expression statement, the final item of a function body without a declared return type, the final item of a control form's body, or an unbound match-arm body in statement position. No value drops silently. Fires under: Value discard."
+remediation = "Bind the value to use it, chain it onward, declare a return type, or discard it explicitly with `let _ = expr`."
+owner = "0800-composites"
+requirement = "Value discard"
+allocated = "2026-09-04"
+
+[diagnostic.E0606]
+severity = "error"
+title = "update expression on a resource record"
+description = "An update expression's head names a byres record. A resource has identity; copying its fields would duplicate the resource handle. Fires under: Update expressions."
+remediation = "Change the resource's fields through the mechanisms of the resource and interfaces chapters; resource records are not updatable with `with &`."
+owner = "0800-composites"
+requirement = "Update expressions"
+allocated = "2026-09-04"

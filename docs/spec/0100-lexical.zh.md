@@ -50,9 +50,10 @@ We 源文件是 UTF-8 编码的文本文件，扩展名 `.we`。允许并忽略�
 fn let var pub import as mut
 if else return match for in while loop break continue defer
 true false foreign
+record byval byres newtype with
 ```
 
-新增关键字是修订本清单的 spec 层变更。清单只收录其语法已被或必然被某章批准的词；特性专属词（效应、类型、并发、测试）随批准它的章节一同进入清单。
+新增关键字是修订本清单的 spec 层变更。清单只收录其语法已被或必然被某章批准的词；特性专属词（效应、类型、并发、测试）随批准它的章节一同进入清单。复合类型章节在其自身变更中加入 `record byval byres newtype with`——按破坏性变更如实记录：这五个词此前是标识符，自本清单修订起成为关键字。
 
 #### Scenario: 关键字被用作名字
 
@@ -63,6 +64,11 @@ true false foreign
 
 - **WHEN** 某内容章节批准的语法引入了不在本清单中的保留字
 - **THEN** 其 spec 增量必须在同一变更中修订本清单，且该修订按破坏性变更如实记录
+
+#### Scenario: 复合关键字被保留
+
+- **WHEN** `record`、`byval`、`byres`、`newtype` 或 `with` 出现在要求标识符的位置（例如名为 `record` 的变量）
+- **THEN** 解析器报告具名该保留字的语法诊断；这五个词依复合类型章节的修订成为关键字
 
 ### Requirement: 数值字面量
 

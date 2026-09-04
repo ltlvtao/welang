@@ -2,7 +2,7 @@
 
 ### Requirement: If and else expressions
 
-An if expression is `if cond block` or `if cond block else else-arm`, where `cond` is an expression and `else-arm` is a block or another if expression (chains terminate in a block or an if without else). An if without else produces no value and MUST NOT appear where a value is required (`E0202` — statically decidable from the missing else). An if with else is an expression form: on each evaluation its value is the taken arm's block value under chapter 2's Blocks and block value. Rules for if-with-else whose arms do not agree in producing a value are ratified by the types chapter; this chapter fixes only the form and the arm-scoping. Each arm introduces its own scope: bindings inside an arm MUST NOT leak past the if. The condition's typing — that it must be the boolean type — is ratified by the types chapter.
+An if expression is `if cond block` or `if cond block else else-arm`, where `cond` is an expression and `else-arm` is a block or another if expression (chains terminate in a block or an if without else). An if without else produces no value and MUST NOT appear where a value is required (`E0202` — statically decidable from the missing else). An if with else is an expression form: on each evaluation its value is the taken arm's block value under chapter 2's Blocks and block value. The arms of an if-with-else MUST agree in type per chapter 8: an arm whose block has no value types as the unit type, and a disagreement is rejected under chapter 7's `E0501`; the never-type's exclusion from agreement is the sum-types chapter's. This chapter fixes the form and the arm-scoping. Each arm introduces its own scope: bindings inside an arm MUST NOT leak past the if. The condition's typing — that it must be the boolean type — is ratified by the types chapter.
 
 #### Scenario: if with else used as a value
 
@@ -23,6 +23,11 @@ An if expression is `if cond block` or `if cond block else else-arm`, where `con
 
 - **WHEN** `if c1 { a } else if c2 { b } else { c }` is parsed
 - **THEN** the else arm holds one nested if expression; the chain is two if expressions, each following this Requirement
+
+#### Scenario: One arm values, one does not
+
+- **WHEN** `if c { 1 } else { io.println("no") }` appears at an expression position
+- **THEN** the compiler rejects it under `E0501` per chapter 8: the first arm is `Int64`, the second is the unit type; the arms must agree
 
 ### Requirement: While and loop
 

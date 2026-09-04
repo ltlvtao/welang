@@ -2,7 +2,7 @@
 
 ### Requirement: If 与 else 表达式
 
-if 表达式是 `if cond block` 或 `if cond block else else-arm`，其中 `cond` 是表达式，`else-arm` 是块或另一个 if 表达式（链终止于块或无 else 的 if）。无 else 的 if 无值，MUST NOT 出现在要求值的位置（`E0202`——由缺失的 else 静态可判定）。有 else 的 if 是表达式形式：每次求值其值为所取分支臂的块值，按第 2 章"块与块值"。有 else 的 if 各臂在是否产出值上不一致的规则由类型章节批准；本章只定形与臂作用域。每个分支臂引入自己的作用域：臂内绑定 MUST NOT 泄漏到 if 之后。条件的类型化——须为布尔类型——由类型章节批准。
+if 表达式是 `if cond block` 或 `if cond block else else-arm`，其中 `cond` 是表达式，`else-arm` 是块或另一个 if 表达式（链终止于块或无 else 的 if）。无 else 的 if 无值，MUST NOT 出现在要求值的位置（`E0202`——由缺失的 else 静态可判定）。有 else 的 if 是表达式形式：每次求值其值为所取分支臂的块值，按第 2 章"块与块值"。有 else 的 if 的各臂 MUST 依第 8 章类型一致：无值臂的类型是 unit 类型，不一致以第 7 章 `E0501` 拒绝；never 类型对一致的排除归 sum 类型章。本章只定形与臂作用域。每个分支臂引入自己的作用域：臂内绑定 MUST NOT 泄漏到 if 之后。条件的类型化——须为布尔类型——由类型章节批准。
 
 #### Scenario: 有 else 的 if 用作值
 
@@ -23,6 +23,11 @@ if 表达式是 `if cond block` 或 `if cond block else else-arm`，其中 `cond
 
 - **WHEN** 解析 `if c1 { a } else if c2 { b } else { c }`
 - **THEN** else 臂持有一个嵌套 if 表达式；链是两个 if 表达式，各自遵循本条
+
+#### Scenario: 一臂有值一臂无值
+
+- **WHEN** `if c { 1 } else { io.println("no") }` 出现在表达式位置
+- **THEN** 编译器依第 8 章以 `E0501` 拒绝：第一臂是 `Int64`，第二臂是 unit 类型；各臂必须一致
 
 ### Requirement: While 与 loop
 
