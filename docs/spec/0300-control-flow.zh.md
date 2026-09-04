@@ -78,7 +78,7 @@ while 语句是 `while cond block`；loop 语句是 `loop block`。二者都是�
 
 ### Requirement: Defer
 
-defer 语句是 `defer block`——体 MUST 是块；任何其他操作数以 `E0203` 拒绝。Defer 只作为函数体块的直接项才合法；任何其他位置以 `E0204` 拒绝（函数体由声明章节批准；在那之前可触发的是拒绝侧）。同一函数体中的多条 defer 在函数退出时逆序执行，包括经提前 return 或 break 的退出。Defer 只偏移执行时机；它不是资源安全保证——那是第 13 章的 scope resource，其块出口释放先于外围函数自己的 defer 运行，内块先出。defer 体内的错误传播是第 14 章的规则：`?` 运算符在那里被拒绝（`E1202`）——defer 体运行于出口、没有可传播的目标返回。defer 体内的 effect 规则遵循 effects 章节；defer 不引入对二者的任何例外。
+defer 语句是 `defer block`——体 MUST 是块；任何其他操作数以 `E0203` 拒绝。Defer 只作为函数体块的直接项才合法；任何其他位置以 `E0204` 拒绝（函数体由声明章节批准；在那之前可触发的是拒绝侧）。同一函数体中的多条 defer 在函数退出时逆序执行，包括经提前 return 或 break 的退出。Defer 只偏移执行时机；它不是资源安全保证——那是第 13 章的 scope resource，其块出口释放先于外围函数自己的 defer 运行，内块先出。defer 体内的错误传播是第 14 章的规则：`?` 运算符在那里被拒绝（`E1202`）——defer 体运行于出口、没有可传播的目标返回。defer 体内的效果规则归第 16 章：defer 体的调用计入外围函数的声明效果（`E1401`），因 defer 只偏移执行时机、从不偏移效果归属——defer 不引入对二者的任何例外。
 
 #### Scenario: Defer 体必须是块
 

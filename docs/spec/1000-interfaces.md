@@ -2,7 +2,7 @@
 
 ### Requirement: Interface declarations
 
-An interface declaration is a top-level item `interface Name { items }`, optionally prefixed by `pub` and optionally carrying a generic parameter clause after the name per this chapter's Generic parameter declarations. `Name` is PascalCase (`E0011`) and joins the module's one name space under chapter 6, colliding with no other name (`E0404`). The brace group is block-like for chapter 2's line-joining: its items stand one per line, separated by inferred boundaries, with no separator token. Items are method signatures and associated-type declarations (Associated types); an interface declares capability, not data — a `name: type` field item fits no production and is rejected under chapter 2's unexpected-token diagnostic (`E0105`). A method signature is `fn name(receiver, p1: T1, ..., pn: Tn) -> R` — the receiver first and bare per Method receivers, the remaining parameters and the optional return annotation under chapter 6's forms; a signature without a receiver is rejected with `E0801`. A method MAY carry a block body — a default method per Default methods. Method names are camelCase (`E0012`). Interface members carry no `pub`: their reach is the interface's own.
+An interface declaration is a top-level item `interface Name { items }`, optionally prefixed by `pub` and optionally carrying a generic parameter clause after the name per this chapter's Generic parameter declarations. `Name` is PascalCase (`E0011`) and joins the module's one name space under chapter 6, colliding with no other name (`E0404`). The brace group is block-like for chapter 2's line-joining: its items stand one per line, separated by inferred boundaries, with no separator token. Items are method signatures and associated-type declarations (Associated types); an interface declares capability, not data — a `name: type` field item fits no production and is rejected under chapter 2's unexpected-token diagnostic (`E0105`). A method signature is `fn name(receiver, p1: T1, ..., pn: Tn) [effect-segment] -> R` — the receiver first and bare per Method receivers, the remaining parameters and the optional return annotation under chapter 6's forms, and an optional effect segment between the parameter list and the arrow per chapter 16, the declaration spelling with the `effect` keyword; a signature without a receiver is rejected with `E0801`. A method MAY carry a block body — a default method per Default methods, whose segment governs its body and every override's under chapter 16's exact-match rule. Method names are camelCase (`E0012`). Interface members carry no `pub`: their reach is the interface's own.
 
 #### Scenario: An interface parses as a top-level item
 
@@ -23,6 +23,11 @@ An interface declaration is a top-level item `interface Name { items }`, optiona
 
 - **WHEN** an interface is written `interface Container<T> {` on one line, the items `type Element` and `fn first(mut self) -> Element` each on their own line, and `}` on the last
 - **THEN** it declares a one-parameter interface with the associated type `Element` and the method `first`, per this chapter's Generic parameter declarations and Associated types
+
+#### Scenario: A method with an effect segment parses
+
+- **WHEN** `interface Store { fn get(mut self, k: String) effect io -> String }` appears
+- **THEN** the signature parses with its effect segment between the parameter list and the arrow, per chapter 16; omitted, the method states a pure signature
 
 ### Requirement: Associated types
 
@@ -55,7 +60,7 @@ An associated type is declared inside an interface body as `type Name` on its ow
 
 ### Requirement: Impl declarations
 
-An impl declaration is a top-level item `impl Name for Head { items }` — optionally with a generic clause after `impl` and a where clause after the head — implementing the interface `Name` for the head type. The interface MUST be a declared interface of this or an imported module; the head MUST be a nominal type — a record, newtype, or sum name, or a generic application of one — and anything else fits no production: a tuple head, a base type head, or a bare generic parameter head is rejected with `E0811`. Items are associated-type bindings then method definitions, block-like line-joining as an interface's. Locality — the orphan rule: the impl is legal in a module only when the interface or the head type is declared in that module (`E0810` otherwise); an impl block itself carries no `pub` — its methods' reach is the method-level `pub` per Inherent impls and the interface's own reach. Completeness: the impl MUST define every interface method that has no default (`E0807` otherwise) and MAY define defaulted ones; a defined method MUST match its interface method's signature — same name, same receiver mutability, same parameter count and types in order, same return type, parameter names free to differ (`E0808` otherwise). Uniqueness: an interface is implemented at most once for one head type under substitution — a second impl, or a generic impl overlapping a concrete one, is rejected with `E0809`. An impl of an interface with associated types binds them per Associated types first.
+An impl declaration is a top-level item `impl Name for Head { items }` — optionally with a generic clause after `impl` and a where clause after the head — implementing the interface `Name` for the head type. The interface MUST be a declared interface of this or an imported module; the head MUST be a nominal type — a record, newtype, or sum name, or a generic application of one — and anything else fits no production: a tuple head, a base type head, or a bare generic parameter head is rejected with `E0811`. Items are associated-type bindings then method definitions, block-like line-joining as an interface's. Locality — the orphan rule: the impl is legal in a module only when the interface or the head type is declared in that module (`E0810` otherwise); an impl block itself carries no `pub` — its methods' reach is the method-level `pub` per Inherent impls and the interface's own reach. Completeness: the impl MUST define every interface method that has no default (`E0807` otherwise) and MAY define defaulted ones; a defined method MUST match its interface method's signature — same name, same receiver mutability, same parameter count and types in order, same return type, parameter names free to differ (`E0808` otherwise) — and same effect set: the impl method's set MUST equal the interface declaration's exactly, missing and extra tags alike rejected with `E1404` under chapter 16. Uniqueness: an interface is implemented at most once for one head type under substitution — a second impl, or a generic impl overlapping a concrete one, is rejected with `E0809`. An impl of an interface with associated types binds them per Associated types first.
 
 #### Scenario: An impl parses, binds, and defines
 
@@ -426,7 +431,7 @@ The interfaces-and-generics chapter owns registry segment `E0800`–`E0899` decl
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–10. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Generic methods, Encodable/Decodable, Shareable, and effect sets are annotated as pending or deferred.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–10. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Generic methods, Encodable/Decodable, and Shareable are annotated as pending or deferred; effect sets landed with chapter 16.
 
 ### Interfaces, impls, and inherent methods
 
@@ -648,8 +653,8 @@ fn bound<T>(x: T) where T: Point {
 ```we
 // Generic methods, Encodable/Decodable (the JSON change), Shareable
 // (the concurrency chapter), and interface-level where clauses are
-// not ratified at this chapter; effect-set checks belong to the
-// effects chapter and are deliberately absent here:
+// not ratified at this chapter; effect segments and their checks
+// landed with chapter 16:
 //
 // impl Box<T> { fn pair<U>(self, other: U) -> ... }
 // record Config derives Encodable

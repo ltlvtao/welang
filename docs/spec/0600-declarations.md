@@ -40,7 +40,7 @@ An import declaration is `import path` or `import path as name`. The path MUST b
 
 ### Requirement: Function declarations
 
-A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, optionally prefixed by `pub`. The name is an identifier under chapter 1's naming conventions (`E0012`). The parameter list is zero or more `name: type` pairs separated by commas; every parameter MUST carry a type annotation — a bare parameter name fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`), which names the `name: type` production. A declared return type after `->` states that the function produces a value; its absence states that the function produces none. The grammar of types filling the annotation slots is ratified by the types chapter. Generic parameters are ratified by chapter 10: `fn name<T1, ..., Tk>(params)` carries the clause between the name and the parameter list, and a where clause may trail the signature before the body; the one bare-parameter exception is the chapter-10 method receiver — inside impl blocks the first parameter is `self` or `mut self`, written bare, its type fixed by the impl head. Effect annotations, `mut` parameters, and foreign declarations are ratified by their owning chapters.
+A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, optionally prefixed by `pub`. The name is an identifier under chapter 1's naming conventions (`E0012`). The parameter list is zero or more `name: type` pairs separated by commas; every parameter MUST carry a type annotation — a bare parameter name fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`), which names the `name: type` production. A declared return type after `->` states that the function produces a value; its absence states that the function produces none. The grammar of types filling the annotation slots is ratified by the types chapter. Generic parameters are ratified by chapter 10: `fn name<T1, ..., Tk>(params)` carries the clause between the name and the parameter list, and a where clause may trail the signature before the body; the one bare-parameter exception is the chapter-10 method receiver — inside impl blocks the first parameter is `self` or `mut self`, written bare, its type fixed by the impl head. Effect segments are ratified by chapter 16: a fn declaration may carry `effect tag1 tag2 ...` between the parameter list and the arrow or body, and the checks the segment participates in are that chapter's. `mut` parameters and foreign declarations are ratified by their owning chapters.
 
 #### Scenario: A function with a full signature
 
@@ -61,6 +61,11 @@ A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, 
 
 - **WHEN** `fn identity<T>(x: T) -> T { x }` appears as a top-level item
 - **THEN** it parses as one fn declaration with a one-parameter generic clause per chapter 10; the clause sits between the name and the parameter list and the rest follows this chapter's forms
+
+#### Scenario: A function with an effect segment parses
+
+- **WHEN** `fn write(msg: String) effect io { save(msg) }` appears as a top-level item
+- **THEN** it parses as one fn declaration with an effect segment between the parameter list and the body, per chapter 16; omitted, the declaration states a pure function
 
 ### Requirement: Function bodies, return and defer
 
@@ -228,10 +233,11 @@ fn f() {
 ```we
 // Module resolution, the cross-module visibility diagnostic, and
 // the main convention landed with chapter 15; generic parameters
-// landed with the interfaces chapter. Effect annotations, mut
-// parameters, and foreign blocks are their owning chapters':
+// landed with the interfaces chapter; effect segments landed with
+// chapter 16. mut parameters and foreign blocks are their owning
+// chapters':
 //
-// fn read(path: String) io -> String
+// fn read(path: String) effect io -> String
 ```
 
 ## Terminology

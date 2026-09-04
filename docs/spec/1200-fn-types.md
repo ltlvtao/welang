@@ -3,12 +3,17 @@
 
 ### Requirement: The function type
 
-A function type is `fn(T1, ..., Tn) -> T`: the `fn` keyword, a parenthesized comma-separated list of zero or more parameter types, each itself a type reference under chapter 7, an arrow, and a return type, itself a type reference and REQUIRED — a function that produces no value has the type `fn(...) -> ()`, the unit type under chapter 8. The parameter list carries no arity cap, mirroring chapter 6's declaration surface. A function type is monomorphic: its parameter and return positions hold type references only, never generic parameters — a generic function names a family, not one function, and has no single function type (Function values). No effect segment exists in the grammar: `fn(Int64) io -> Int64` is not inherited from v0.8 — this specification has ratified no effect system, and an effect chapter, if ever ratified, enters through this requirement's amendment. Type slots accept the function type as a type-reference form under chapter 7's amendment.
+A function type is `fn(T1, ..., Tn) [effect-segment] -> T`: the `fn` keyword, a parenthesized comma-separated list of zero or more parameter types, each itself a type reference under chapter 7, an optional effect segment of one or more bare space-separated tags between the parameter types and the arrow — chapter 16's ratification, no `effect` keyword in type position — an arrow, and a return type, itself a type reference and REQUIRED — a function that produces no value has the type `fn(...) -> ()`, the unit type under chapter 8. Omitting the segment states the pure function type; the tags' declarations and resolution, and the agreement checks the segment participates in, are chapter 16's. The parameter list carries no arity cap, mirroring chapter 6's declaration surface. A function type is monomorphic: its parameter and return positions hold type references only, never generic parameters — a generic function names a family, not one function, and has no single function type (Function values). Type slots accept the function type as a type-reference form under chapter 7's amendment.
 
 #### Scenario: A function type in an annotation slot
 
 - **WHEN** `let f: fn(Int64) -> Int64` appears with a matching function value on the right
 - **THEN** the annotation is the function type of exactly that signature; `f` binds function values of no other
+
+#### Scenario: An effect segment in a function type
+
+- **WHEN** `let f: fn(Int64) io -> Int64` appears — bare space-separated tags between the parameter types and the arrow
+- **THEN** the annotation is the function type of Int64-to-Int64 functions that may perform io; the segment's spelling is bare tags, the `effect` keyword fitting no production in type position
 
 #### Scenario: A zero-parameter function type
 
@@ -191,13 +196,15 @@ The fn-types chapter owns registry segment `E1000`–`E1099` declared in `docs/s
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–12. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Iterator combinators, generic function instantiation, and method values are annotated as pending their owning changes.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–12 and 16. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Iterator combinators, generic function instantiation, and method values are annotated as pending their owning changes.
 
 ### Function types and function values
 
 ```we
 let f: fn(Int64) -> Int64 = square       // a monomorphic fn name is a
 let nine = f(3)                          // value; the call is postfix
+let eff: fn(Int64) io -> Int64 = fetch   // effect segment: bare tags,
+                                         // chapter 16's ratification
 
 fn apply(f: fn(Int64) -> Int64, x: Int64) -> Int64 {
     f(x)                                 // the parameter's call
@@ -253,8 +260,6 @@ let m = user.describe                    // E0105: unexpected token; a
 let bad = fn(Int64)                      // E0105: unexpected token; the
                                         // arrow and return type are
                                         // required
-let eff: fn(Int64) io -> Int64 = f       // E0105: unexpected token; no
-                                        // effect segment is ratified
 let one = 1 + |x| x                      // E0105: unexpected token; write
                                         // 1 + (|x| x)
 |x| x + 1                                // E0102: statement begins with a

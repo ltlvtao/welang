@@ -40,7 +40,7 @@ import 声明是 `import path` 或 `import path as name`。path MUST 是点分�
 
 ### Requirement: fn 声明
 
-fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可选前缀 `pub`。名字是第 1 章命名约定下的标识符（`E0012`）。参数列表是零或多个以逗号分隔的 `name: type` 对；每个参数 MUST 携带类型注解——裸参数名不适配任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，消息具名 `name: type` 产生式。`->` 后声明的返回类型表示函数产出值；其缺失表示不产出。填充注解槽的类型文法由类型章节批准。泛型参数由第 10 章批准：`fn name<T1, ..., Tk>(params)` 把子句携带于名字与参数列表之间，where 子句可尾随签名于体之前；唯一的裸参数例外是第 10 章的方法接收者——impl 块内第一个参数是 `self` 或 `mut self`，裸写，其类型由 impl 头固定。effect 标注、`mut` 参数、foreign 声明由其归属章节批准。
+fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可选前缀 `pub`。名字是第 1 章命名约定下的标识符（`E0012`）。参数列表是零或多个以逗号分隔的 `name: type` 对；每个参数 MUST 携带类型注解——裸参数名不适配任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，消息具名 `name: type` 产生式。`->` 后声明的返回类型表示函数产出值；其缺失表示不产出。填充注解槽的类型文法由类型章节批准。泛型参数由第 10 章批准：`fn name<T1, ..., Tk>(params)` 把子句携带于名字与参数列表之间，where 子句可尾随签名于体之前；唯一的裸参数例外是第 10 章的方法接收者——impl 块内第一个参数是 `self` 或 `mut self`，裸写，其类型由 impl 头固定。效果段由第 16 章批准：fn 声明可在参数列表与箭头或体之间携带 `effect tag1 tag2 ...`，该段参与的检查归该章。`mut` 参数、foreign 声明由其归属章节批准。
 
 #### Scenario: 完整签名的函数
 
@@ -61,6 +61,11 @@ fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可�
 
 - **WHEN** `fn identity<T>(x: T) -> T { x }` 作为顶层项出现
 - **THEN** 它解析为按第 10 章携带单参数泛型子句的一个 fn 声明；子句位于名字与参数列表之间，其余循本章形式
+
+#### Scenario: 带效果段的函数解析
+
+- **WHEN** `fn write(msg: String) effect io { save(msg) }` 作为顶层项出现
+- **THEN** 它解析为在参数列表与体之间携带效果段的一个 fn 声明，依第 16 章；省略时声明即纯函数
 
 ### Requirement: 函数体、return 与 defer
 
@@ -228,10 +233,11 @@ fn f() {
 ```we
 // Module resolution, the cross-module visibility diagnostic, and
 // the main convention landed with chapter 15; generic parameters
-// landed with the interfaces chapter. Effect annotations, mut
-// parameters, and foreign blocks are their owning chapters':
+// landed with the interfaces chapter; effect segments landed with
+// chapter 16. mut parameters and foreign blocks are their owning
+// chapters':
 //
-// fn read(path: String) io -> String
+// fn read(path: String) effect io -> String
 ```
 
 ## 术语对照

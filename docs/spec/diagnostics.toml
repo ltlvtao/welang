@@ -134,7 +134,16 @@ owner = "1500-modules"
 # E1306-E1399 reserved for amendments (dependency-era codes,
 # visibility-level refinements).
 
-[segments."E1400-E9999"]
+[segments."E1400-E1499"]
+domain = "effects"
+owner = "1600-effects"
+# Intra-segment structure (chapter 16): E1400 boundary reserve,
+# E1401-E1405 undeclared-call / value-vs-type mismatch / builtin-name
+# conflict / impl-vs-interface disagreement / initializer impurity.
+# E1406-E1499 reserved for amendments (test-virtualization-era codes,
+# FFI effect declarations).
+
+[segments."E1500-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -1036,4 +1045,49 @@ description = "The root module src/main.we declares no fn main, declares main wi
 remediation = "Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type."
 owner = "1500-modules"
 requirement = "The main convention"
+allocated = "2026-09-04"
+
+[diagnostic.E1401]
+severity = "error"
+title = "undeclared effect at a call"
+description = "A function body performs a call whose effect set is not a subset of the function's declared effect set: the callee declares an effect the caller does not, a defer body's calls count toward the enclosing function, or a call through a parameter typed with an effect segment performs what that type declares. Omitted segment means pure."
+remediation = "Add the missing tag to the enclosing declaration's effect segment, or call a pure function instead."
+owner = "1600-effects"
+requirement = "The effect segment"
+allocated = "2026-09-04"
+
+[diagnostic.E1402]
+severity = "error"
+title = "function value effect set does not match the expected type's"
+description = "At a type-agreement position holding a function value - binding against an annotation, argument against parameter, return against the declared type - the value's effect set is not a subset of the expected function type's set. An effectful value in a pure slot is the usual form; a purer value in an effect-expecting slot is always legal."
+remediation = "Widen the expected type's effect segment to cover the value's set, or supply a value that performs less."
+owner = "1600-effects"
+requirement = "The effect segment in function types"
+allocated = "2026-09-04"
+
+[diagnostic.E1403]
+severity = "error"
+title = "effect name conflicts with a built-in effect"
+description = "A custom effect declaration takes the name io, net, or time. Built-in tags are language-level names, not module items, so no module name space collision fires - this code alone refuses the declaration."
+remediation = "Choose a camelCase name that is not one of the built-in tags."
+owner = "1600-effects"
+requirement = "Effect declarations and the built-in tags"
+allocated = "2026-09-04"
+
+[diagnostic.E1404]
+severity = "error"
+title = "impl method effect set disagrees with the interface"
+description = "An impl method's effect set does not equal the interface method's declared set exactly: a tag missing, an extra tag, or a defaulted method's override dropping the interface's segment. The sets must match in both directions - the caller sees the interface's set, whichever implementation runs."
+remediation = "Copy the interface method's effect segment into the impl method's signature exactly, in both directions."
+owner = "1600-effects"
+requirement = "Effects in interfaces and impls"
+allocated = "2026-09-04"
+
+[diagnostic.E1405]
+severity = "error"
+title = "effectful call in a top-level initializer"
+description = "A top-level let initializer calls an effectful function. Initializers are the one ratified position that evaluates outside any function signature; they must be pure, keeping process start free of environmental reads and writes."
+remediation = "Move the work into main, or initialize from a pure computation over constants."
+owner = "1600-effects"
+requirement = "Effect checking at module initialization"
 allocated = "2026-09-04"

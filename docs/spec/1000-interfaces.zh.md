@@ -2,7 +2,7 @@
 
 ### Requirement: 接口声明
 
-接口声明是顶层项 `interface Name { items }`，可选以 `pub` 为前缀，并可选按本章"泛型参数声明"在名字后携带泛型参数子句。`Name` 为 PascalCase（`E0011`），加入第 6 章的模块唯一名字空间，不得与任何其他名字冲突（`E0404`）。花括号组对第 2 章行接续是块状的：其各项各占一行，以推断边界分隔，无分隔 token。项是方法签名与关联类型声明（"关联类型"）；接口声明的是能力、不是数据——`name: type` 字段项不合任何产生式，按第 2 章意外 token 诊断（`E0105`）拒绝。方法签名是 `fn name(receiver, p1: T1, ..., pn: Tn) -> R`——接收者按"方法接收者"首置且裸写，其余参数与可选的返回标注依第 6 章形式；无接收者的签名以 `E0801` 拒绝。方法 MAY 携带块体——按"默认方法"的默认方法。方法名为 camelCase（`E0012`）。接口成员不带 `pub`：其触达即接口自身的。
+接口声明是顶层项 `interface Name { items }`，可选以 `pub` 为前缀，并可选按本章"泛型参数声明"在名字后携带泛型参数子句。`Name` 为 PascalCase（`E0011`），加入第 6 章的模块唯一名字空间，不得与任何其他名字冲突（`E0404`）。花括号组对第 2 章行接续是块状的：其各项各占一行，以推断边界分隔，无分隔 token。项是方法签名与关联类型声明（"关联类型"）；接口声明的是能力、不是数据——`name: type` 字段项不合任何产生式，按第 2 章意外 token 诊断（`E0105`）拒绝。方法签名是 `fn name(receiver, p1: T1, ..., pn: Tn) [effect-segment] -> R`——接收者按"方法接收者"首置且裸写，其余参数与可选的返回标注依第 6 章形式，并按第 16 章在参数列表与箭头之间可选携带效果段，声明拼写、带 `effect` 关键字；无接收者的签名以 `E0801` 拒绝。方法 MAY 携带块体——按"默认方法"的默认方法，其段按第 16 章精确一致规则治理其体与每个 override。方法名为 camelCase（`E0012`）。接口成员不带 `pub`：其触达即接口自身的。
 
 #### Scenario: 接口解析为顶层项
 
@@ -23,6 +23,11 @@
 
 - **WHEN** 接口写为一行 `interface Container<T> {`、项 `type Element` 与 `fn first(mut self) -> Element` 各自成行、末行 `}`
 - **THEN** 它按本章"泛型参数声明"与"关联类型"声明带关联类型 `Element` 与方法 `first` 的单参数接口
+
+#### Scenario: 带效果段的方法解析
+
+- **WHEN** 出现 `interface Store { fn get(mut self, k: String) effect io -> String }`
+- **THEN** 签名携带位于参数列表与箭头之间的效果段解析成立，依第 16 章；省略时方法即纯签名
 
 ### Requirement: 关联类型
 
@@ -55,7 +60,7 @@
 
 ### Requirement: impl 声明
 
-impl 声明是顶层项 `impl Name for Head { items }`——可选在 `impl` 后带泛型子句、在头类型后带 where 子句——为头类型实现接口 `Name`。接口 MUST 是本模块或已导入模块已声明的接口；头 MUST 是名义类型——record、newtype 或 sum 名，或其泛型应用——其余一切不合产生式：元组头、基础类型头或裸泛型参数头以 `E0811` 拒绝。项是关联类型绑定而后方法定义，行接续块状如接口。局部性——孤儿规则：仅当接口或头类型声明于本模块时，impl 才在该模块合法（否则 `E0810`）；impl 块本身不带 `pub`——其方法的触达是"固有 impl"的方法级 `pub` 与接口自身的触达。完备性：impl MUST 定义接口每个无默认的方法（否则 `E0807`），MAY 定义有默认者；被定义的方法 MUST 与其接口方法签名一致——同名、同接收者可变性、同参数个数与依序类型、同返回类型，参数名可异（否则 `E0808`）。唯一性：一代换下接口对一个头类型至多实现一次——第二个 impl、或与具体 impl 重叠的泛型 impl，以 `E0809` 拒绝。带关联类型接口的 impl 先按"关联类型"绑定之。
+impl 声明是顶层项 `impl Name for Head { items }`——可选在 `impl` 后带泛型子句、在头类型后带 where 子句——为头类型实现接口 `Name`。接口 MUST 是本模块或已导入模块已声明的接口；头 MUST 是名义类型——record、newtype 或 sum 名，或其泛型应用——其余一切不合产生式：元组头、基础类型头或裸泛型参数头以 `E0811` 拒绝。项是关联类型绑定而后方法定义，行接续块状如接口。局部性——孤儿规则：仅当接口或头类型声明于本模块时，impl 才在该模块合法（否则 `E0810`）；impl 块本身不带 `pub`——其方法的触达是"固有 impl"的方法级 `pub` 与接口自身的触达。完备性：impl MUST 定义接口每个无默认的方法（否则 `E0807`），MAY 定义有默认者；被定义的方法 MUST 与其接口方法签名一致——同名、同接收者可变性、同参数个数与依序类型、同返回类型，参数名可异（否则 `E0808`）——且同效果集：impl 方法的集 MUST 与接口声明精确相等，缺标签与多标签同按第 16 章以 `E1404` 拒绝。唯一性：一代换下接口对一个头类型至多实现一次——第二个 impl、或与具体 impl 重叠的泛型 impl，以 `E0809` 拒绝。带关联类型接口的 impl 先按"关联类型"绑定之。
 
 #### Scenario: impl 解析、绑定并定义
 
@@ -426,7 +431,7 @@ where 子句尾随泛型 fn 声明的签名（体之前）或 impl 头（花括�
 
 ## 示例（非权威）
 
-下面的示例只用第 1–10 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。泛型方法、Encodable/Decodable、Shareable 与 effect 集标注为待批或延后。
+下面的示例只用第 1–10 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。泛型方法、Encodable/Decodable 与 Shareable 标注为待批或延后；效果集已随第 16 章落地。
 
 ### 接口、impl 与固有方法
 
@@ -648,8 +653,8 @@ fn bound<T>(x: T) where T: Point {
 ```we
 // Generic methods, Encodable/Decodable (the JSON change), Shareable
 // (the concurrency chapter), and interface-level where clauses are
-// not ratified at this chapter; effect-set checks belong to the
-// effects chapter and are deliberately absent here:
+// not ratified at this chapter; effect segments and their checks
+// landed with chapter 16:
 //
 // impl Box<T> { fn pair<U>(self, other: U) -> ... }
 // record Config derives Encodable

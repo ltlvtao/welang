@@ -123,7 +123,7 @@
 
 ### Requirement: main 约定
 
-程序的入口模块是根模块：源根处的 `main` 模块，即文件 `src/main.we`。根模块 MUST 声明恰一个 `pub fn main() -> Result<(), E>`，`E` 为第 14 章约束下的命名 sum 类型——v0.8 草案的 `Error` 是 `E` 的一个合法拼写，不是必拼者。未声明 `main`、声明不带 `pub` 的 `main`、或签名非该形状的根模块 MUST 以 `E1305:` main function signature violation 拒绝。非根模块中的 `main` 是不承载约定的普通 fn 名。`main` 在每个模块初始化之后运行。返回 `Ok(())` 以退出码 0 退出；返回 `Err(e)` 在 stderr 报告失败消息后以非零退出——消息格式是标准库的事，不是本章的。`main` 无参数：可执行文件的命令行可达性归标准库，不归语言。
+程序的入口模块是根模块：源根处的 `main` 模块，即文件 `src/main.we`。根模块 MUST 声明恰一个 `pub fn main() -> Result<(), E>`，`E` 为第 14 章约束下的命名 sum 类型——v0.8 草案的 `Error` 是 `E` 的一个合法拼写，不是必拼者。未声明 `main`、声明不带 `pub` 的 `main`、或签名非该形状的根模块 MUST 以 `E1305:` main function signature violation 拒绝。`main` MAY 按第 16 章携带效果段——`pub fn main() effect io -> Result<(), AppError>` 合规：进程启动工作恰是 `main` 的用途，段随声明走，`E1305` 检查的形状是无参参数表、`Result<(), E>` 返回与 `pub`——效果段不参与该形状。非根模块中的 `main` 是不承载约定的普通 fn 名。`main` 在每个模块初始化之后运行。返回 `Ok(())` 以退出码 0 退出；返回 `Err(e)` 在 stderr 报告失败消息后以非零退出——消息格式是标准库的事，不是本章的。`main` 无参数：可执行文件的命令行可达性归标准库，不归语言。
 
 #### Scenario: 合规的根模块
 
@@ -134,6 +134,11 @@
 
 - **WHEN** `src/main.we` 声明 `fn main() -> Result<(), AppError>` 而无 `pub`
 - **THEN** 编译器以 `E1305:` main function signature violation 拒绝
+
+#### Scenario: 带效果段的 main 合规
+
+- **WHEN** `src/main.we` 声明 `pub fn main() effect io -> Result<(), AppError>`，其体按第 16 章执行 io
+- **THEN** 程序如约定般编译运行；效果段随声明走，不参与 `E1305` 检查的形状
 
 #### Scenario: 缺失 main 被拒绝
 
