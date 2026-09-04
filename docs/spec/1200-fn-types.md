@@ -191,12 +191,12 @@ The fn-types chapter owns registry segment `E1000`–`E1099` declared in `docs/s
 
 #### Scenario: A later change needs this segment's codes
 
-- **WHEN** a later chapter ratifies rules requiring new function-value diagnostics — the combinator change among them
-- **THEN** its change extends the registry within `E1000`–`E1099` in the same change, or claims its own segment
+- **WHEN** a later chapter ratifies rules requiring new function-value diagnostics
+- **THEN** its change extends the registry within `E1000`–`E1099` in the same change, or claims its own segment — the combinator change took the second route, its purity rule riding chapter 16's `E1402`
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–12 and 16. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Iterator combinators, generic function instantiation, and method values are annotated as pending their owning changes.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–12 and 16. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Generic function instantiation and method values are annotated as pending their owning changes.
 
 ### Function types and function values
 
@@ -280,15 +280,16 @@ let g2 = Circle                          // E0704: payloaded variant
 ### Pending later changes
 
 ```we
-// Iterator combinators arrive with their owning change as default
-// methods of Iterator; generic instantiation `map<Int64>` and generic
-// methods with chapter 10's own amendment; method values, if ever,
-// with this chapter's amendment:
+// Iterator combinators landed with the collections change — default
+// methods of Iterator, their f parameters pure function types (E1402).
+// Method generic clauses landed with the same change's chapter 10
+// amendment; a method call carries no explicit type-argument form —
+// the call's own text determines the arguments (E0827). Generic
+// instantiation of a fn name in value position and method values, if
+// ever, still arrive with this chapter's amendment:
 //
-// let out = names.iterator()
-//     .filter(|n| n.size() > 2)
-//     .map(|n| n.toUpper())
-//     .collect()
+// let parse = fromJson<T>              // E1004 until then
+// let upper = String.toUpper           // method values, if ever
 ```
 
 ## Terminology

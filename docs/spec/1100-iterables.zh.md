@@ -20,8 +20,7 @@
 - **THEN** 它是第 10 章下的泛型应用，其构造器在该实例化处定型
 
 ### Requirement: Iterator 接口
-
-标准库声明泛型接口 `pub interface Iterator<T> { fn next(mut self) -> Option<T> }`——第 10 章声明形式下的单方法接口。`next` 将迭代器推进一个元素并返回 `Option<T>`：尚有元素时为 `Some(element)`——迭代器 MUST 恰好每元素返回一次、按序——耗尽后为 `None`。耗尽是永久的：首个 `None` 之后的每次调用都返回 `None`，且迭代器 MUST NOT 被回卷、重置或重放。迭代器天然有状态——`mut self` 接收者即推进本身——故值类别头无法诚实实现本接口：`byval` 头上的 `mut self` 方法是第 10 章的 `E0812`。本接口开放：模块可依第 10 章 impl 规则为自己的名义头实现 `Iterator<T>`，与任何接口相同——自定义集合产出自定义迭代器，静态分发。组合子——`map`、`filter` 及其同族——不在本章批准：它们需要函数值，随其所属变更到来，并作为本接口的默认方法落地、行为由规范固定。
+标准库声明泛型接口 `pub interface Iterator<T> { fn next(mut self) -> Option<T> }`——第 10 章声明形式下的单方法接口。`next` 将迭代器推进一个元素并返回 `Option<T>`：尚有元素时为 `Some(element)`——迭代器 MUST 恰好每元素返回一次、按序——耗尽后为 `None`。耗尽是永久的：首个 `None` 之后的每次调用都返回 `None`，且迭代器 MUST NOT 被回卷、重置或重放。迭代器天然有状态——`mut self` 接收者即推进本身——故值类别头无法诚实实现本接口：`byval` 头上的 `mut self` 方法是第 10 章的 `E0812`。本接口开放：模块可依第 10 章 impl 规则为自己的名义头实现 `Iterator<T>`，与任何接口相同——自定义集合产出自定义迭代器，静态分发。组合子——`map`、`filter` 及其同族——是本接口自己的默认方法，随集合章节的修订批准：其签名、惰性、纯度与定出规则由本章"Iterator 组合子"条目固定。
 
 #### Scenario: next 按序产出元素后耗尽
 
@@ -38,10 +37,52 @@
 - **WHEN** 为 `byval` record 书写 `impl Iterator<Int64>`，带 `fn next(mut self) -> Option<Int64>`
 - **THEN** 编译器以 `E0812:` mut self receiver on a value-category type 拒绝，依第 10 章
 
-#### Scenario: 组合子不在本章批准
+#### Scenario: 组合子调用解析到默认方法
 
-- **WHEN** 在迭代器值上调用 `.map(...)` 或 `.filter(...)`
-- **THEN** 编译器以 `E0816:` no such member on the receiver's type 拒绝，依第 10 章，直至组合子变更批准它们
+- **WHEN** 在实现 `Iterator<T>` 的类型的值上调用 `.map(...)` 或 `.filter(...)`
+- **THEN** 调用按第 10 章成员解析解析到接口的默认方法——无 `E0816`——override 它的 impl 精确重复接口签名
+
+### Requirement: Iterator 组合子
+`Iterator` 接口声明十一个默认方法——组合子——由本条目固定、由标准库提供默认体：impl 按第 10 章默认方法继承它们，override MUST 精确重复接口签名、含泛型子句（`E0808`）。惰性族在调用处不做任何元素工作并返回派生迭代器：`fn map<U>(mut self, f: fn(T) -> U) -> Dyn<Iterator<U>>`、`fn filter(mut self, f: fn(T) -> Bool) -> Dyn<Iterator<T>>`、`fn take(mut self, n: Int64) -> Dyn<Iterator<T>>`、`fn skip(mut self, n: Int64) -> Dyn<Iterator<T>>`。急性族在调用处把接收者推进至耗尽并返回其结果：`fn collect(mut self) -> List<T>`、`fn fold<U>(mut self, init: U, f: fn(U, T) -> U) -> U`、`fn reduce(mut self, f: fn(T, T) -> T) -> Option<T>`、`fn count(mut self) -> Int64`、`fn any(mut self, f: fn(T) -> Bool) -> Bool`、`fn all(mut self, f: fn(T) -> Bool) -> Bool`、`fn find(mut self, f: fn(T) -> Bool) -> Option<T>`。
+
+惰性组合子返回的迭代器按需提取接收者的剩余元素——`map` 产出每个经 `f` 变换者，`filter` 产出满足 `f` 者，`take` 至多前 `n` 个，`skip` 前 `n` 个之后的一切——而惰性组合子链在同一个原始序列上叠层，每个元素一次流过每一层，无中间集合。接收者绑定保持对同一一次性对象的活句柄——第 8 章的 gc 别名：哪个句柄调用 `next` 就由哪个提取下一元素，本章的恰一次按序与永久耗尽契约约束的是对象、不是每个绑定。急性组合子返回时留下耗尽的接收者：`collect` 按序构建剩余元素的 `List<T>`——集合章节的类型、经本变更的预导入修订预导入可见——`fold` 自 `init` 从左到右应用 `f`，`reduce` 以首元素为种子并在空接收者上产出 `None`，`count` 计数剩余，`any` 与 `all` 测试谓词并在首个定夺元素处停止，`find` 以 `Option` 产出首个满足者、无满足者时为 `None`。
+
+函数参数是纯函数类型——无效果段的 `fn(T) -> U`——故执行效果的闭包不合：值的推断集不是空期望集的子集，拒绝是第 16 章的 `E1402`、落于实参一致位。没有组合子专属的纯度码，也没有 `forEach`：v0.8 一边把它的函数类型定为纯、一边把副作用路由给它，而效果化的它需要没有任何章批准的效果多态——序列上的副作用归 for 语句，其体携带外围声明的效果。`.forEach(...)` 调用是第 10 章的 `E0816`。方法泛型参数——`map` 与 `fold` 的 `U`——依第 10 章单向规则自调用自身文本定出，即函数实参的返回类型；什么都不定的实参是 `E0827`。
+
+#### Scenario: 惰性链按序变换
+
+- **WHEN** `[1, 2, 3].iterator().map(|x| x * 10).collect()` 运行
+- **THEN** 结果是持有 `10`、`20`、`30` 的 `List<Int64>`——每个元素一次流过 map 层、按需提取、无中间集合
+
+#### Scenario: 效果闭包不合
+
+- **WHEN** 出现 `names.iterator().map(|s| save(s))` 而 `save` 声明 `effect io`
+- **THEN** 编译器以 `E1402:` function value effect set does not match the expected type's 拒绝——`f` 的参数类型是纯函数类型；副作用归 for 语句
+
+#### Scenario: 空接收者上 reduce 产出 None
+
+- **WHEN** 在空或已耗尽的迭代器上调用 `reduce(f)`
+- **THEN** 结果是 `None`——种子本应是首元素，而没有首元素
+
+#### Scenario: any 在首个定夺元素处停止
+
+- **WHEN** 调用 `any(f)` 且某元素满足 `f`
+- **THEN** 调用返回 `true`、不再提取更多元素；`all` 在首个失败元素处镜像之
+
+#### Scenario: 接收者保持单一活句柄
+
+- **WHEN** `let derived = it.map(f)` 之后对绑定 `it` 自身调用 `next`
+- **THEN** 该调用提取该对象的下一元素——一个序列，无论哪个句柄推进它；`derived` 再看不到被提取的元素
+
+#### Scenario: forEach 不存在
+
+- **WHEN** 出现 `xs.iterator().forEach(|x| put(x))`
+- **THEN** 编译器以 `E0816:` no such member on the receiver's type 拒绝；序列上的副作用归 for 语句
+
+#### Scenario: U 来自调用自身文本
+
+- **WHEN** 出现 `names.iterator().map(|n| n.size()).count()`
+- **THEN** `U` 是 `Int64`，由函数实参的返回类型依第 10 章单向规则定出；无期望类型推断参与
 
 ### Requirement: Iterable 接口
 
@@ -73,8 +114,7 @@
 - **THEN** 声明内部 `C.Iter` 按第 10 章等式规则可用作 `CountingIter`
 
 ### Requirement: for 循环协议
-
-第 5 章 for 语句的可迭代表达式 MUST 具有"为某元素类型 `T` 实现 `Iterable<T>`"的类型；其他一切类型以 `E0901` 拒绝。规则是单一形式：仅 `Iterator<T>` 不是 for 可迭代值——裸迭代器由显式 `next` 调用消耗，或在标准库提供适配器后包装之——且除 `Iterable` 外没有接口使类型可迭代。执行：可迭代表达式恰求值一次；`iterator` 恰获取一次；`next` 被反复调用；每个 `Some(element)` 依第 5 章 name 规则绑定该元素并执行函数体一次；首个 `None` 结束循环。元素类型 `T` 即循环绑定的类型。目前已批准的类型中仅两个携带内建实现——`String` 于 `Rune` 与 `Range<T>` 于 `T`（"String 迭代"、"Range 类型"）；标准库的集合类型随集合章到来。
+第 5 章 for 语句的可迭代表达式 MUST 具有"为某元素类型 `T` 实现 `Iterable<T>`"的类型；其他一切类型以 `E0901` 拒绝。规则是单一形式：仅 `Iterator<T>` 不是 for 可迭代值——裸迭代器由显式 `next` 调用消耗，或在标准库提供适配器后包装之——且除 `Iterable` 外没有接口使类型可迭代。执行：可迭代表达式恰求值一次；`iterator` 恰获取一次；`next` 被反复调用；每个 `Some(element)` 依第 5 章 name 规则绑定该元素并执行函数体一次；首个 `None` 结束循环。元素类型 `T` 即循环绑定的类型。目前已批准的类型携带内建实现——`String` 于 `Rune` 与 `Range<T>` 于 `T`（"String 迭代"、"Range 类型"）——而集合章节的 `List`、`Map` 与 `Set` 是本协议上迭代其元素与条目的可迭代值。
 
 #### Scenario: 非可迭代表达式被拒绝
 
@@ -140,8 +180,7 @@
 - **THEN** `i` 取 `2`、`3`、`4`——start 含、end 排他、步进为一
 
 ### Requirement: Iterable 实现方义务
-
-`Iterable` 的实现回应第 8 章的所有权类别。resource 类别类型 MUST NOT 实现 `Iterable`——拒绝码为 `E0903`：迭代器在循环的多次执行间持有对其集合的活视图，而触达超出 resource 纪律所依赖的单一确定性释放点的句柄并不诚实；遍历 resource 的内容须先物化——一次显式读入集合，再迭代该集合。值类别可迭代值按拷贝诚实迭代：第 8 章值语义适用——`iterator` 接收接收者自己的副本，迭代绝不消耗或改动原绑定。gc 集合的快照/游标义务属于批准那些类型的集合章；本章固定它们所依赖的协议。
+`Iterable` 的实现回应第 8 章的所有权类别。resource 类别类型 MUST NOT 实现 `Iterable`——拒绝码为 `E0903`：迭代器在循环的多次执行间持有对其集合的活视图，而触达超出 resource 纪律所依赖的单一确定性释放点的句柄并不诚实；遍历 resource 的内容须先物化——一次显式读入集合，再迭代该集合。值类别可迭代值按拷贝诚实迭代：第 8 章值语义适用——`iterator` 接收接收者自己的副本，迭代绝不消耗或改动原绑定。gc 集合的迭代语义由集合章节固定——`iterator` 调用处的一次快照——而本章固定了它们所依赖的协议。
 
 #### Scenario: resource impl 被拒绝
 
@@ -169,7 +208,7 @@
 
 ## 示例（非权威）
 
-下面的示例只用第 1–11 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。迭代器组合子与标准库集合类型标注为待其各自章节。
+下面的示例只用第 1–11 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。下方组合子示例触及第 12 章的闭包与第 17 章的 `List`。
 
 ### Option 与迭代
 
@@ -235,19 +274,15 @@ for (a, b) in names { }                // E0501: the element type String
                                        // is not a tuple
 ```
 
-### 待后续章节
+### 组合子
 
 ```we
-// Iterator combinators (map, filter, and the lazy and eager families)
-// take function values — chapter 12's closures carry them — and
-// arrive with their owning change as default methods of Iterator; the
-// collection types (List, Map, Set) arrive with the collections
-// chapter on this chapter's protocol:
-//
-// let out = names.iterator()
-//     .filter(|n| n.size() > 2)
-//     .map(|n| n.toUpper())
-//     .collect()
+let out = names.iterator()
+    .filter(|n| n.size() > 2)  // lazy: a layer over the receiver
+    .map(|n| n.toUpper())      // lazy: U comes from this call's text
+    .collect()                 // List<String>: eager — the chain ends
+
+let total = [1, 2, 3].iterator().fold(0, |acc, x| acc + x)   // 6
 ```
 
 ## 术语对照

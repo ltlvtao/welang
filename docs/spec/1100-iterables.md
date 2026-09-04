@@ -21,7 +21,7 @@ The standard library declares the generic sum type `pub type Option<T> = Some(T)
 
 ### Requirement: The Iterator interface
 
-The standard library declares the generic interface `pub interface Iterator<T> { fn next(mut self) -> Option<T> }` — one method under chapter 10's declaration forms. `next` advances the iterator by one element and returns `Option<T>`: `Some(element)` while elements remain — the iterator MUST return each element exactly once, in order — and `None` once exhausted. Exhaustion is permanent: every call after the first `None` returns `None`, and an iterator MUST NOT be rewound, reset, or replayed. An iterator is stateful by construction — the `mut self` receiver is the advance — so a value-category head cannot honestly implement the interface: a `mut self` method on a `byval` head is chapter 10's `E0812`. The interface is open: a module may implement `Iterator<T>` for its own nominal heads under chapter 10's impl rules, the same as any interface — custom collections produce custom iterators, statically dispatched. Combinators — `map`, `filter`, and their siblings — are not ratified by this chapter: they need function values, arrive with their owning change, and land as default methods of this interface with their behavior fixed by the spec.
+The standard library declares the generic interface `pub interface Iterator<T> { fn next(mut self) -> Option<T> }` — one method under chapter 10's declaration forms. `next` advances the iterator by one element and returns `Option<T>`: `Some(element)` while elements remain — the iterator MUST return each element exactly once, in order — and `None` once exhausted. Exhaustion is permanent: every call after the first `None` returns `None`, and an iterator MUST NOT be rewound, reset, or replayed. An iterator is stateful by construction — the `mut self` receiver is the advance — so a value-category head cannot honestly implement the interface: a `mut self` method on a `byval` head is chapter 10's `E0812`. The interface is open: a module may implement `Iterator<T>` for its own nominal heads under chapter 10's impl rules, the same as any interface — custom collections produce custom iterators, statically dispatched. Combinators — `map`, `filter`, and their siblings — are this interface's own default methods, ratified with the collections chapter's amendment: their signatures, laziness, purity, and determination rules are fixed by this chapter's Iterator combinators requirement.
 
 #### Scenario: next yields elements in order then exhausts
 
@@ -38,10 +38,53 @@ The standard library declares the generic interface `pub interface Iterator<T> {
 - **WHEN** `impl Iterator<Int64>` is written for a `byval` record with `fn next(mut self) -> Option<Int64>`
 - **THEN** the compiler rejects it with `E0812:` mut self receiver on a value-category type, per chapter 10
 
-#### Scenario: Combinators are not ratified here
+#### Scenario: A combinator call resolves to the default method
 
-- **WHEN** `.map(...)` or `.filter(...)` is called on an iterator value
-- **THEN** the compiler rejects it with `E0816:` no such member on the receiver's type, per chapter 10, until the combinator change ratifies them
+- **WHEN** `.map(...)` or `.filter(...)` is called on a value whose type implements `Iterator<T>`
+- **THEN** the call resolves to the interface's default method under chapter 10's member resolution — no `E0816` — and an impl that overrides it repeats the interface signature exactly
+
+### Requirement: Iterator combinators
+
+The `Iterator` interface declares eleven default methods — the combinators — fixed by this requirement and provided by the standard library's default bodies: an impl inherits them as chapter 10's default methods, and an override MUST repeat the interface signature exactly, generic clause included (`E0808`). The lazy family performs no element work at the call and returns a derived iterator: `fn map<U>(mut self, f: fn(T) -> U) -> Dyn<Iterator<U>>`, `fn filter(mut self, f: fn(T) -> Bool) -> Dyn<Iterator<T>>`, `fn take(mut self, n: Int64) -> Dyn<Iterator<T>>`, `fn skip(mut self, n: Int64) -> Dyn<Iterator<T>>`. The eager family advances the receiver to exhaustion at the call and returns its result: `fn collect(mut self) -> List<T>`, `fn fold<U>(mut self, init: U, f: fn(U, T) -> U) -> U`, `fn reduce(mut self, f: fn(T, T) -> T) -> Option<T>`, `fn count(mut self) -> Int64`, `fn any(mut self, f: fn(T) -> Bool) -> Bool`, `fn all(mut self, f: fn(T) -> Bool) -> Bool`, `fn find(mut self, f: fn(T) -> Bool) -> Option<T>`.
+
+A lazy combinator's returned iterator draws the receiver's remaining elements on demand — `map` yields each transformed by `f`, `filter` yields those satisfying `f`, `take` at most the first `n`, `skip` all after the first `n` — and a chain of lazy combinators stacks layers over the one original sequence, drawing each element through every layer once, with no intermediate collection. The receiver binding remains a live handle to the same one-shot object — chapter 8's gc aliasing: whichever handle calls `next` draws the next element, and this chapter's exactly-once-in-order and permanent-exhaustion contracts hold of the object, not per binding. An eager combinator leaves the receiver exhausted when it returns: `collect` builds a `List<T>` of the remaining elements in order — the collections chapter's type, prelude-visible under this change's prelude amendment — `fold` applies `f` left to right from `init`, `reduce` seeds with the first element and yields `None` on an empty receiver, `count` counts the remainder, `any` and `all` test the predicate and stop at the first deciding element, and `find` yields the first satisfying element as `Option`, `None` when none does.
+
+The function parameters are pure function types — `fn(T) -> U` with no effect segment — so a closure performing effects does not fit: the value's inferred set is not a subset of the empty expected set, and the rejection is chapter 16's `E1402` at the argument agreement position. There is no combinator-specific purity code, and there is no `forEach`: v0.8 typed its function pure while routing side effects to it, and an effectful one would need the effect polymorphism no chapter ratifies — side effects over a sequence are the for statement's, whose body carries its enclosing declaration's effects. A `.forEach(...)` call is chapter 10's `E0816`. A method generic parameter — `U` of `map` and `fold` — is determined from the call's own text, the function argument's return type, under chapter 10's single-direction rule; an argument that determines nothing is `E0827`.
+
+#### Scenario: A lazy chain transforms in order
+
+- **WHEN** `[1, 2, 3].iterator().map(|x| x * 10).collect()` runs
+- **THEN** the result is the `List<Int64>` holding `10`, `20`, `30` — each element flows once through the map layer, drawn on demand, with no intermediate collection
+
+#### Scenario: An effectful closure does not fit
+
+- **WHEN** `names.iterator().map(|s| save(s))` appears and `save` declares `effect io`
+- **THEN** the compiler rejects it with `E1402:` function value effect set does not match the expected type's — `f`'s parameter type is a pure function type; the side effect belongs to a for statement
+
+#### Scenario: reduce on an empty receiver yields None
+
+- **WHEN** `reduce(f)` is called on an empty or exhausted iterator
+- **THEN** the result is `None` — the seed would be the first element, and there is none
+
+#### Scenario: any stops at the first deciding element
+
+- **WHEN** `any(f)` is called and an element satisfies `f`
+- **THEN** the call returns `true` without drawing further elements; `all` mirrors it on the first failing element
+
+#### Scenario: The receiver stays one live handle
+
+- **WHEN** `let derived = it.map(f)` is followed by a `next` call on the binding `it` itself
+- **THEN** that call draws the object's next element — one sequence, whichever handle advances it; `derived` never sees the drawn element
+
+#### Scenario: forEach does not exist
+
+- **WHEN** `xs.iterator().forEach(|x| put(x))` appears
+- **THEN** the compiler rejects it with `E0816:` no such member on the receiver's type; side effects over a sequence are the for statement's
+
+#### Scenario: U comes from the call's own text
+
+- **WHEN** `names.iterator().map(|n| n.size()).count()` appears
+- **THEN** `U` is `Int64`, determined by the function argument's return type under chapter 10's single-direction rule; no expected-type inference participates
 
 ### Requirement: The Iterable interface
 
@@ -74,7 +117,7 @@ The standard library declares the generic interface `pub interface Iterable<T> {
 
 ### Requirement: The for-loop protocol
 
-The iterable expression of chapter 5's for statement MUST have a type implementing `Iterable<T>` for some element type `T`; every other type is rejected with `E0901`. The rule is single-form: an `Iterator<T>` alone is not a for iterable — a bare iterator is consumed by explicit `next` calls, or wrapped once the standard library provides adapters — and no interface other than `Iterable` makes a type iterable. Execution: the iterable expression is evaluated exactly once; `iterator` is obtained exactly once; `next` is called repeatedly; each `Some(element)` executes the body once with the element bound under chapter 5's name rules; the first `None` ends the loop. The element type `T` is the loop binding's type. The types ratified so far carry two builtin implementations only — `String` over `Rune` and `Range<T>` over `T` (String iteration, The Range type); the standard library's collection types arrive with the collections chapter.
+The iterable expression of chapter 5's for statement MUST have a type implementing `Iterable<T>` for some element type `T`; every other type is rejected with `E0901`. The rule is single-form: an `Iterator<T>` alone is not a for iterable — a bare iterator is consumed by explicit `next` calls, or wrapped once the standard library provides adapters — and no interface other than `Iterable` makes a type iterable. Execution: the iterable expression is evaluated exactly once; `iterator` is obtained exactly once; `next` is called repeatedly; each `Some(element)` executes the body once with the element bound under chapter 5's name rules; the first `None` ends the loop. The element type `T` is the loop binding's type. The types ratified so far carry the builtin implementations — `String` over `Rune` and `Range<T>` over `T` (String iteration, The Range type) — and the collections chapter's `List`, `Map`, and `Set` are iterables over their elements and entries on this protocol.
 
 #### Scenario: A non-iterable expression is rejected
 
@@ -141,7 +184,7 @@ The iterable expression of chapter 5's for statement MUST have a type implementi
 
 ### Requirement: Iterable implementer obligations
 
-Implementations of `Iterable` answer the ownership categories of chapter 8. A resource-category type MUST NOT implement `Iterable` — the rejection is `E0903`: an iterator holds a live view of its collection across the loop's executions, and a handle whose reach outlives the single deterministic release point a resource's discipline depends on is not honest; traversing a resource's contents materializes them first — one explicit read into a collection, then iterate the collection. A value-category iterable iterates honestly by copy: chapter 8's value semantics apply — `iterator` receives its own copy of the receiver, and iterating never consumes or mutates the original binding. The gc collections' snapshot-or-cursor obligations belong to the collections chapter that ratifies those types; this chapter fixes the protocol they rest on.
+Implementations of `Iterable` answer the ownership categories of chapter 8. A resource-category type MUST NOT implement `Iterable` — the rejection is `E0903`: an iterator holds a live view of its collection across the loop's executions, and a handle whose reach outlives the single deterministic release point a resource's discipline depends on is not honest; traversing a resource's contents materializes them first — one explicit read into a collection, then iterate the collection. A value-category iterable iterates honestly by copy: chapter 8's value semantics apply — `iterator` receives its own copy of the receiver, and iterating never consumes or mutates the original binding. The gc collections' iteration semantics are fixed by the collections chapter — a snapshot at the `iterator` call — and this chapter fixed the protocol they rest on.
 
 #### Scenario: A resource impl is rejected
 
@@ -169,7 +212,7 @@ The iterable-protocols chapter owns registry segment `E0900`–`E0999` declared 
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–11. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Iterator combinators and the standard library's collection types are annotated as pending their chapters.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–11. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. The combinator examples below reach into chapter 12's closures and chapter 17's `List`.
 
 ### Option and iteration
 
@@ -235,19 +278,15 @@ for (a, b) in names { }                // E0501: the element type String
                                        // is not a tuple
 ```
 
-### Pending later chapters
+### Combinators
 
 ```we
-// Iterator combinators (map, filter, and the lazy and eager families)
-// take function values — chapter 12's closures carry them — and
-// arrive with their owning change as default methods of Iterator; the
-// collection types (List, Map, Set) arrive with the collections
-// chapter on this chapter's protocol:
-//
-// let out = names.iterator()
-//     .filter(|n| n.size() > 2)
-//     .map(|n| n.toUpper())
-//     .collect()
+let out = names.iterator()
+    .filter(|n| n.size() > 2)  // lazy: a layer over the receiver
+    .map(|n| n.toUpper())      // lazy: U comes from this call's text
+    .collect()                 // List<String>: eager — the chain ends
+
+let total = [1, 2, 3].iterator().fold(0, |acc, x| acc + x)   // 6
 ```
 
 ## Terminology

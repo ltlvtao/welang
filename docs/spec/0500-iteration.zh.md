@@ -65,7 +65,7 @@ for 语句是 `for name in expr block`：`for` 与 `in` 是第 1 章关键字，
 
 ## 示例（非权威）
 
-下面的示例只用第 1–5 章及其所依托的可迭代协议已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。迭代器组合子标注为待其所属变更；可迭代协议归第 11 章。
+下面的示例只用第 1–5 章及其所依托的可迭代协议已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。下方组合子示例触及第 11 章的 Iterator 默认方法，由第 12 章的闭包承载。
 
 ### 区间上的 for
 
@@ -111,17 +111,14 @@ let bad = a..b..c           // E0104: chained non-associative operator
 let open = ..5              // E0105: both range bounds are required
 ```
 
-### 待组合子变更
+### 区间上的组合子
 
 ```we
-// 可迭代协议归第 11 章：String 于 Rune、区间于其整数类型、
-// for 循环协议本身。组合子取函数值——第 12 章的闭包承载它们——
-// 仍随其所属变更到来：
-//
-// let out = items.iterator()
-//     .filter(|x| x > 2)
-//     .map(|x| x * 10)
-//     .collect()
+let out = (0..10)
+    .iterator()                 // chapter 11: Range implements Iterable
+    .filter(|x| x > 2)          // lazy layers — no intermediate collection
+    .map(|x| x * 10)
+    .collect()                  // List<Int64>: 30, 40, 50, 60, 70, 80, 90
 ```
 
 ## 术语对照

@@ -87,17 +87,17 @@ owner = "1000-interfaces"
 # (receivers, associated types, impl completeness/uniqueness/
 # locality, receiver field assignment, member resolution), Dyn
 # and derive errors, generic declaration/reference/inference and
-# where-clause errors. E0826's rule is ratified with no nesting
-# surface yet. E0832-E0899 reserved for amendments (Shareable,
-# codecs).
+# where-clause errors. E0826's rule binds the method-clause nesting
+# surface ratified with chapter 17. E0832-E0899 reserved for
+# amendments (Shareable, codecs).
 
 [segments."E0900-E0999"]
 domain = "iterable protocols"
 owner = "1100-iterables"
 # Intra-segment structure (chapter 11): E0900 boundary reserve,
 # E0901-E0904 for-legality / range-operand / resource-impl /
-# Iter-binding errors. E0905-E0999 reserved for amendments
-# (combinators, collections).
+# Iter-binding errors. E0905-E0999 reserved for later
+# iterable-protocol amendments.
 
 [segments."E1000-E1099"]
 domain = "function types and closures"
@@ -105,7 +105,7 @@ owner = "1200-fn-types"
 # Intra-segment structure (chapter 12): E1000 boundary reserve,
 # E1001-E1004 bare-closure-expectation / resource-capture /
 # captured-value-assignment / generic-fn-name errors.
-# E1005-E1099 reserved for amendments (combinators, collections).
+# E1005-E1099 reserved for later fn-type amendments.
 
 [segments."E1100-E1199"]
 domain = "resources"
@@ -143,7 +143,14 @@ owner = "1600-effects"
 # E1406-E1499 reserved for amendments (test-virtualization-era codes,
 # FFI effect declarations).
 
-[segments."E1500-E9999"]
+[segments."E1500-E1599"]
+domain = "collections"
+owner = "1700-collections"
+# Intra-segment structure (chapter 17): E1500 boundary reserve,
+# E1501 empty-list-literal expectation error, E1502-E1599 reserved
+# for amendments of the collections chapter.
+
+[segments."E1600-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -294,8 +301,8 @@ allocated = "2026-09-03"
 [diagnostic.E0105]
 severity = "error"
 title = "unexpected token"
-description = "At the current parse position the token fits no ratified production, for example a stray closing bracket, or a construct whose syntax belongs to a chapter not yet ratified (an index form list[0] before the collections chapter ratifies index syntax). The message names the token and the productions considered at that position."
-remediation = "Check the construct against the ratified surface forms of the grammar chapter; if the syntax belongs to an unratified chapter, re-express it with ratified forms until that chapter lands."
+description = "At the current parse position the token fits no ratified production, for example a stray closing bracket, or a construct that fits no ratified form anywhere in the language (an index form list[0] - no production holds it; indexing is by the named access methods of the collections chapter). The message names the token and the productions considered at that position."
+remediation = "Check the construct against the ratified surface forms of the grammar chapter; a construct no chapter ratifies - bracketed indexing among them - is re-expressed with ratified forms, for indexing the named access methods."
 owner = "0200-grammar"
 requirement = "Grammar diagnostics segment"
 allocated = "2026-09-03"
@@ -627,7 +634,7 @@ allocated = "2026-09-04"
 [diagnostic.E0808]
 severity = "error"
 title = "impl method signature mismatches the interface method"
-description = "A defined impl method differs from its interface method in name, receiver mutability, parameter count or types in order, or return type (parameter names may differ). Fires under: Impl declarations."
+description = "A defined impl method differs from its interface method in name, its method generic clause (names and arity), receiver mutability, parameter count or types in order, or return type (parameter names may differ). Fires under: Impl declarations."
 remediation = "Align the definition with the interface signature; the receiver mutability is part of the contract."
 owner = "1000-interfaces"
 requirement = "Impl declarations"
@@ -789,7 +796,7 @@ allocated = "2026-09-04"
 [diagnostic.E0826]
 severity = "error"
 title = "generic parameter shadows an enclosing parameter"
-description = "A generic clause redeclares a name of an enclosing clause. No nesting context is ratified at chapter 10 (generic methods are not ratified); the rule binds from the moment one arrives. Fires under: Generic parameter declarations."
+description = "A generic clause redeclares a name of an enclosing clause. Method generic clauses are the ratified nesting surface - a method clause inside its declaration's clause; nested declarations are not ratified. The rule binds wherever a clause nests. Fires under: Generic parameter declarations."
 remediation = "Rename the inner parameter; shadowing across clauses is rejected even where nesting exists."
 owner = "1000-interfaces"
 requirement = "Generic parameter declarations"
@@ -1090,4 +1097,13 @@ description = "A top-level let initializer calls an effectful function. Initiali
 remediation = "Move the work into main, or initialize from a pure computation over constants."
 owner = "1600-effects"
 requirement = "Effect checking at module initialization"
+allocated = "2026-09-04"
+
+[diagnostic.E1501]
+severity = "error"
+title = "empty list literal has no expected type"
+description = "An empty list literal `[]` appears at a position with no expected type: an unannotated binding, or any slot whose type no declaration fixes. A non-empty literal's element type comes from its elements; an empty one has nothing to infer from, and the language infers nothing (chapter 0, Principle 1) - the expected type is the element type's only source. Fires under: List literals."
+remediation = "Write the annotation (`let xs: List<String> = []`), place the literal where a parameter or declared return fixes the type, or start the list with elements."
+owner = "1700-collections"
+requirement = "List literals"
 allocated = "2026-09-04"

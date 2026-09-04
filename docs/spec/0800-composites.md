@@ -360,14 +360,17 @@ fn trim(a: String) -> String {
 }
 ```
 
-### Pending later chapters
+### Landed and pending later chapters
 
 ```we
-// Ref/Shared with the concurrency chapters; List, indexing, and the
-// other collection types with the collections chapter — methods,
-// interfaces, impl, and derives landed with chapter 10:
+// The collection types landed with the collections chapter — gc
+// composites under this chapter's aliasing, access by named methods,
+// iteration a snapshot at the iterator call:
 //
 // let xs: List<Int64> = build()
+//
+// Ref/Shared still arrive with the concurrency chapters; methods,
+// interfaces, impl, and derives landed with chapter 10.
 ```
 
 ## Terminology

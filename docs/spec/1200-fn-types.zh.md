@@ -180,7 +180,6 @@ fn 类型是 `fn(T1, ..., Tn) [effect-segment] -> T`：`fn` 关键字、圆括�
 - **THEN** 重赋作用于活绑定；每次调用见到上一次调用的结果
 
 ### Requirement: 函数类型诊断段位
-
 fn-types 章拥有 `docs/spec/diagnostics.toml` `[segments]` 声明的注册表段位 `E1000`–`E1099`。分配：`E1001` 裸参闭包无期望 fn 类型、`E1002` resource 绑定被闭包捕获、`E1003` 对被捕获 value 类别绑定赋值、`E1004` 泛型函数名用于值位置。`E1000` 与 `E1005`–`E1099` 为本章修订保留。触发语义在本章 Requirements；条目在注册表。
 
 #### Scenario: fn-types 码被发出
@@ -190,12 +189,12 @@ fn-types 章拥有 `docs/spec/diagnostics.toml` `[segments]` 声明的注册表�
 
 #### Scenario: 后续变更需要本段位的码
 
-- **WHEN** 后续章节批准需要新函数值诊断的规则——组合子变更亦在其列
-- **THEN** 其变更于同一变更内在 `E1000`–`E1099` 中扩展注册表，或认领自己的段位
+- **WHEN** 后续章节批准需要新函数值诊断的规则
+- **THEN** 其变更于同一变更内在 `E1000`–`E1099` 中扩展注册表，或认领自己的段位——组合子变更取了第二条路，其纯度规则乘第 16 章的 `E1402`
 
 ## 示例（非权威）
 
-下面的示例只用第 1–12 章与第 16 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。迭代器组合子、泛型函数实例化与方法值标注为待其各自变更。
+下面的示例只用第 1–12 章与第 16 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。泛型函数实例化与方法值标注为待其各自变更。
 
 ### 函数类型与函数值
 
@@ -281,15 +280,16 @@ let g2 = Circle                          // E0704: payloaded variant
 ### 待后续变更
 
 ```we
-// Iterator combinators arrive with their owning change as default
-// methods of Iterator; generic instantiation `map<Int64>` and generic
-// methods with chapter 10's own amendment; method values, if ever,
-// with this chapter's amendment:
+// Iterator combinators landed with the collections change — default
+// methods of Iterator, their f parameters pure function types (E1402).
+// Method generic clauses landed with the same change's chapter 10
+// amendment; a method call carries no explicit type-argument form —
+// the call's own text determines the arguments (E0827). Generic
+// instantiation of a fn name in value position and method values, if
+// ever, still arrive with this chapter's amendment:
 //
-// let out = names.iterator()
-//     .filter(|n| n.size() > 2)
-//     .map(|n| n.toUpper())
-//     .collect()
+// let parse = fromJson<T>              // E1004 until then
+// let upper = String.toUpper           // method values, if ever
 ```
 
 ## 术语对照

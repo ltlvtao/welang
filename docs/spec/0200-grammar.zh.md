@@ -97,8 +97,7 @@
 - **THEN** 它们经该章节自身范围内的 spec 层变更进入；本章已批准的语句族不因此改变
 
 ### Requirement: 表达式骨架
-
-初等表达式是：标识符、第 1 章批准的字面量、括号表达式 `( e )`——依第 8 章，`( e1, e2, ..., en )` 是元组表达式、`( )` 是 unit 值、括号化单表达式只是分组——以及 record 构造表达式 `TypeRef { field: expr, ... }`（依第 8 章，其头是命名类型引用：PascalCase 标识符或 `module.Name`）。后缀形式是成员访问 `receiver.name`、调用 `expr(args)` 与第 14 章的错误传播后缀 `expr?`，链式左结合；record 上的成员访问依第 8 章指名其字段，被访问名字是字段还是方法由第 10 章的成员名字解析解析。一元前缀运算符是 `!`、`-`、`~`，结合紧于一切二元运算符。关键字引领的表达式形式按归属章节批准：控制流章节批准带 else 的 `if`，match 章节批准 `match`；它们处于 primary/postfix/unary 骨架之外、不修改骨架，且关键字引领的表达式形式只能经其归属章节的 spec 层变更进入。fn-types 章批准闭包形式——关键字引领的 `fn(params) -> type block` 与 `|params| body` 短形式——同样坐落于本骨架之外；其文法、类型化与位置规则归该章。索引语法 `expr[expr]` 延后至集合章节；`[` 与 `]` 仍是词法 token。
+初等表达式是：标识符、第 1 章批准的字面量、括号表达式 `( e )`——依第 8 章，`( e1, e2, ..., en )` 是元组表达式、`( )` 是 unit 值、括号化单表达式只是分组——第 8 章的 record 构造表达式 `TypeRef { field: expr, ... }`（其头是命名类型引用：PascalCase 标识符或 `module.Name`），以及集合章节的列表字面量 `[e1, e2, ..., en]`——与括起行接续的是同一对方括号，在那里持有一个字面量的元素。后缀形式是成员访问 `receiver.name`、调用 `expr(args)` 与第 14 章的错误传播后缀 `expr?`，链式左结合；record 上的成员访问依第 8 章指名其字段，被访问名字是字段还是方法由第 10 章的成员名字解析解析。一元前缀运算符是 `!`、`-`、`~`，结合紧于一切二元运算符。关键字引领的表达式形式按归属章节批准：控制流章节批准带 else 的 `if`，match 章节批准 `match`；它们处于 primary/postfix/unary 骨架之外、不修改骨架，且关键字引领的表达式形式只能经其归属章节的 spec 层变更进入。fn-types 章批准闭包形式——关键字引领的 `fn(params) -> type block` 与 `|params| body` 短形式——同样坐落于本骨架之外；其文法、类型化与位置规则归该章。索引语法 `expr[expr]` 不是本语言的形式：集合章节批准的索引唯命名方法，且该政策在那里的修订是括号索引产生式的唯一通路——本骨架不持有任何索引产生式。`[` 与 `]` 仍是词法 token。
 
 #### Scenario: 后缀链从左到右分组
 
@@ -129,6 +128,11 @@
 
 - **WHEN** `User { id: UserId(1), name: "Ada" }` 出现在表达式位置
 - **THEN** 它是第 8 章构造规则下的初等表达式；后缀如同接在任何初等表达式上一样接在它上面成链
+
+#### Scenario: 列表字面量是初等表达式
+
+- **WHEN** `[1, 2, 3]` 出现在表达式位置
+- **THEN** 它是集合章节规则下的初等表达式；后缀如同接在任何初等表达式上一样接在它上面成链
 
 ### Requirement: 运算符优先级与结合性
 
@@ -177,12 +181,11 @@
 - **THEN** 编译器以 `E0104:` chained non-associative operator 拒绝；每个区间必须是单一显式组
 
 ### Requirement: 语法诊断段位
-
 语法章节拥有注册表 `docs/spec/diagnostics.toml` `[segments]` 声明的段位 `E0100`–`E0199`。首批分配：`E0101` 解析歧义、`E0102` 语句以续行 token 起始、`E0103` 赋值不是表达式、`E0104` 链式非结合运算符、`E0105` 意外 token。`E0100` 与 `E0106`–`E0199` 预留。触发语义在本章 Requirements；条目在注册表。进一步分配语法码在同一变更内扩展注册表。
 
 #### Scenario: 某 token 不适配任何已批准产生式
 
-- **WHEN** 当前解析位置的 token 不适配任何已批准产生式——例如索引形式 `list[0]` 而索引语法尚未批准，或孤立的闭括号
+- **WHEN** 当前解析位置的 token 不适配任何已批准产生式——例如孤立的闭括号，或索引形式 `list[0]`——一个本语言任何产生式都不持有的构造
 - **THEN** 编译器以 `E0105:` unexpected token 拒绝，具名该 token 与该位置考虑过的产生式
 
 #### Scenario: 某语法码被发出
@@ -277,8 +280,9 @@ let r = a & mask == flag        // (a & mask) == flag：位运算更紧
 let ok = a < b < c              // E0104: chained non-associative operator
 let good = (a < b) && (b < c)   // 显式分组即拆分形式
 
-let first = list[0]             // E0105: 索引语法尚未批准；
-                                // 集合章节将加入
+let first = list.get(0)         // indexing is by named methods; a
+                                // bracketed index never parses —
+                                // list[0] is E0105: unexpected token
 ```
 
 ## 术语对照

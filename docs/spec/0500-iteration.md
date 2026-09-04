@@ -65,7 +65,7 @@ The range operator `..` is a binary operator, the loosest level of chapter 2's p
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–5 and the iterable protocols they rest on. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Iterator combinators are annotated as pending their owning change; the iterable protocols are chapter 11's.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–5 and the iterable protocols they rest on. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. The combinator example below reaches into chapter 11's Iterator default methods, carried by chapter 12's closures.
 
 ### for over a range
 
@@ -111,18 +111,14 @@ let bad = a..b..c           // E0104: chained non-associative operator
 let open = ..5              // E0105: both range bounds are required
 ```
 
-### pending the combinator change
+### Combinators over a range
 
 ```we
-// The iterable protocols are chapter 11's: String over Rune, ranges
-// over their integer type, and the for-loop protocol itself. The
-// combinators take function values — chapter 12's closures carry
-// them — and still arrive with their owning change:
-//
-// let out = items.iterator()
-//     .filter(|x| x > 2)
-//     .map(|x| x * 10)
-//     .collect()
+let out = (0..10)
+    .iterator()                 // chapter 11: Range implements Iterable
+    .filter(|x| x > 2)          // lazy layers — no intermediate collection
+    .map(|x| x * 10)
+    .collect()                  // List<Int64>: 30, 40, 50, 60, 70, 80, 90
 ```
 
 ## Terminology

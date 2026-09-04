@@ -145,7 +145,7 @@ A block with a value has the type of its final expression item; a block without 
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–7 and the iterable protocols they rest on. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Fn types and the conversion/wrapping method inventory are annotated as pending their chapters; string iteration is chapter 11's.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–7 and the iterable protocols they rest on. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. The conversion and wrapping method inventory is annotated as pending its owning change; string iteration is chapter 11's, the collection types chapter 17's.
 
 ### Literals and defaults
 
@@ -233,16 +233,15 @@ for c in name { step(c) }      // chapter 11: builtin Iterable<Rune>;
                                 // c binds each code point in order
 ```
 
-### Pending later chapters
+### Landed later chapters
 
 ```we
-// Fn types landed with the function-types chapter:
+// Fn types landed with the function-types chapter; the collection
+// types (List among them) landed with the collections chapter — the
+// generic application form they use is chapter 10's, the names are
+// prelude-visible:
 //
 // let f: fn(Int64) -> Int64 = square
-//
-// The collection types (List among them) arrive with the collections
-// chapter — the generic application form they use is chapter 10's:
-//
 // let ids: List<UserId> = build()
 // fn forEach(items: List<Int64>) { }
 ```
