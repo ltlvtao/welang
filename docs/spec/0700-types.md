@@ -2,7 +2,7 @@
 
 ### Requirement: Base type inventory
 
-The base types are a closed set of thirteen: the checked integers `Int8` `Int16` `Int32` `Int64` `UInt8` `UInt16` `UInt32` `UInt64`, the IEEE 754 floats `Float32` `Float64`, `Bool`, `String` (an immutable UTF-8 byte sequence; logical iteration yields `Rune`, whose protocol is ratified by the iterable-protocols chapter), `Bytes` (a byte sequence), and `Rune` (a single Unicode code point, U+0000..U+10FFFF). `Never` and `()` do not exist yet: the bottom type arrives with the sum-types chapter and the unit type with the composite-types chapter. Adding a base type is a spec-layer change amending this inventory.
+The base types are a closed set of thirteen: the checked integers `Int8` `Int16` `Int32` `Int64` `UInt8` `UInt16` `UInt32` `UInt64`, the IEEE 754 floats `Float32` `Float64`, `Bool`, `String` (an immutable UTF-8 byte sequence; logical iteration yields `Rune`, whose protocol is ratified by the iterable-protocols chapter), `Bytes` (a byte sequence), and `Rune` (a single Unicode code point, U+0000..U+10FFFF). `Never` and `()` are not members of this inventory: the bottom type is ratified by the sum-types chapter (chapter 9) and the unit type by the composite-types chapter (chapter 8); each is a type of its own kind, not a base type. Adding a base type is a spec-layer change amending this inventory.
 
 #### Scenario: A base type name denotes its type
 
@@ -130,7 +130,7 @@ A block with a value has the type of its final expression item; a block without 
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–7. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Composite types, protocols, and the conversion/wrapping method inventory are annotated as pending their chapters.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–7. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Protocols, generics, and the conversion/wrapping method inventory are annotated as pending their chapters.
 
 ### Literals and defaults
 
@@ -196,9 +196,6 @@ fn parse(text: String) -> Int64 {   // named base types
 
 let u: user.User = user.find(1)     // module-qualified reference per
                                     // chapter 6's import names
-
-let pair: (Int64, Int64) = ...      // E0105: tuple types arrive with the
-                                    // composite-types chapter
 ```
 
 ### Conditions are Bool
@@ -217,12 +214,10 @@ match next() {
 ### Pending later chapters
 
 ```we
-// Never arrives with sum types; () with composites; record/newtype
-// with the ownership slice; List<T> and fn types with generics and
-// the function-types slice; String's logical iteration protocol
-// (for c in str yielding Rune) with the iterable-protocols chapter:
+// List<T> and fn types arrive with the generics and function-types
+// slices; String's logical iteration protocol (for c in str yielding
+// Rune) with the iterable-protocols chapter:
 //
-// record Point { x: Int64, y: Int64 }
 // let ids: List<UserId> = build()
 // fn forEach(items: List<Int64>) { }
 ```

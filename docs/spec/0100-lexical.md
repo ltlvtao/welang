@@ -51,9 +51,10 @@ fn let var pub import as mut
 if else return match for in while loop break continue defer
 true false foreign
 record byval byres newtype with
+type
 ```
 
-Adding a keyword is a spec-layer change that amends this list. The list contains only words whose syntax is or will be ratified by a chapter; feature-specific words (effects, types, concurrency, testing) join the list together with the chapter that ratifies them. The composite-types chapter added `record byval byres newtype with` in its own change — a breaking change recorded as such there: those five words were identifiers before and are keywords from this list's amendment on.
+Adding a keyword is a spec-layer change that amends this list. The list contains only words whose syntax is or will be ratified by a chapter; feature-specific words (effects, types, concurrency, testing) join the list together with the chapter that ratifies them. The composite-types chapter added `record byval byres newtype with` in its own change — a breaking change recorded as such there: those five words were identifiers before and are keywords from this list's amendment on. The sum-types chapter added `type` in its own change, recorded the same way: the word was an identifier before and is a keyword from this list's amendment on.
 
 #### Scenario: A keyword is used as a name
 
@@ -69,6 +70,11 @@ Adding a keyword is a spec-layer change that amends this list. The list contains
 
 - **WHEN** `record`, `byval`, `byres`, `newtype`, or `with` appears where an identifier is required (for example a variable named `record`)
 - **THEN** the parser reports a syntax diagnostic naming the reserved word; the five are keywords under the composite-types chapter's amendment
+
+#### Scenario: The type keyword is reserved
+
+- **WHEN** `type` appears where an identifier is required (for example a variable named `type`)
+- **THEN** the parser reports a syntax diagnostic naming the reserved word; the word is a keyword under the sum-types chapter's amendment
 
 ### Requirement: Numeric literals
 

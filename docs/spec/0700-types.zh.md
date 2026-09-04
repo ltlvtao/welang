@@ -2,7 +2,7 @@
 
 ### Requirement: 基础类型清单
 
-基础类型是十三个成员的封闭集：检查整数 `Int8` `Int16` `Int32` `Int64` `UInt8` `UInt16` `UInt32` `UInt64`，IEEE 754 浮点 `Float32` `Float64`，`Bool`，`String`（不可变 UTF-8 字节序列；逻辑迭代产出 `Rune`，其协议由可迭代协议章节批准），`Bytes`（字节序列），以及 `Rune`（单个 Unicode 码点，U+0000..U+10FFFF）。`Never` 与 `()` 尚不存在：底类型随 sum 类型章节到达，unit 类型随复合类型章节到达。新增基础类型是修订本清单的规范层变更。
+基础类型是十三个成员的封闭集：检查整数 `Int8` `Int16` `Int32` `Int64` `UInt8` `UInt16` `UInt32` `UInt64`，IEEE 754 浮点 `Float32` `Float64`，`Bool`，`String`（不可变 UTF-8 字节序列；逻辑迭代产出 `Rune`，其协议由可迭代协议章节批准），`Bytes`（字节序列），以及 `Rune`（单个 Unicode 码点，U+0000..U+10FFFF）。`Never` 与 `()` 不是本清单的成员：底类型由 sum 类型章节（第 9 章）批准，unit 类型由复合类型章节（第 8 章）批准；二者各自成类，不是基础类型。新增基础类型是修订本清单的规范层变更。
 
 #### Scenario: 基础类型名指名其类型
 
@@ -130,7 +130,7 @@ We 没有隐式转换。不同类型的操作数 MUST NOT 组合：混合整数�
 
 ## 示例（非权威）
 
-下面的示例只用第 1–7 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。复合类型、协议与转换/回绕方法清单标注为待其各自章节。
+下面的示例只用第 1–7 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。协议、泛型与转换/回绕方法清单标注为待其各自章节。
 
 ### 字面量与默认
 
@@ -196,9 +196,6 @@ fn parse(text: String) -> Int64 {   // named base types
 
 let u: user.User = user.find(1)     // module-qualified reference per
                                     // chapter 6's import names
-
-let pair: (Int64, Int64) = ...      // E0105: tuple types arrive with the
-                                    // composite-types chapter
 ```
 
 ### 条件是 Bool
@@ -217,12 +214,10 @@ match next() {
 ### 待后续章节
 
 ```we
-// Never arrives with sum types; () with composites; record/newtype
-// with the ownership slice; List<T> and fn types with generics and
-// the function-types slice; String's logical iteration protocol
-// (for c in str yielding Rune) with the iterable-protocols chapter:
+// List<T> and fn types arrive with the generics and function-types
+// slices; String's logical iteration protocol (for c in str yielding
+// Rune) with the iterable-protocols chapter:
 //
-// record Point { x: Int64, y: Int64 }
 // let ids: List<UserId> = build()
 // fn forEach(items: List<Int64>) { }
 ```

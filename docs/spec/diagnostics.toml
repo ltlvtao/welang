@@ -40,8 +40,10 @@ domain = "match and patterns"
 owner = "0400-match"
 # Intra-segment structure (chapter 4): E0300 boundary reserve,
 # E0301-E0302 match form errors (arm count, or-pattern bindings),
-# E0303-E0399 reserved for typing-level match checks (exhaustiveness,
-# guard coverage, arm agreement) entering via amendments.
+# E0303-E0307 typing-level match checks (variant pattern resolution,
+# payload arity, exhaustiveness, guard fallback, unreachable arms)
+# entered via the sum-types chapter's paired amendment, E0308-E0399
+# reserved for later amendments.
 
 [segments."E0400-E0499"]
 domain = "declarations and modules"
@@ -69,7 +71,15 @@ owner = "0800-composites"
 # mismatch, dropped non-unit value, resource update), E0607-E0699
 # reserved for amendments of the composites chapter.
 
-[segments."E0700-E9999"]
+[segments."E0700-E0799"]
+domain = "sum types and the bottom type"
+owner = "0900-sum-types"
+# Intra-segment structure (chapter 9): E0700 boundary reserve,
+# E0701-E0704 sum-declaration errors (payload arity, value-sum
+# payload category, Never position, bare payloaded constructor),
+# E0705-E0799 reserved for amendments of the sum-types chapter.
+
+[segments."E0800-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -157,7 +167,7 @@ allocated = "2026-09-03"
 [diagnostic.E0011]
 severity = "error"
 title = "type name must be PascalCase"
-description = "A type-name binding is not PascalCase. Naming conventions are errors, not style hints, so every We codebase reads with one convention."
+description = "A type-name binding is not PascalCase. Sum type names and variant names follow this rule (chapter 9), and the rule is what makes a bare PascalCase pattern always a variant reference, never a binding. Naming conventions are errors, not style hints, so every We codebase reads with one convention."
 remediation = "Rename the type to PascalCase (for example UserRecord) and update references; conventions are enforced at the declaration."
 owner = "0100-lexical"
 requirement = "Naming conventions"
@@ -280,6 +290,51 @@ owner = "0400-match"
 requirement = "Or-pattern binding consistency"
 allocated = "2026-09-03"
 
+[diagnostic.E0303]
+severity = "error"
+title = "pattern names no variant of the scrutinee's type"
+description = "A variant pattern's Name is not a declared variant of the scrutinee's sum type (for example `Triangle(r)` against a Shape declaring no Triangle). Variant patterns resolve lexically against the declaration; there is no nearest-match search. Fires under: Pattern set."
+remediation = "Spell a declared variant of the scrutinee's type, or match a value of the type that declares the variant; the declaration, not the pattern, fixes the variant set."
+owner = "0400-match"
+requirement = "Pattern set"
+allocated = "2026-09-04"
+
+[diagnostic.E0304]
+severity = "error"
+title = "variant pattern payload arity mismatch"
+description = "A variant pattern's sub-pattern count differs from the declared payload arity (for example `Circle(a, b)` with `Circle(Float64)` declared). Payload elements bind position-wise, so the counts must match exactly. Fires under: Pattern set."
+remediation = "Write one sub-pattern per declared payload type; to group payloads, declare the variant with a record payload."
+owner = "0400-match"
+requirement = "Pattern set"
+allocated = "2026-09-04"
+
+[diagnostic.E0305]
+severity = "error"
+title = "match is not exhaustive"
+description = "The unguarded arms' patterns together do not match every value of the scrutinee's type: a variant of the scrutinee's sum type is not covered (the message names it), or the scrutinee's type does not enumerate its values (base types, including Bool, are never exhausted by literals) and no wildcard arm stands. Fires under: Exhaustiveness."
+remediation = "Cover the missing variant, or add an unguarded wildcard arm `_ => ...`; literal arms never replace a wildcard on a base type."
+owner = "0400-match"
+requirement = "Exhaustiveness"
+allocated = "2026-09-04"
+
+[diagnostic.E0306]
+severity = "error"
+title = "guarded match without an unguarded exhaustive fallback"
+description = "A match holds guarded arms and its unguarded arms alone are not exhaustive. Guards refine arms but never prove coverage, so an unguarded exhaustive fallback must remain: adding a guard is purely a refinement, never a weakening. Fires under: Exhaustiveness."
+remediation = "Keep or add an unguarded arm set that covers every value by itself, typically a wildcard `_ => ...` fallback after the guarded refinements."
+owner = "0400-match"
+requirement = "Exhaustiveness"
+allocated = "2026-09-04"
+
+[diagnostic.E0307]
+severity = "error"
+title = "unreachable match arm"
+description = "An arm can never match: it follows a wildcard arm, or its every value is already covered by earlier arms, as a variant listed twice. Statically decidable dead arms are rejected, not silently kept (v0.8 had no such check; this is a deliberate tightening). Fires under: Exhaustiveness."
+remediation = "Delete the unreachable arm, or reorder so the general arm (typically the wildcard) comes last."
+owner = "0400-match"
+requirement = "Exhaustiveness"
+allocated = "2026-09-04"
+
 [diagnostic.E0401]
 severity = "error"
 title = "return outside a function body"
@@ -310,7 +365,7 @@ allocated = "2026-09-03"
 [diagnostic.E0404]
 severity = "error"
 title = "duplicate name in one module"
-description = "Two declarations in one module introduce the same name: an fn name, a top-level let name, a name introduced by an import declaration, a record or newtype name (chapter 8), or one name bound twice in a single pattern (chapter 8). One module has one name space shared by all of these. Fires under: Module name space."
+description = "Two declarations in one module introduce the same name: an fn name, a top-level let name, a name introduced by an import declaration, a record or newtype name (chapter 8), a sum type name or a variant name (chapter 9), or one name bound twice in a single pattern (chapter 8). One module has one name space shared by all of these; a name is never both a function and a variant. Fires under: Module name space."
 remediation = "Rename one of the declarations, or give the import an alias (or drop an existing alias) so the introduced names differ; top-level names must be unique within the module."
 owner = "0600-declarations"
 requirement = "Module name space"
@@ -404,4 +459,40 @@ description = "An update expression's head names a byres record. A resource has 
 remediation = "Change the resource's fields through the mechanisms of the resource and interfaces chapters; resource records are not updatable with `with &`."
 owner = "0800-composites"
 requirement = "Update expressions"
+allocated = "2026-09-04"
+
+[diagnostic.E0701]
+severity = "error"
+title = "variant payload arity above eight"
+description = "A variant declares more than eight payload types. The arity bound, as for tuples, forces naming: the wider the payload, the more it wants to be a record. Fires under: Sum declarations."
+remediation = "Declare the variant with one record payload, which names its fields: `Moved(Point)`."
+owner = "0900-sum-types"
+requirement = "Sum declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E0702]
+severity = "error"
+title = "value sum payload is not of the value category or a base type"
+description = "A byval type declares a variant payload whose type is neither a base type nor of the value ownership category (for example a gc record payload in a value sum). The mirror of value records: a copy is only honest when everything in it is copyable by value. Fires under: Value sums."
+remediation = "Drop byval so the sum is gc, or store value-category/base data in the payload; if reference semantics are needed, the sum is not a value sum."
+owner = "0900-sum-types"
+requirement = "Value sums"
+allocated = "2026-09-04"
+
+[diagnostic.E0703]
+severity = "error"
+title = "Never in a non-return annotation position"
+description = "Never annotates a variable binding, field, parameter, variant payload, or tuple element. The bottom type has no values, so it describes only computations that never produce one: it is legal solely as a declared function return type. Fires under: The bottom type."
+remediation = "Drop the Never annotation, or move it to a function's return type where a non-producing path is genuinely declared."
+owner = "0900-sum-types"
+requirement = "The bottom type"
+allocated = "2026-09-04"
+
+[diagnostic.E0704]
+severity = "error"
+title = "payloaded variant constructor used without arguments"
+description = "A variant declared with payload appears as a bare name in value position (for example `let g = Circle`). The call form `Circle(...)` constructs; whether the bare name is a first-class constructor value is the function-types chapter's question and is not ratified yet. Fires under: Variant constructors."
+remediation = "Construct with the payload (`Circle(1.0)`); first-class constructor values arrive, if at all, with the function-types chapter."
+owner = "0900-sum-types"
+requirement = "Variant constructors"
 allocated = "2026-09-04"
