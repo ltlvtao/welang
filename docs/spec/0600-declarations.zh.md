@@ -2,7 +2,7 @@
 
 ### Requirement: 文件结构与模块同一性
 
-源文件即模块。文件顶层是顶层项的序列：import 声明、fn 声明、依第 8 章的 record 与 newtype 声明、依第 9 章的 sum 类型声明、依第 10 章的接口声明与 impl 块、顶层 let 绑定。各项次序任意；排序约定是格式化器的事，不是文法的事。语句与表达式 MUST NOT 作为顶层项出现——它们只存在于块内——不适配任何项产生式的顶层 token 序列 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。模块名是按第 1 章命名约定指名它的点分小写路径；路径依第 15 章的映射解析到文件——源根下的目录嵌套、保留的 `std` 段、依赖缓存。
+源文件即模块。文件顶层是顶层项的序列：import 声明、fn 声明、依第 8 章的 record 与 newtype 声明、依第 9 章的 sum 类型声明、依第 10 章的接口声明与 impl 块、依第 19 章的 foreign 块、顶层 let 绑定。各项次序任意；排序约定是格式化器的事，不是文法的事。语句与表达式 MUST NOT 作为顶层项出现——它们只存在于块内——不适配任何项产生式的顶层 token 序列 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。模块名是按第 1 章命名约定指名它的点分小写路径；路径依第 15 章的映射解析到文件——源根下的目录嵌套、保留的 `std` 段、依赖缓存。
 
 #### Scenario: 一个文件解析为一个模块
 
@@ -18,6 +18,11 @@
 
 - **WHEN** `import std.io` 出现在块内
 - **THEN** 编译器以 `E0105:` unexpected token 拒绝；import 只作为顶层项存在
+
+#### Scenario: foreign 块是顶层项
+
+- **WHEN** 源文件在其 import、fn 声明与顶层 let 绑定之间持有 `foreign "c" { ... }`
+- **THEN** 该块依第 19 章解析为一个顶层项；任何块内的 foreign 块在那里被拒绝（`E1702`），其声明的条目加入模块的单一名字空间
 
 ### Requirement: import 声明
 
@@ -40,7 +45,7 @@ import 声明是 `import path` 或 `import path as name`。path MUST 是点分�
 
 ### Requirement: fn 声明
 
-fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可选前缀 `pub`。名字是第 1 章命名约定下的标识符（`E0012`）。参数列表是零或多个以逗号分隔的 `name: type` 对；每个参数 MUST 携带类型注解——裸参数名不适配任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，消息具名 `name: type` 产生式。`->` 后声明的返回类型表示函数产出值；其缺失表示不产出。填充注解槽的类型文法由类型章节批准。泛型参数由第 10 章批准：`fn name<T1, ..., Tk>(params)` 把子句携带于名字与参数列表之间，where 子句可尾随签名于体之前；唯一的裸参数例外是第 10 章的方法接收者——impl 块内第一个参数是 `self` 或 `mut self`，裸写，其类型由 impl 头固定。效果段由第 16 章批准：fn 声明可在参数列表与箭头或体之间携带 `effect tag1 tag2 ...`，该段参与的检查归该章。`mut` 参数、foreign 声明由其归属章节批准。
+fn 声明是 `fn name(params) block` 或 `fn name(params) -> type block`，可选前缀 `pub`。名字是第 1 章命名约定下的标识符（`E0012`）。参数列表是零或多个以逗号分隔的 `name: type` 对；每个参数 MUST 携带类型注解——裸参数名不适配任何产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝，消息具名 `name: type` 产生式。`->` 后声明的返回类型表示函数产出值；其缺失表示不产出。填充注解槽的类型文法由类型章节批准。泛型参数由第 10 章批准：`fn name<T1, ..., Tk>(params)` 把子句携带于名字与参数列表之间，where 子句可尾随签名于体之前；唯一的裸参数例外是第 10 章的方法接收者——impl 块内第一个参数是 `self` 或 `mut self`，裸写，其类型由 impl 头固定。效果段由第 16 章批准：fn 声明可在参数列表与箭头或体之间携带 `effect tag1 tag2 ...`，该段参与的检查归该章。foreign 声明由第 19 章批准：foreign 块内的 fn 声明是无体的本签名形，且效果段在那里必写。`mut` 参数仍悬于其归属章节。
 
 #### Scenario: 完整签名的函数
 
@@ -234,8 +239,8 @@ fn f() {
 // Module resolution, the cross-module visibility diagnostic, and
 // the main convention landed with chapter 15; generic parameters
 // landed with the interfaces chapter; effect segments landed with
-// chapter 16. mut parameters and foreign blocks are their owning
-// chapters':
+// chapter 16; foreign declarations landed with chapter 19. mut
+// parameters are their owning chapter's:
 //
 // fn read(path: String) effect io -> String
 ```

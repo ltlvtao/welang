@@ -1,0 +1,222 @@
+## ADDED Requirements
+
+### Requirement: The foreign block
+
+A foreign block is a top-level item (chapter 6's amended enumeration) of the form `foreign "c" { items }`: the `foreign` keyword — reserved by chapter 1 since the initial list, its syntax ratified by this chapter — the string literal `"c"` and nothing else in that position, and a chapter 2 block holding foreign function declarations and opaque type declarations per this chapter, nothing else. The string names the interoperation boundary this specification defines — the C ABI, chapter 0's host strategy fixing `foreign "c"` as the one carrier (the Go-backend string of v0.8 is not inherited; Go-ecosystem interop goes through a C bridge in a future decision). Any other string literal in the position is rejected with `E1701:` foreign block's ABI string is not "c". A foreign block appearing anywhere below the top level — inside a function body, inside any nested block — is rejected with `E1702:` foreign block outside the top level. The names a foreign block declares join the module's single name space exactly as ordinary declarations do (`E0404` on duplicates, chapter 6), and each declared item MAY carry `pub`, its reach from importing modules governed by chapter 15 like any pub declaration. A module MAY hold several foreign blocks; the items of all of them share the one name space.
+
+#### Scenario: A foreign block parses as a top-level item
+
+- **WHEN** a module holds `foreign "c" { record Socket { }  fn connect(addr: String) -> Socket effect io }`
+- **THEN** the block parses as one top-level item; `Socket` and `connect` join the module's name space, and `pub` on either item governs its reach as any pub declaration's
+
+#### Scenario: The ABI string is exactly "c"
+
+- **WHEN** `foreign "c" { }` appears at a module's top level
+- **THEN** the block is the interoperation boundary this chapter defines — the empty item list is legal and declares nothing
+
+#### Scenario: Another string is rejected
+
+- **WHEN** `foreign "go" { }` or `foreign "llvm" { }` appears
+- **THEN** the compiler rejects it with `E1701:` foreign block's ABI string is not "c"; the carrier is fixed by chapter 0's host strategy, and extending it is this chapter's spec-layer amendment
+
+#### Scenario: A foreign block below the top level is rejected
+
+- **WHEN** a `foreign "c" { ... }` block appears inside a function body
+- **THEN** the compiler rejects it with `E1702:` foreign block outside the top level; the boundary is declared per module, not per expression
+
+#### Scenario: Duplicate names across blocks are rejected
+
+- **WHEN** one module holds two foreign blocks each declaring `fn open` or a foreign block declaring `record Socket` beside a top-level `record Socket { ... }`
+- **THEN** the compiler rejects the second declaration with `E0404:` duplicate name in one module; a foreign block's names join the one name space
+
+#### Scenario: A foreign block holds only declarations
+
+- **WHEN** `foreign "c" { let x = 1 }` or `foreign "c" { effect gpio }` appears
+- **THEN** the compiler rejects the item under chapter 2's `E0105` — the block holds foreign function declarations and opaque type declarations, nothing else; bindings and effect declarations keep their own top-level forms
+
+### Requirement: Foreign function declarations
+
+Inside a foreign block a function declaration is the chapter 6 signature form with no body: `fn name(params) effect tag1 tag2 ...` or `fn name(params) -> type effect tag1 tag2 ...` — the name under chapter 1's conventions, fully annotated parameters under chapter 6, an optional declared return after `->`, and an effect segment of chapter 16's spelling between the parameter list and the arrow or the declaration's end. The segment is REQUIRED, and this is the boundary's own demand: an ordinary declaration's omitted segment is a pure claim its body verifies (chapter 16), while a foreign declaration has no body — the declaration is the only evidence of the callee's effects there is — so omission is rejected with `E1703:` foreign function declaration without an effect segment, and a pure foreign function writes the bare segment `effect` with no tags, a spelling legal only here, where the claim has no body to check it. A declaration MUST NOT carry a generic parameter clause: `fn name<T>(params) ...` inside a foreign block is rejected with `E1704:` foreign function declaration with a generic clause — the native side knows one signature, and per-application instantiation is a generation story this specification does not ratify; the boundary is monomorphic. A foreign function declares no body, and a body there fits no production (`E0105`, chapter 2). The declared name is an ordinary function name for its calls: calling one is an ordinary call (chapter 16's `E1401` ruling at the call site, chapter 15's `E1304` when unresolved), and the declaration itself is the binding the toolchain chapter resolves to a native symbol — how, is that chapter's, not this one's. The call form is a foreign name's only ratified use: chapter 12's value domain is the top-level fns of chapter 6, and a foreign name in value position fits no production — rejected under chapter 2's `E0105`, the method-value precedent — because a name whose value is a code pointer is the callback question's We-side face, deferred with it (The unchecked remainder); the wrapper closure `|x| abs(x)` is the route until then, its inference ordinary chapter 12 and 16 business.
+
+#### Scenario: A declaration with tags parses
+
+- **WHEN** `fn write(fd: Int64, buf: Bytes) -> Int64 effect io` appears inside `foreign "c" { }`
+- **THEN** the declaration parses with its segment between the parameter list and the arrow's type; the function joins the name space and its calls are checked against the declared set
+
+#### Scenario: A pure declaration writes the bare segment
+
+- **WHEN** `fn abs(x: Int64) -> Int64 effect` appears inside `foreign "c" { }`
+- **THEN** the bare segment — legal only inside a foreign block — states the pure claim explicitly; callers of `abs` owe no effect for the call
+
+#### Scenario: A declaration without a segment is rejected
+
+- **WHEN** `fn dial(addr: String) -> Socket` appears inside `foreign "c" { }` with no segment
+- **THEN** the compiler rejects it with `E1703:` foreign function declaration without an effect segment; there is no body to verify a pure claim against, so the claim must be written
+
+#### Scenario: A generic declaration is rejected
+
+- **WHEN** `fn id<T>(x: T) -> T effect` appears inside `foreign "c" { }`
+- **THEN** the compiler rejects it with `E1704:` foreign function declaration with a generic clause; declare each instantiation, or wrap the polymorphism in a We-side generic function calling monomorphic declarations
+
+#### Scenario: A body fits no production
+
+- **WHEN** a foreign declaration is followed by a block
+- **THEN** the compiler rejects it under chapter 2's `E0105` — the foreign declaration is a signature; the native side holds the body
+
+#### Scenario: A foreign name is not a value
+
+- **WHEN** `let f: fn(Int64) -> Int64 = abs` appears with `abs` a foreign declaration, pure or not
+- **THEN** the compiler rejects it under chapter 2's `E0105` — the call form is the name's only use; `|x| abs(x)` is the wrapper that travels
+
+### Requirement: Opaque foreign types
+
+Inside a foreign block an opaque type declaration is a fieldless record of chapter 8's category spellings: `record Socket { }`, `byval record Socket { }`, `byres record File { }` — the category prefixes carrying their chapter 8 meanings unchanged, the empty field list carrying opacity: a type declared this way is defined on the native side, and We code holds its values as handles, nothing more. Zero fields is what chapter 8 already permits of records, and the declaration reuses that production exactly — no new record form exists here, only the position giving the declared record its opaque discipline. A value of an opaque type enters We code only by crossing — a foreign function's declared return — and leaves only by crossing or by the ordinary forgetting of gc values; the type MUST NOT be constructed or updated on the We side: `Socket { }` as a construction expression would satisfy chapter 8's all-fields-exactly-once vacuously, minting a handle from nothing, and is rejected with `E1707:` construction or update of a foreign opaque type, the update expression `{ ... with &old }` falling under the same code for the same reason. No field of an opaque type exists to access, and a field access on one resolves under chapter 8's `E0604`. A `byres` opaque type is a resource record like any other: its declaring module MUST hold an `impl Releasable` for it (chapter 13's `E1101`, the declaration-completeness obligation inherited unchanged), and that impl's body is ordinary checked code — calling a foreign `close` function is how the release is implemented. Impls of ordinary interfaces over an opaque type are legal under chapter 10's rules like over any nominal type of the module's own declaration; nothing about opacity exempts or extends impl discipline.
+
+#### Scenario: An opaque type parses in each category
+
+- **WHEN** `foreign "c" { record Socket { }  byval record Errno { }  byres record File { } }` appears
+- **THEN** each declares an opaque type of its prefix's category — gc handle shared by reference, value carried by copy, resource under chapter 13's full discipline
+
+#### Scenario: A handle enters only by crossing
+
+- **WHEN** `fn accept(sock: Socket) -> Socket effect io` is declared and a We function binds the call's return
+- **THEN** the bound value is a `Socket` like any value of its type; it was minted on the native side, and no We-side production mints one
+
+#### Scenario: Construction is rejected
+
+- **WHEN** `Socket { }` appears as an expression
+- **THEN** the compiler rejects it with `E1707:` construction or update of a foreign opaque type; the zero-field vacuous satisfaction of chapter 8's rule is exactly the hole this code closes
+
+#### Scenario: Update is rejected alike
+
+- **WHEN** `Socket { ... with &sock }` appears as an expression
+- **THEN** the compiler rejects it with `E1707:` construction or update of a foreign opaque type; copying a handle's absent fields is minting in disguise
+
+#### Scenario: A byres opaque type pairs its impl
+
+- **WHEN** `byres record File { }` is declared inside a foreign block and the module holds `impl Releasable for File { fn release(mut self) { close(self as ...) } }` written per chapter 13
+- **THEN** the obligation is chapter 13's own `E1101` check — the impl missing is rejected there, and present, the impl's body is ordinary code calling the foreign `close`
+
+### Requirement: The crossing type set
+
+Every parameter type and every declared return type of a foreign function MUST hold exactly the crossing set: chapter 7's eight integer types, `Float32`, `Float64`, `Bool`, `Rune`, `String` and `Bytes` — parameter positions only — the opaque foreign types, the module's own or another module's reached under chapter 15's pub rules, and `Never` — declared return positions only. Any type outside the set — `Never` in a parameter position included — is rejected with `E1705:` foreign function signature holds a type outside the crossing set: records with fields, sums, tuples, `List`, `Map`, `Set`, `Option`, `Result`, closures and function types, `Dyn`, a generic parameter — none of them cross. Values cross one at a time, in the base types' C ABI layouts, or they do not cross at all; marshalling a composite is We-side code — explicit field-by-field calls, buffers filled through foreign functions — never a hidden conversion the compiler performs (chapter 7's `E0501` holding here as everywhere: no implicit conversion exists at this boundary either). `String` and `Bytes` cross as parameters only — no return convention says who owns a native allocation, how long it is, or who frees it, and a boundary that left those answers to per-declaration documentation would not be checkable — so a declared `String` or `Bytes` return is rejected with `E1706:` String or Bytes is not a foreign return type. A `Never` return is the does-not-return claim, legal and disclosed: this is the one declaration at this boundary the type system takes on trust — an ordinary `Never` (the panic family) is guaranteed by the runtime, a foreign one is guaranteed by the native side alone, and a foreign function that declares `Never` and returns anyway is native-side undefined behavior outside this specification's guarantees, stated here rather than hidden.
+
+#### Scenario: The scalars cross
+
+- **WHEN** `fn mix(a: Int64, b: UInt8, c: Float64, d: Bool, e: Rune) -> Int32 effect io` is declared
+- **THEN** the signature parses; every type is in the crossing set and the values travel in their C ABI layouts
+
+#### Scenario: Opaque types cross in both positions
+
+- **WHEN** `fn open(path: String) -> File effect io` is declared with `byres record File { }` in scope
+- **THEN** the parameter and the return are both in the set — the handle out, the resource back
+
+#### Scenario: An imported opaque type crosses
+
+- **WHEN** module `net` holds `foreign "c" { pub record Socket { }  pub fn socket() -> Socket effect io }` and module `app` declares `fn probe(s: net.Socket) -> Bool effect` in its own foreign block
+- **THEN** `net.Socket` is in the crossing set — the type is nominal and pub-reached — and the declaration parses; `pub` on foreign items is what makes the type crossable from elsewhere
+
+#### Scenario: A composite type is rejected
+
+- **WHEN** `fn sum(xs: List<Int64>) -> Int64 effect io` or `fn now() -> (Int64, Int64) effect io` is declared
+- **THEN** the compiler rejects it with `E1705:` foreign function signature holds a type outside the crossing set; marshall on the We side, one value per call
+
+#### Scenario: A function type is rejected
+
+- **WHEN** `fn registerCallback(cb: fn(Int64) -> Int64) effect io` is declared
+- **THEN** the compiler rejects it with `E1705:` foreign function signature holds a type outside the crossing set — and with it the callback question itself, deferred by this change (The unchecked remainder)
+
+#### Scenario: A String return is rejected
+
+- **WHEN** `fn errmsg() -> String effect io` is declared
+- **THEN** the compiler rejects it with `E1706:` String or Bytes is not a foreign return type; the idiom is an opaque handle plus a length query plus a copy into a caller-provided buffer
+
+#### Scenario: Never declares does-not-return
+
+- **WHEN** `fn exit(code: Int64) -> Never effect io` is declared and a We function calls it
+- **THEN** the declaration parses and the call is treated as divergent under chapter 9's rules — with the trust disclosed: the native side, not the runtime, is the guarantor of the claim
+
+### Requirement: String and Bytes at the boundary
+
+A `String` argument crosses as a read-only borrow of its bytes: for the duration of the call the callee receives the bytes in the C ABI's pointer form; the callee MUST NOT write them and MUST NOT retain the pointer past the return. A `Bytes` argument crosses as its bytes and its length, a (pointer, length) pair for the duration of the call; the buffer idiom — the callee writing into a caller-provided buffer during the call — is the pattern the form exists for, and writes so made are visible through We-side aliases after the return, that visibility being the idiom's stated price: gc values are shared by reference under chapter 8, and a buffer written through the borrowed pair is written in place. These are contracts on the native side, stated here and checked nowhere: crossing into C leaves this specification's checked world — the checks on the We side (types, effects, ownership) are complete, and the native side's memory behavior is its own contract, the boundary's honesty being that it says exactly what it cannot check (chapter 0, Principle 8). No `String` or `Bytes` value crosses by any other route: neither is a foreign return type (`E1706`), and no conversion of a borrowed pointer back into a We value exists — strings out of native code come through opaque handles and explicit copies.
+
+#### Scenario: A String crosses as a read-only borrow
+
+- **WHEN** `fn puts(s: String) effect io` is declared and called with a We `String`
+- **THEN** the callee receives the bytes for the call's duration; writing them or holding the pointer past return is the native side's breach of a stated contract, outside the compiler's checks and inside this specification's record of what it fixes
+
+#### Scenario: A Bytes argument is the buffer idiom
+
+- **WHEN** `fn read(fd: Int64, buf: Bytes, cap: Int64) -> Int64 effect io` is declared and called with a We-side buffer
+- **THEN** the callee may write `cap` bytes into the borrowed buffer during the call; after the return the writes are visible through every alias of the buffer, as chapter 8's reference sharing says
+
+#### Scenario: No borrowed pointer becomes a We value
+
+- **WHEN** a We function wants the text of an opaque `CString` handle
+- **THEN** the route is foreign calls — a length query, a We-side `Bytes`, a copy call — and no production turns a borrowed pointer into a `String` or `Bytes`; nothing crosses back but what the crossing set allows
+
+### Requirement: Effects at the boundary
+
+A foreign function's declared segment is the whole effect truth of its calls: calling one is an ordinary call whose effect set is the declared set, and chapter 16's `E1401` ruling applies unchanged — a call from a context whose declared set does not include the callee's tags is rejected there, foreign or not. The tags a foreign declaration may carry are the tags legal at its position under chapter 16: the builtin tags (`io`, `net`, `time`), its own module's tags, and imported tags qualified per chapter 16's reach rules. A bare `effect` segment — the pure claim spelled only here — declares that calls perform no effect, and callers owe nothing for the call, the claim resting on the native side as every declaration here does. Nothing in a foreign declaration shifts effect attribution: the segment travels with the declaration into every check the caller's context performs.
+
+#### Scenario: A call is checked against the caller's set
+
+- **WHEN** a pure We function calls a foreign function declaring `effect io`
+- **THEN** the compiler rejects it with `E1401:` undeclared effect at a call — the boundary adds no exemption; the call is a call
+
+#### Scenario: Custom tags cross the declaration
+
+- **WHEN** a module declares `effect gpio` and a foreign declaration in it carries `effect gpio`
+- **THEN** callers declaring `gpio` may call it and no one else; module tags govern foreign declarations exactly as We ones
+
+#### Scenario: A pure claim costs callers nothing
+
+- **WHEN** a We function with no segment calls a foreign function declared with the bare `effect`
+- **THEN** no effect diagnostic fires; the pure claim is the declaration's, and the caller's context sees a pure call
+
+### Requirement: Resources at the boundary
+
+Ownership crosses as types, and no new rule carries it: a parameter of a `byres` opaque type is chapter 13's argument-passing channel — the caller's release obligation transfers by signature, the callee's native side holding the handle past the call being that chapter's single-handle discipline; a declared return of a `byres` opaque type delivers a value whose obligation attaches at its binding — `scope resource` binds it and the scope-exit machinery releases it exactly once, the `E1101`-paired impl being the release's body. `gc` opaque handles cross as gc values — reference-shared, safe to alias, forgetting them the gc's business; `byval` opaque values cross by copy. Chapter 13's three channels, single release trigger, and composite-position ban hold at this boundary unchanged: a resource never enters a `List`, a `Dyn` box, or a task capture it could not enter in pure We code (`E1106` everywhere), and the boundary adds types, not rules.
+
+#### Scenario: A resource crosses out by parameter
+
+- **WHEN** a We function holding a `scope resource` binding of a `byres` opaque type passes it as an argument to a foreign function declaring that parameter
+- **THEN** the obligation transfers by chapter 13's argument channel; the binding's scope no longer releases it, the signature said where it went
+
+#### Scenario: A resource crosses back by return
+
+- **WHEN** a foreign function's declared return is a `byres` opaque type and the call's value is bound with `scope resource`
+- **THEN** the obligation attaches at the binding and the scope-exit machinery releases it once; the handle arrived native-minted and leaves released, all under chapter 13's existing rules
+
+#### Scenario: The composite-position ban holds
+
+- **WHEN** a `byres` opaque value is placed in a `List`, boxed in a `Dyn`, or captured by a task block
+- **THEN** the compiler rejects it under chapter 13's `E1106` exactly as for a We resource record; opacity changes nothing about the ban
+
+### Requirement: The unchecked remainder
+
+What this boundary does not fix, it names. The native side's memory behavior — retention past the borrow, a write into a `String`'s bytes, a `Never` declaration that returns anyway — is outside this specification's checks: the design keeps every checkable fact on the We side and states the rest as native-side contract. Callbacks are deferred, and the deferral has two faces: function types are outside the crossing set (`E1705` covers the signature position — a fn value handed to native), and a foreign name in value position fits no ratified production (`E0105`, Foreign function declarations — a name whose value would be a code pointer, on either side of the boundary). The fn-pointer story — which declaration a callback body's effects answer, which runtime context runs it, which calling convention carries it — has no ratified answer; the gap is registered here for a future change to design whole, not for an amendment to open a crack. Linkage — how a declared name binds to a native symbol, name mangling, library search, calling-convention variants beyond the platform C ABI — is the toolchain chapter's business, not this chapter's (chapter 0's mechanism-neutrality discipline: the spec defines observable semantics and checks, the toolchain carries the build); nothing here fixes a toolchain behavior, and the standard library's own foreign declarations follow this chapter's rules exactly as user code's do — no privileged syntax channel exists (chapter 0, Principle 6).
+
+#### Scenario: A callback proposal answers the registered questions
+
+- **WHEN** a later change proposes admitting function pointers at this boundary
+- **THEN** it answers the three registered questions — effect attribution of the callback body, the runtime context of its execution, the calling convention — before any signature holds a function type, or it is rejected on this requirement alone
+
+#### Scenario: The standard library crosses by the same rules
+
+- **WHEN** `std.io` declares its file functions as foreign declarations
+- **THEN** they parse under this chapter's productions and check under this chapter's rules exactly as a user module's do; the library holds no second syntax
+
+### Requirement: FFI diagnostics segment
+
+The FFI chapter owns registry segment `E1700`–`E1799` declared in `docs/spec/diagnostics.toml` `[segments]`. Allocations: `E1701` foreign block's ABI string is not "c", `E1702` foreign block outside the top level, `E1703` foreign function declaration without an effect segment, `E1704` foreign function declaration with a generic clause, `E1705` foreign function signature holds a type outside the crossing set, `E1706` String or Bytes is not a foreign return type, `E1707` construction or update of a foreign opaque type. `E1700` and `E1708`–`E1799` remain reserved for amendments of this chapter — the callback family among them, when its questions are answered. Trigger semantics live in this chapter's Requirements; entries live in the registry.
+
+#### Scenario: An FFI code is emitted
+
+- **WHEN** any `E17xx` diagnostic is emitted by the toolchain
+- **THEN** its complete entry is retrievable from `docs/spec/diagnostics.toml` with owner `1900-ffi`
+
+#### Scenario: A later change needs this segment's codes
+
+- **WHEN** the callback change or another amendment of this chapter requires new diagnostics
+- **THEN** its change extends the registry within `E1700`–`E1799` in the same change, or claims its own segment

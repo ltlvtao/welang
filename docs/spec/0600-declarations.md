@@ -2,7 +2,7 @@
 
 ### Requirement: File structure and module identity
 
-A source file is a module. The file's top level is a sequence of top-level items: import declarations, fn declarations, record and newtype declarations per chapter 8, sum type declarations per chapter 9, interface declarations and impl blocks per chapter 10, and top-level let bindings. Items may appear in any order; ordering conventions are the formatter's business, not the grammar's. Statements and expressions MUST NOT appear as top-level items — they exist only inside blocks — and a top-level token sequence fitting no item production MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). The module's name is the dotted lowercase path naming it per chapter 1's naming conventions; a path resolves to a file under chapter 15's mapping — directory nesting under the source root, the reserved `std` segment, and the dependency cache.
+A source file is a module. The file's top level is a sequence of top-level items: import declarations, fn declarations, record and newtype declarations per chapter 8, sum type declarations per chapter 9, interface declarations and impl blocks per chapter 10, foreign blocks per chapter 19, and top-level let bindings. Items may appear in any order; ordering conventions are the formatter's business, not the grammar's. Statements and expressions MUST NOT appear as top-level items — they exist only inside blocks — and a top-level token sequence fitting no item production MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). The module's name is the dotted lowercase path naming it per chapter 1's naming conventions; a path resolves to a file under chapter 15's mapping — directory nesting under the source root, the reserved `std` segment, and the dependency cache.
 
 #### Scenario: A file parses as one module
 
@@ -18,6 +18,11 @@ A source file is a module. The file's top level is a sequence of top-level items
 
 - **WHEN** `import std.io` appears inside a block
 - **THEN** the compiler rejects it with `E0105:` unexpected token; imports exist only as top-level items
+
+#### Scenario: A foreign block is a top-level item
+
+- **WHEN** a source file holds `foreign "c" { ... }` among its imports, fn declarations, and top-level let bindings
+- **THEN** the block parses as one top-level item per chapter 19; a foreign block inside any block is rejected there (`E1702`), and the items it declares join the module's one name space
 
 ### Requirement: Import declarations
 
@@ -40,7 +45,7 @@ An import declaration is `import path` or `import path as name`. The path MUST b
 
 ### Requirement: Function declarations
 
-A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, optionally prefixed by `pub`. The name is an identifier under chapter 1's naming conventions (`E0012`). The parameter list is zero or more `name: type` pairs separated by commas; every parameter MUST carry a type annotation — a bare parameter name fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`), which names the `name: type` production. A declared return type after `->` states that the function produces a value; its absence states that the function produces none. The grammar of types filling the annotation slots is ratified by the types chapter. Generic parameters are ratified by chapter 10: `fn name<T1, ..., Tk>(params)` carries the clause between the name and the parameter list, and a where clause may trail the signature before the body; the one bare-parameter exception is the chapter-10 method receiver — inside impl blocks the first parameter is `self` or `mut self`, written bare, its type fixed by the impl head. Effect segments are ratified by chapter 16: a fn declaration may carry `effect tag1 tag2 ...` between the parameter list and the arrow or body, and the checks the segment participates in are that chapter's. `mut` parameters and foreign declarations are ratified by their owning chapters.
+A fn declaration is `fn name(params) block` or `fn name(params) -> type block`, optionally prefixed by `pub`. The name is an identifier under chapter 1's naming conventions (`E0012`). The parameter list is zero or more `name: type` pairs separated by commas; every parameter MUST carry a type annotation — a bare parameter name fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`), which names the `name: type` production. A declared return type after `->` states that the function produces a value; its absence states that the function produces none. The grammar of types filling the annotation slots is ratified by the types chapter. Generic parameters are ratified by chapter 10: `fn name<T1, ..., Tk>(params)` carries the clause between the name and the parameter list, and a where clause may trail the signature before the body; the one bare-parameter exception is the chapter-10 method receiver — inside impl blocks the first parameter is `self` or `mut self`, written bare, its type fixed by the impl head. Effect segments are ratified by chapter 16: a fn declaration may carry `effect tag1 tag2 ...` between the parameter list and the arrow or body, and the checks the segment participates in are that chapter's. Foreign declarations are ratified by chapter 19: inside a foreign block a fn declaration is this signature form with no body, and the effect segment is required there. `mut` parameters remain deferred to their owning chapter.
 
 #### Scenario: A function with a full signature
 
@@ -234,8 +239,8 @@ fn f() {
 // Module resolution, the cross-module visibility diagnostic, and
 // the main convention landed with chapter 15; generic parameters
 // landed with the interfaces chapter; effect segments landed with
-// chapter 16. mut parameters and foreign blocks are their owning
-// chapters':
+// chapter 16; foreign declarations landed with chapter 19. mut
+// parameters are their owning chapter's:
 //
 // fn read(path: String) effect io -> String
 ```

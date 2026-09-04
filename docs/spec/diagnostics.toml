@@ -140,8 +140,8 @@ owner = "1600-effects"
 # Intra-segment structure (chapter 16): E1400 boundary reserve,
 # E1401-E1405 undeclared-call / value-vs-type mismatch / builtin-name
 # conflict / impl-vs-interface disagreement / initializer impurity.
-# E1406-E1499 reserved for amendments (test-virtualization-era codes,
-# FFI effect declarations).
+# E1406-E1499 reserved for amendments (test-virtualization-era codes;
+# the FFI codes landed in chapter 19's E17xx segment).
 
 [segments."E1500-E1599"]
 domain = "collections"
@@ -158,7 +158,15 @@ owner = "1800-concurrency"
 # discipline, select, shared-state types, channels; E1619-E1699
 # reserved for amendments (the transaction family among them).
 
-[segments."E1700-E9999"]
+[segments."E1700-E1799"]
+domain = "ffi"
+owner = "1900-ffi"
+# Intra-segment structure (chapter 19): E1700 boundary reserve,
+# E1701-E1707 foreign block / declaration / opaque-type / crossing-set
+# diagnostics; E1708-E1799 reserved for amendments (the callback family
+# among them, when its registered questions are answered).
+
+[segments."E1800-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -1276,4 +1284,67 @@ description = "A task block appears with no enclosing scope block - a handle wit
 remediation = "Open a scope block around the task creation, or move the work into an ordinary function call."
 owner = "1800-concurrency"
 requirement = "Task blocks"
+allocated = "2026-09-04"
+
+[diagnostic.E1701]
+severity = "error"
+title = "foreign block's ABI string is not \"c\""
+description = "A foreign block's ABI string position holds a string literal other than \"c\". The C ABI is the one carrier this specification defines (chapter 0's host strategy); the Go-backend string of v0.8 is not inherited."
+remediation = "Write the block as foreign \"c\"; Go-ecosystem interop goes through a C bridge, and extending the carrier is a spec-layer amendment of chapter 19."
+owner = "1900-ffi"
+requirement = "The foreign block"
+allocated = "2026-09-04"
+
+[diagnostic.E1702]
+severity = "error"
+title = "foreign block outside the top level"
+description = "A foreign block appears inside a function body or any nested block. The boundary is declared per module: a foreign block is a top-level item, and after chapter 6's amendment it is a ratified one - its position rule is chapter 19's own, hence a dedicated code rather than the unexpected-token one."
+remediation = "Move the foreign block to the module's top level; the items it declares join the module's name space from there."
+owner = "1900-ffi"
+requirement = "The foreign block"
+allocated = "2026-09-04"
+
+[diagnostic.E1703]
+severity = "error"
+title = "foreign function declaration without an effect segment"
+description = "A foreign block's fn declaration omits its effect segment. An ordinary declaration's omitted segment is a pure claim its body verifies; a foreign declaration has no body, so the declaration is the only evidence of the callee's effects - the segment must be written."
+remediation = "Write the segment: the callee's tags, or the bare keyword effect alone for the explicit pure claim (legal only inside a foreign block)."
+owner = "1900-ffi"
+requirement = "Foreign function declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E1704]
+severity = "error"
+title = "foreign function declaration with a generic clause"
+description = "A foreign block's fn declaration carries a generic parameter clause. The native side knows one signature; the boundary is monomorphic."
+remediation = "Declare each monomorphic instantiation, or wrap the polymorphism in a We-side generic function calling monomorphic foreign declarations."
+owner = "1900-ffi"
+requirement = "Foreign function declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E1705]
+severity = "error"
+title = "foreign function signature holds a type outside the crossing set"
+description = "A foreign function's parameter or declared return type is not in the closed crossing set: base scalars, String and Bytes (parameters only), opaque foreign types, Never (declared returns only). Records with fields, sums, tuples, List, Map, Set, Option, Result, closures and fn types, Dyn, and generic parameters do not cross."
+remediation = "Marshall on the We side - explicit field-by-field calls, buffers filled through foreign functions, opaque handles plus length queries; one value per call."
+owner = "1900-ffi"
+requirement = "The crossing type set"
+allocated = "2026-09-04"
+
+[diagnostic.E1706]
+severity = "error"
+title = "String or Bytes is not a foreign return type"
+description = "A foreign function declares String or Bytes as its return type. No return convention says who owns a native allocation, how long it is, or who frees it; String and Bytes cross as parameters only."
+remediation = "Return an opaque handle plus a length query plus a copy into a caller-provided buffer - the explicit marshalling idiom."
+owner = "1900-ffi"
+requirement = "The crossing type set"
+allocated = "2026-09-04"
+
+[diagnostic.E1707]
+severity = "error"
+title = "construction or update of a foreign opaque type"
+description = "A construction or update expression targets an opaque foreign type. Chapter 8's all-fields-exactly-once is satisfied vacuously by a zero-field record, so Socket { } would mint a handle from nothing; values of opaque types enter We code only by crossing."
+remediation = "Obtain the value from a foreign function's declared return; the native side mints the handle."
+owner = "1900-ffi"
+requirement = "Opaque foreign types"
 allocated = "2026-09-04"
