@@ -55,9 +55,10 @@ type
 interface impl where derives
 scope resource
 effect
+task select case timeout collectAll
 ```
 
-Adding a keyword is a spec-layer change that amends this list. The list contains only words whose syntax is or will be ratified by a chapter; feature-specific words (effects, types, concurrency, testing) join the list together with the chapter that ratifies them. The composite-types chapter added `record byval byres newtype with` in its own change — a breaking change recorded as such there: those five words were identifiers before and are keywords from this list's amendment on. The sum-types chapter added `type` in its own change, recorded the same way: the word was an identifier before and is a keyword from this list's amendment on. The interfaces-and-generics chapter added `interface impl where derives` the same way: four words were identifiers before and are keywords from this list's amendment on. The resources chapter added `scope resource` the same way: two words were identifiers before and are keywords from this list's amendment on — `scope` will lead further composite forms, its reservation predating those uses as `mut`'s did. The effects chapter added `effect` the same way: the word was an identifier before and is a keyword from this list's amendment on — it introduces the effect declaration and the declaration effect segment under chapter 16. `mut`, present in the initial list, gains its syntax with `mut self` receivers under chapter 10 — its reservation predates its use.
+Adding a keyword is a spec-layer change that amends this list. The list contains only words whose syntax is or will be ratified by a chapter; feature-specific words (effects, types, concurrency, testing) join the list together with the chapter that ratifies them. The composite-types chapter added `record byval byres newtype with` in its own change — a breaking change recorded as such there: those five words were identifiers before and are keywords from this list's amendment on. The sum-types chapter added `type` in its own change, recorded the same way: the word was an identifier before and is a keyword from this list's amendment on. The interfaces-and-generics chapter added `interface impl where derives` the same way: four words were identifiers before and are keywords from this list's amendment on. The resources chapter added `scope resource` the same way: two words were identifiers before and are keywords from this list's amendment on — `scope` will lead further composite forms, its reservation predating those uses as `mut`'s did. The effects chapter added `effect` the same way: the word was an identifier before and is a keyword from this list's amendment on — it introduces the effect declaration and the declaration effect segment under chapter 16. The concurrency chapter added `task select case timeout collectAll` the same way: five words were identifiers before and are keywords from this list's amendment on — they lead the task block, the select expression, and the scope block forms ratified there, `scope` having been reserved by the resources chapter ahead of these composite uses, as its amendment recorded. `mut`, present in the initial list, gains its syntax with `mut self` receivers under chapter 10 — its reservation predates its use.
 
 #### Scenario: A keyword is used as a name
 
@@ -93,6 +94,11 @@ Adding a keyword is a spec-layer change that amends this list. The list contains
 
 - **WHEN** `effect` appears where an identifier is required (for example a variable named `effect`)
 - **THEN** the parser reports a syntax diagnostic naming the reserved word; the word is a keyword under the effects chapter's amendment
+
+#### Scenario: The concurrency keywords are reserved
+
+- **WHEN** `task`, `select`, `case`, `timeout`, or `collectAll` appears where an identifier is required (for example a variable named `task`)
+- **THEN** the parser reports a syntax diagnostic naming the reserved word; the five are keywords under the concurrency chapter's amendment
 
 ### Requirement: Numeric literals
 

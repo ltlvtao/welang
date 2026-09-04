@@ -150,7 +150,15 @@ owner = "1700-collections"
 # E1501 empty-list-literal expectation error, E1502-E1599 reserved
 # for amendments of the collections chapter.
 
-[segments."E1600-E9999"]
+[segments."E1600-E1699"]
+domain = "concurrency"
+owner = "1800-concurrency"
+# Intra-segment structure (chapter 18): E1600 boundary reserve,
+# E1601-E1618 task blocks, task capture discipline, scope handle
+# discipline, select, shared-state types, channels; E1619-E1699
+# reserved for amendments (the transaction family among them).
+
+[segments."E1700-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -1106,4 +1114,166 @@ description = "An empty list literal `[]` appears at a position with no expected
 remediation = "Write the annotation (`let xs: List<String> = []`), place the literal where a parameter or declared return fixes the type, or start the list with elements."
 owner = "1700-collections"
 requirement = "List literals"
+allocated = "2026-09-04"
+
+[diagnostic.E1601]
+severity = "error"
+title = "task block without an effect segment"
+description = "A task block appears with no effect segment between the task keyword and its block. A task runs in its own task, outside every enclosing function extent, so its body's calls have no enclosing declaration to answer: the block declares its own effects, and omission leaves the body's calls answerable to nothing."
+remediation = "Write the segment of the chapter 16 spelling: task effect tag1 tag2 ... followed by the block."
+owner = "1800-concurrency"
+requirement = "Task blocks"
+allocated = "2026-09-04"
+
+[diagnostic.E1602]
+severity = "error"
+title = "task block captures unsynchronized gc state"
+description = "A task block captures a binding that holds live gc state with no synchronization discipline: a gc-category binding not of a synchronized type (Mutex, RwLock, Atomic, AtomicRef, Cond, Semaphore, Channel, SendOnly, ReceiveOnly, TaskHandle, CancelSignal), or a value-category shape - a record or tuple - whose parts hold gc state the Shareable set excludes, a List field among them. Unsynchronized gc state crossing a task boundary is a data race whatever shape carries it."
+remediation = "Carry the state in a synchronized type (store the list in a Mutex, send it through a Channel), or capture only Shareable data and let the task receive the rest."
+owner = "1800-concurrency"
+requirement = "Task capture discipline"
+allocated = "2026-09-04"
+
+[diagnostic.E1603]
+severity = "error"
+title = "task block captures a var binding"
+description = "A task block captures a var binding, of whatever type. Mutability and concurrency together are a race by definition: two writers, no discipline between them."
+remediation = "Carry the mutable state in a shared-state type and reach it through its methods, or copy the value into an immutable binding before the task block."
+owner = "1800-concurrency"
+requirement = "Task capture discipline"
+allocated = "2026-09-04"
+
+[diagnostic.E1604]
+severity = "error"
+title = "task block captures a resource whose type declares mut self methods"
+description = "A task block captures a resource-category binding whose type declares a mut self method besides release. Every such method is a read-modify-write another task can race on; the capture rule admits resource types whose methods are all reads."
+remediation = "Restrict the type to self methods, keep the task out, or materialize the contents and capture those instead."
+owner = "1800-concurrency"
+requirement = "Task capture discipline"
+allocated = "2026-09-04"
+
+[diagnostic.E1605]
+severity = "error"
+title = "task block captures a generic-parameter binding without a Shareable bound"
+description = "A generic declaration's task block captures a binding whose type mentions a generic parameter carrying no Shareable bound. Without the bound, the parameter admits unsynchronized gc state; with it, the closed Shareable set guarantees it does not."
+remediation = "Declare the parameter with a Shareable bound, or keep the capture to concrete Shareable types."
+owner = "1800-concurrency"
+requirement = "Task capture discipline"
+allocated = "2026-09-04"
+
+[diagnostic.E1606]
+severity = "error"
+title = "Shareable cannot be manually implemented"
+description = "A manual impl attempts to implement the Shareable marker. The marker is computed from a declaration's own shape - field types, payload types, category - and the compiler attaches it; no impl production expresses it."
+remediation = "Delete the impl: the type is Shareable exactly when its own shape says so, and the bound T: Shareable checks that shape."
+owner = "1800-concurrency"
+requirement = "The Shareable marker"
+allocated = "2026-09-04"
+
+[diagnostic.E1607]
+severity = "error"
+title = "task handle reaches scope exit un-awaited, or await and cancel both fire"
+description = "A TaskHandle binding created in a scope body violates the handle discipline: on some control-flow path it reaches the body's end with neither await nor cancel, or one handle takes a second await or a cancel after an await. Each handle is one-shot and must be discharged exactly once on every path - the same single-trigger path analysis release obligations use."
+remediation = "Await or cancel the handle on every path from its creation; on early exits the scope's own exit discharge covers it - plain and timeout forms cancel the rest, collectAll joins them."
+owner = "1800-concurrency"
+requirement = "Scope blocks"
+allocated = "2026-09-04"
+
+[diagnostic.E1608]
+severity = "error"
+title = "currentCancelSignal called outside a task block"
+description = "The cancellation accessor is called outside any task block's body - a plain function, a module initializer, or any other position. A signal belongs to one task; outside its body there is no current task and no default signal, and the check is static."
+remediation = "Take a CancelSignal parameter when a caller wants to cancel the work, or move the call inside the task block that should answer cancellation."
+owner = "1800-concurrency"
+requirement = "CancelSignal and currentCancelSignal"
+allocated = "2026-09-04"
+
+[diagnostic.E1609]
+severity = "error"
+title = "select source is not a wait source"
+description = "A select case's source position holds an expression outside the closed wait-source set - Channel.receive(), ReceiveOnly.receive(), TaskHandle.await(), CancelSignal.awaitCancelled() and nothing else."
+remediation = "Use one of the four wait-source calls as the case's source, or call the non-waiting expression outside the select."
+owner = "1800-concurrency"
+requirement = "The select expression"
+allocated = "2026-09-04"
+
+[diagnostic.E1610]
+severity = "error"
+title = "select arms disagree in type"
+description = "The bodies of a select expression's cases disagree in type. The select expression's value is the taken case's body value, so every arm must agree on one type, the unit type included - the same agreement match arms follow."
+remediation = "Give the arms one type, or bind what differs and unify in a following expression."
+owner = "1800-concurrency"
+requirement = "The select expression"
+allocated = "2026-09-04"
+
+[diagnostic.E1611]
+severity = "error"
+title = "select case pattern is not a binding or the wildcard"
+description = "A select case carries a pattern beyond a bare binding name or the wildcard _ - a variant pattern, a literal, an or-pattern. The case binds what the source yields, all of it; a no-match policy exists for no rule here."
+remediation = "Bind the whole yield to a name or discard it with _, and match inside the body if the yield needs splitting."
+owner = "1800-concurrency"
+requirement = "The select expression"
+allocated = "2026-09-04"
+
+[diagnostic.E1612]
+severity = "error"
+title = "select holds fewer than two cases"
+description = "A select expression holds fewer than two cases. One case waiting on one source is a plain call wearing syntax."
+remediation = "Call the wait source directly, or add the second case the construct exists to race."
+owner = "1800-concurrency"
+requirement = "The select expression"
+allocated = "2026-09-04"
+
+[diagnostic.E1613]
+severity = "error"
+title = "nested access to one shared value within its own callback"
+description = "A callback running under one shared value's discipline - the f of update or read on that value - calls update, get, set, or read again on the same binding. The callback already holds the value; the nested call would re-acquire what it holds."
+remediation = "Use the callback's own parameter - it is the value; access other shared values freely, and move cross-value work outside the callback."
+owner = "1800-concurrency"
+requirement = "Nested access to one shared value is rejected"
+allocated = "2026-09-04"
+
+[diagnostic.E1614]
+severity = "error"
+title = "Atomic type argument is not an atomic base type"
+description = "An Atomic's type argument is not one of the atomic base types - the eight integer types, Bool, Float32, Float64. Composite values have no single-word read-modify-write to be atomic over."
+remediation = "Wrap the composite in Mutex or RwLock, or hold the base-type part in the Atomic."
+owner = "1800-concurrency"
+requirement = "The shared-state types"
+allocated = "2026-09-04"
+
+[diagnostic.E1615]
+severity = "error"
+title = "AtomicRef type argument is not a gc record type"
+description = "An AtomicRef's type argument is not a gc-category record type. The reference cell swaps whole gc records by pointer; base types belong in Atomic, and non-record shapes have no such swap."
+remediation = "Use Atomic for base types and Mutex or RwLock for other composites."
+owner = "1800-concurrency"
+requirement = "The shared-state types"
+allocated = "2026-09-04"
+
+[diagnostic.E1616]
+severity = "error"
+title = "Semaphore count is not a positive integer"
+description = "A Semaphore's constructed count is constant-evaluable and not positive - zero or negative. What the compiler can decide, it decides, at the construction site."
+remediation = "Construct with a positive count; guard non-constant counts before the call - a non-positive count at runtime is a checked panic of chapter 14's family."
+owner = "1800-concurrency"
+requirement = "The Semaphore type"
+allocated = "2026-09-04"
+
+[diagnostic.E1617]
+severity = "error"
+title = "channel construction without an expected type"
+description = "A channel construction appears at a position with no expected type: an unannotated binding, or any slot whose type no declaration fixes. The element type has no other source - the language infers nothing and no explicit type-argument call form exists."
+remediation = "Annotate the binding, or place the construction where a parameter or declared return fixes the type."
+owner = "1800-concurrency"
+requirement = "The Channel type"
+allocated = "2026-09-04"
+
+[diagnostic.E1618]
+severity = "error"
+title = "task block outside any scope block"
+description = "A task block appears with no enclosing scope block - a handle with no scope to join it. No task outlives its scope; a task nothing joins fits no production's intent."
+remediation = "Open a scope block around the task creation, or move the work into an ordinary function call."
+owner = "1800-concurrency"
+requirement = "Task blocks"
 allocated = "2026-09-04"

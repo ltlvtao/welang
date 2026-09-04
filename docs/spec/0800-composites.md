@@ -369,7 +369,8 @@ fn trim(a: String) -> String {
 //
 // let xs: List<Int64> = build()
 //
-// Ref/Shared still arrive with the concurrency chapters; methods,
+// Shared state landed with the concurrency chapter — Mutex, RwLock,
+// Atomic, AtomicRef in std.concurrent, reached by import; methods,
 // interfaces, impl, and derives landed with chapter 10.
 ```
 

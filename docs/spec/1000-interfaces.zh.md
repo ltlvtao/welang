@@ -262,7 +262,7 @@ impl 声明是顶层项 `impl Name for Head { items }`——可选在 `impl` 后
 
 ### Requirement: Derives
 
-record、newtype 或 sum 声明 MAY 携带 derives 子句：关键字 `derives`（第 1 章修订）尾随封闭集 `Eq`、`Hash`、`Show` 的逗号分隔列表，写于声明的最后一行——`record Point { x: Float64, y: Float64 } derives Eq, Hash`、`newtype UserId(Int64) derives Eq`、`type Shape = Circle(Float64) | Rectangle(Float64, Float64) derives Eq`；完整声明之后以 `derives` 起头的行不合任何产生式（第 2 章 `E0105`）。未知或重复的目标以 `E0824` 拒绝。该子句生成的方法与实现的方法完全一样加入该类型的成员，按"成员名字解析"可调用、可冲突：`Eq` 生成 `.equals(other: Self) -> Bool`，`Hash` 生成 `.hash() -> Int64`，`Show` 生成 `.toDebugString() -> String`；生成体的运行时行为归运行时——本章固定表面与要求。`Eq` 与 `Hash` 要求每个字段类型、底层类型或载荷类型具备该能力——基础类型天然具备、组合类型经其自身 derives 具备——否则 `E0823`；`Show` 无要求。泛型声明上该要求在每次实例化处检查（该处 `E0823`）。目标是内建的：手写 `impl Eq for ...` 以 `E0822` 拒绝——组合相等是生成的 `.equals()`、永非运算符：`==` 按第 7 章仅比较基础类型，此即组合相等的全部故事，如所裁决。`Encodable` 与 `Decodable` 延后至 JSON 变更、`Shareable` 归并发章；它们将经此条的修订扩展该集合。
+record、newtype 或 sum 声明 MAY 携带 derives 子句：关键字 `derives`（第 1 章修订）尾随封闭集 `Eq`、`Hash`、`Show` 的逗号分隔列表，写于声明的最后一行——`record Point { x: Float64, y: Float64 } derives Eq, Hash`、`newtype UserId(Int64) derives Eq`、`type Shape = Circle(Float64) | Rectangle(Float64, Float64) derives Eq`；完整声明之后以 `derives` 起头的行不合任何产生式（第 2 章 `E0105`）。未知或重复的目标以 `E0824` 拒绝。该子句生成的方法与实现的方法完全一样加入该类型的成员，按"成员名字解析"可调用、可冲突：`Eq` 生成 `.equals(other: Self) -> Bool`，`Hash` 生成 `.hash() -> Int64`，`Show` 生成 `.toDebugString() -> String`；生成体的运行时行为归运行时——本章固定表面与要求。`Eq` 与 `Hash` 要求每个字段类型、底层类型或载荷类型具备该能力——基础类型天然具备、组合类型经其自身 derives 具备——否则 `E0823`；`Show` 无要求。泛型声明上该要求在每次实例化处检查（该处 `E0823`）。目标是内建的：手写 `impl Eq for ...` 以 `E0822` 拒绝——组合相等是生成的 `.equals()`、永非运算符：`==` 按第 7 章仅比较基础类型，此即组合相等的全部故事，如所裁决。`Encodable` 与 `Decodable` 延后至 JSON 变更；它们将经此条的修订扩展该集合。`Shareable` 不是派生目标且永不成为：并发章从声明自身的形状机械附加该标记，没有子句表达它，指名它的子句是 `E0824`——本条固定的封闭集即是全部。
 
 #### Scenario: 三个 derives 在其声明上解析成立
 
@@ -293,6 +293,11 @@ record、newtype 或 sum 声明 MAY 携带 derives 子句：关键字 `derives`�
 
 - **WHEN** `derives Ord` 或 `derives Eq, Eq` 出现
 - **THEN** 编译器以 `E0824:` unknown or duplicate derive target 拒绝；封闭集是 `Eq`、`Hash`、`Show`
+
+#### Scenario: Shareable 不是派生目标
+
+- **WHEN** 出现 `record Point { x: Float64, y: Float64 } derives Shareable`
+- **THEN** 编译器以 `E0824:` unknown or duplicate derive target 拒绝；标记从声明的形状计算、绝不写进子句
 
 ### Requirement: 泛型参数声明
 泛型参数子句是 `<T1, ..., Tk>`，k 从 1 到 8——k 超过八以 `E0825` 拒绝，复合诸章之八的元数镜像——每个参数是作用于其声明的 PascalCase 名（`E0011`）。子句可携带于：顶层 fn 声明（名字与参数列表之间）、record 声明（名字后、花括号前）、sum 类型声明（名字后、`=` 前）、接口声明（名字后、花括号前）与 impl 声明（`impl` 后、接口名前）。方法泛型子句已批准：方法签名或方法定义 MAY 携带自己的子句——方法名之后、携接收者的参数列表之前——凡书写方法之处皆然：接口方法签名、impl 块方法定义与固有 impl 方法同样。方法子句的参数作用于该方法：可用于其参数与返回类型、在其外不可见，并依"泛型类型引用与推断"在每个调用处自调用自身文本定出——方法调用不携带显式类型实参形式，故什么都不定的实参集是 `E0827`、改写调用是修复。impl 方法的子句 MUST 在 `E0808` 的签名一致下精确重复其接口方法的子句——同名、同元数。子句 MUST NOT 重声明外围子句的名字（`E0826`）；方法子句嵌套于其声明的子句之内、规则在其处现行约束，而嵌套声明——声明里的声明——仍未批准。声明内参数名在每个类型引用位置可用；无约束参数是不透明的——无方法调用（`E0817`）、运算符依第 7 章规则——直到 where 约束指名之。泛型字段上的类别诚实在每次实例化处检查：`byval record Box<T> { value: T }` 实例化为 gc `User` 的 `Box<User>` 按第 8 章 `E0601` 在实例化处拒绝，值 sum 镜像同样按 `E0702`。
