@@ -53,9 +53,10 @@ true false foreign
 record byval byres newtype with
 type
 interface impl where derives
+scope resource
 ```
 
-新增关键字是修订本清单的 spec 层变更。清单只收录其语法已被或必然被某章批准的词；特性专属词（效应、类型、并发、测试）随批准它的章节一同进入清单。复合类型章节在其自身变更中加入 `record byval byres newtype with`——按破坏性变更如实记录：这五个词此前是标识符，自本清单修订起成为关键字。sum 类型章节在其自身变更中加入 `type`——同样如实记录：该词此前是标识符，自本清单修订起成为关键字。接口与泛型章节以同样方式加入 `interface impl where derives`：这四个词此前是标识符，自本清单修订起成为关键字。`mut` 自初始清单即在，其语法随第 10 章 `mut self` 接收者兑付——其预留先于其使用。
+新增关键字是修订本清单的 spec 层变更。清单只收录其语法已被或必然被某章批准的词；特性专属词（效应、类型、并发、测试）随批准它的章节一同进入清单。复合类型章节在其自身变更中加入 `record byval byres newtype with`——按破坏性变更如实记录：这五个词此前是标识符，自本清单修订起成为关键字。sum 类型章节在其自身变更中加入 `type`——同样如实记录：该词此前是标识符，自本清单修订起成为关键字。接口与泛型章节以同样方式加入 `interface impl where derives`：这四个词此前是标识符，自本清单修订起成为关键字。资源章节以同样方式加入 `scope resource`：这两个词此前是标识符，自本清单修订起成为关键字——`scope` 将引导更多复合形式，其预留先于那些使用，如 `mut` 之预留。`mut` 自初始清单即在，其语法随第 10 章 `mut self` 接收者兑付——其预留先于其使用。
 
 #### Scenario: 关键字被用作名字
 
@@ -81,6 +82,11 @@ interface impl where derives
 
 - **WHEN** `interface`、`impl`、`where` 或 `derives` 出现在要求标识符的位置（例如名为 `impl` 的变量）
 - **THEN** 解析器报告具名该保留字的语法诊断；这四个词依接口与泛型章节的修订成为关键字
+
+#### Scenario: 资源关键字被保留
+
+- **WHEN** `scope` 或 `resource` 出现在要求标识符的位置（例如名为 `scope` 的变量）
+- **THEN** 解析器报告具名该保留字的语法诊断；这两个词依资源章节的修订成为关键字
 
 ### Requirement: 数值字面量
 

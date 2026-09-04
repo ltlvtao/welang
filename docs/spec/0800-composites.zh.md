@@ -111,12 +111,12 @@ record 构造表达式是 `TypeRef { field: expr, ... }`：头 `TypeRef` 是命�
 
 ### Requirement: 资源记录
 
-`byres record` 声明一个资源：引用传递，显式生命周期管理。资源记录 MUST 经其 Releasable 实现释放；释放操作、其位置与执行诊断归 resource 章——本章只固定类别与其对更新表达式的排除。复制纪律：资源值的身份即资源；本章没有任何形式复制它（更新为 `E0606`；构造制造新资源，不是副本）。
+`byres record` 声明一个资源：引用传递，显式生命周期管理。资源记录 MUST 经其 Releasable 实现释放；释放操作、其位置与执行纪律归第 13 章——Releasable 契约、scope resource 语句与线性释放纪律。本章固定类别与其对更新表达式的排除。复制纪律：资源值的身份即资源；本章没有任何形式复制它（更新为 `E0606`；构造制造新资源，不是副本）。
 
 #### Scenario: 资源记录声明其类别
 
 - **WHEN** `byres record FileHandle { fd: Int64 }` 出现
-- **THEN** 它声明 resource 类别的 record；其释放机制归 resource 章
+- **THEN** 它声明 resource 类别的 record；其释放机制是第 13 章的 Releasable 契约
 
 #### Scenario: 资源不得静默丢弃
 
@@ -299,8 +299,8 @@ byval record Bad { u: User }             // E0601: User is gc, not
 byres record FileHandle {
     fd: Int64,
 }
-// release operations and Releasable enforcement are the
-// resource chapter's; this chapter fixes the category:
+// release goes through chapter 13's scope resource and
+// the Releasable contract; this chapter fixes the category:
 
 FileHandle { fd: 3 with &h }             // E0606: resources are
                                         // never updated this way

@@ -107,7 +107,16 @@ owner = "1200-fn-types"
 # captured-value-assignment / generic-fn-name errors.
 # E1005-E1099 reserved for amendments (combinators, collections).
 
-[segments."E1100-E9999"]
+[segments."E1100-E1199"]
+domain = "resources"
+owner = "1300-resources"
+# Intra-segment structure (chapter 13): E1100 boundary reserve,
+# E1101-E1106 release-contract / scope-head / discipline /
+# rebinding / composite-position errors.
+# E1107-E1199 reserved for amendments (panic binding, position
+# refinement of generic arguments).
+
+[segments."E1200-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -295,7 +304,7 @@ allocated = "2026-09-03"
 severity = "error"
 title = "defer placement"
 description = "A defer statement is not a direct item of a function body's block, for example inside a nested block expression or another statement. Defer runs at function exit in reverse order; only direct function-body placement keeps that single exit-point semantics. Fires under: Defer."
-remediation = "Move the defer to the top level of the enclosing function body, or release the resource through the mechanism the resource chapter ratifies instead of a nested defer."
+remediation = "Move the defer to the top level of the enclosing function body, or release the resource through `scope resource` instead of a nested defer."
 owner = "0300-control-flow"
 requirement = "Defer"
 allocated = "2026-09-03"
@@ -874,4 +883,58 @@ description = "A fn carrying a generic clause is used by its bare name in value 
 remediation = "Call the generic fn - pairUp(1, 2) - or write a closure over it at the types wanted."
 owner = "1200-fn-types"
 requirement = "Function values"
+allocated = "2026-09-04"
+
+[diagnostic.E1101]
+severity = "error"
+title = "resource record must implement Releasable"
+description = "A byres record is declared with no impl of Releasable in its declaring module. The resource category carries the release contract as a declaration-completeness obligation, checked where the record is declared; chapter 10's orphan rule holds the impl in the record's own module. Fires under: The Releasable interface."
+remediation = "Add `impl Releasable for Name { fn release(mut self) { ... } }` in the record's own module, or declare the type as a gc or value record if it owns no resource."
+owner = "1300-resources"
+requirement = "The Releasable interface"
+allocated = "2026-09-04"
+
+[diagnostic.E1102]
+severity = "error"
+title = "Releasable implemented by a non-resource type"
+description = "An impl of Releasable whose head type is not a byres record - a gc record, a value record, a sum, a newtype, a base type, or a generic parameter. The resource category is the release contract's only implementer; a non-resource carry would promise release discipline to a shared-handle value. Fires under: The Releasable interface."
+remediation = "Remove the impl, or declare the head type as a byres record so it owns its release."
+owner = "1300-resources"
+requirement = "The Releasable interface"
+allocated = "2026-09-04"
+
+[diagnostic.E1103]
+severity = "error"
+title = "scope resource head does not implement Releasable"
+description = "A scope resource binding's head expression has a type that does not implement Releasable. Under the declaration-completeness obligation the implementers are exactly the byres records, so every non-resource head is rejected; the scope-exit machinery can only release what carries the contract. Fires under: The scope resource statement."
+remediation = "Bind the expression with `let` instead, or make the head's type a byres record implementing Releasable."
+owner = "1300-resources"
+requirement = "The scope resource statement"
+allocated = "2026-09-04"
+
+[diagnostic.E1104]
+severity = "error"
+title = "resource binding outside its release discipline"
+description = "A binding of a resource type escapes the linear release discipline: a control path ends with no transfer (scope-resource head move, return, or argument pass to a parameter declaring the type); a binding is used after its transfer point; a resource is bound at the module top level, where no channel exists; or user code calls `release` directly on a resource-typed receiver - release has one trigger, the scope-exit machinery, and early release is an early scope exit. Fires under: The release discipline and One release trigger."
+remediation = "Transfer the binding on every path - `scope resource(x = f)`, `return f`, or pass it to a fn whose parameter declares the type; for early release, exit the scope with return/break/continue instead of calling release."
+owner = "1300-resources"
+requirement = "The release discipline"
+allocated = "2026-09-04"
+
+[diagnostic.E1105]
+severity = "error"
+title = "resource binding rebound"
+description = "A resource binding gains a second handle: `let g = f` or `var g = f` with `f` resource-typed, an assignment with either side resource-typed, or a `var` declaration of a resource type. A resource binding is the one handle; the one sanctioned move is a transfer, which hands over and kills the source. Fires under: No aliasing of resource bindings."
+remediation = "Transfer instead of aliasing - `scope resource(x = f)` takes over and the source dies; or keep the single binding and pass it along."
+owner = "1300-resources"
+requirement = "No aliasing of resource bindings"
+allocated = "2026-09-04"
+
+[diagnostic.E1106]
+severity = "error"
+title = "resource type in a composite position"
+description = "A resource type appears outside binding positions: a tuple element, a gc record's field, a sum payload, a newtype's underlying type, a generic argument at any instantiation (Box<FileHandle>, id<FileHandle> alike), or the box route - Dyn<Releasable> in a type position or Dyn<Releasable>(r) construction. A handle with more than one path to it outlives the single deterministic release point the discipline depends on. Fires under: Resources keep to binding positions."
+remediation = "Keep the resource in its own binding and pass it by parameter or return; carry plain data in the composite instead, or a key the receiver can reopen the resource from."
+owner = "1300-resources"
+requirement = "Resources keep to binding positions"
 allocated = "2026-09-04"
