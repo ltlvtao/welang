@@ -2,7 +2,7 @@
 
 ### Requirement: 文件结构与模块同一性
 
-源文件即模块。文件顶层是顶层项的序列：import 声明、fn 声明、依第 8 章的 record 与 newtype 声明、依第 9 章的 sum 类型声明、依第 10 章的接口声明与 impl 块、顶层 let 绑定。各项次序任意；排序约定是格式化器的事，不是文法的事。语句与表达式 MUST NOT 作为顶层项出现——它们只存在于块内——不适配任何项产生式的顶层 token 序列 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。模块名是按第 1 章命名约定指名它的点分小写路径；路径如何解析到文件（目录映射、标准库优先、依赖缓存）由模块系统章节批准。
+源文件即模块。文件顶层是顶层项的序列：import 声明、fn 声明、依第 8 章的 record 与 newtype 声明、依第 9 章的 sum 类型声明、依第 10 章的接口声明与 impl 块、顶层 let 绑定。各项次序任意；排序约定是格式化器的事，不是文法的事。语句与表达式 MUST NOT 作为顶层项出现——它们只存在于块内——不适配任何项产生式的顶层 token 序列 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。模块名是按第 1 章命名约定指名它的点分小写路径；路径依第 15 章的映射解析到文件——源根下的目录嵌套、保留的 `std` 段、依赖缓存。
 
 #### Scenario: 一个文件解析为一个模块
 
@@ -21,7 +21,7 @@
 
 ### Requirement: import 声明
 
-import 声明是 `import path` 或 `import path as name`。path MUST 是点分小写模块路径，别名（若有）MUST 是小写标识符——同受第 1 章模块命名约定（声明处 `E0013`）。一条 import 恰引入一个名字进模块名空间：路径末段，或别名（若有）。经该名字，导入模块依"pub 可见性"到达目标模块的公开项；路径解析与跨模块可见性执法归模块系统章节。选择性导入（`import a.{b, c}`）、通缀导入、以多于一个名字导入均不存在。
+import 声明是 `import path` 或 `import path as name`。path MUST 是点分小写模块路径，别名（若有）MUST 是小写标识符——同受第 1 章模块命名约定（声明处 `E0013`）。一条 import 恰引入一个名字进模块名空间：路径末段，或别名（若有）。经该名字，导入模块依"pub 可见性"到达目标模块的公开项；路径依第 15 章的映射解析，跨模块可见性由第 15 章执法（`E1303`）。选择性导入（`import a.{b, c}`）、通缀导入、以多于一个名字导入均不存在。
 
 #### Scenario: 无别名的 import 引入末段
 
@@ -98,7 +98,7 @@ fn 的体块是函数语境。其内——包括嵌套于其中的块——第 3
 
 ### Requirement: 顶层绑定
 
-顶层绑定是 `let name = expr` 或 `pub let name = expr`，各自可在 `=` 前带类型注解 `name: type`，依第 2 章绑定形式。`var` MUST NOT 出现在顶层：顶层 `var` 绑定 MUST 以 `E0403` 拒绝——模块级可变状态不存在，`var` 仍只在块内合法。一个模块顶层绑定的初始化子在模块初始化时按源序求值；跨模块初始化模型归模块系统章节。
+顶层绑定是 `let name = expr` 或 `pub let name = expr`，各自可在 `=` 前带类型注解 `name: type`，依第 2 章绑定形式。`var` MUST NOT 出现在顶层：顶层 `var` 绑定 MUST 以 `E0403` 拒绝——模块级可变状态不存在，`var` 仍只在块内合法。一个模块顶层绑定的初始化子在模块初始化时按源序求值；跨模块初始化模型——每模块恰一次、import 图后序、先于 `main`——归第 15 章。
 
 #### Scenario: 顶层 let 绑定
 
@@ -117,14 +117,14 @@ fn 的体块是函数语境。其内——包括嵌套于其中的块——第 3
 
 ### Requirement: pub 可见性
 
-`pub` 是两个已批准声明类别——fn 声明与顶层 let 绑定——的前缀，也及于后续批准的声明类别，各自经其归属章节进入。pub 项在其模块之外可见；无 `pub` 的项模块内局部。他模块的项只有 pub 才可经 import 到达；使用他模块非 pub 项的诊断与 main 函数约定归模块系统章节。其他任何位置的 `pub`——import 前、块内、任何其他 token 序列之前——不适配产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。
+`pub` 是已批准声明类别的前缀——本章的 fn 声明与顶层 let 绑定、第 8 章的 record 与 newtype 声明、第 9 章的 sum 类型声明、第 10 章的接口声明与 impl 方法定义。pub 项在其模块之外可见；无 `pub` 的项模块内局部。他模块的项只有 pub 才可经 import 到达；使用他模块非 pub 项的诊断归第 15 章（`E1303`），main 函数约定归第 15 章。其他任何位置的 `pub`——import 前、块内、任何其他 token 序列之前——不适配产生式，MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。
 
 #### Scenario: pub 标记项跨模块可见
 
 - **WHEN** 模块 A import 模块 B 且 B 声明 `pub fn f()`
-- **THEN** `f` 经被导入模块名从 A 可达；同一 fn 无 `pub` 则模块内局部，其跨模块使用由模块系统章节的诊断拒绝
+- **THEN** `f` 经被导入模块名从 A 可达；同一 fn 无 `pub` 则模块内局部，其跨模块使用以第 15 章的 `E1303:` cross-module use of a module-local item 拒绝
 
-#### Scenario: pub 在其两个已批准项之外
+#### Scenario: pub 在其已批准项之外
 
 - **WHEN** `pub` 前缀 import 或出现在块内，例如 `pub import std.io` 或 `let x = { pub fn f() { } }`
 - **THEN** 编译器以 `E0105:` unexpected token 拒绝
@@ -226,17 +226,11 @@ fn f() {
 ### 待后续章节
 
 ```we
-// Module resolution (std priority, src/ root, circular-dependency
-// rejection), the cross-module visibility diagnostic, and the main
-// convention are the module-system chapter's:
+// Module resolution, the cross-module visibility diagnostic, and
+// the main convention landed with chapter 15; generic parameters
+// landed with the interfaces chapter. Effect annotations, mut
+// parameters, and foreign blocks are their owning chapters':
 //
-// import external.package.name
-// pub fn main() -> Result<(), Error> { Ok(()) }
-//
-// Generic parameters, effect annotations, mut parameters, and
-// foreign blocks are their owning chapters':
-//
-// pub fn pairOf<T>(x: T) -> List<T>
 // fn read(path: String) io -> String
 ```
 

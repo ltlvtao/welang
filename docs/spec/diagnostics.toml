@@ -125,7 +125,16 @@ owner = "1400-errors"
 # E1205-E1299 reserved for amendments (combinator-era codes, panic
 # message-shape codes).
 
-[segments."E1300-E9999"]
+[segments."E1300-E1399"]
+domain = "modules"
+owner = "1500-modules"
+# Intra-segment structure (chapter 15): E1300 boundary reserve,
+# E1301-E1305 circular-dependency / not-found / module-local-use /
+# unresolved-name / main-signature errors.
+# E1306-E1399 reserved for amendments (dependency-era codes,
+# visibility-level refinements).
+
+[segments."E1400-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -982,4 +991,49 @@ description = "The error parameter of Result is not a named sum type: a base typ
 remediation = "Declare a named sum type carrying the failure variants and use it as the error parameter."
 owner = "1400-errors"
 requirement = "The Result type"
+allocated = "2026-09-04"
+
+[diagnostic.E1301]
+severity = "error"
+title = "circular module dependency"
+description = "The import graph holds a cycle: module A imports module B directly or transitively while B imports A. There are no forward declarations; a cycle has no initialization order. Fires under: Module paths and file resolution."
+remediation = "Extract the code both modules need into a third module and import it from each."
+owner = "1500-modules"
+requirement = "Module paths and file resolution"
+allocated = "2026-09-04"
+
+[diagnostic.E1302]
+severity = "error"
+title = "module not found"
+description = "An import's dotted path resolves to no module: the expected file is absent under the source root, the std segment is compiler-provided and the path names no standard-library module, and no dependency-cache entry answers. The message names the expected file path under the mapping. Fires under: Module paths and file resolution."
+remediation = "Create the file at the expected path, fix the path spelling, or add the dependency to the cache."
+owner = "1500-modules"
+requirement = "Module paths and file resolution"
+allocated = "2026-09-04"
+
+[diagnostic.E1303]
+severity = "error"
+title = "cross-module use of a module-local item"
+description = "A module reaches an item of another module that is declared without pub - in value position, type position, or as a variant constructor. Cross-module reach is exactly the qualified form name.item through an import, and only for pub items; an item declared but not pub is this code's, while an item the module does not declare is E1304's. Fires under: Cross-module visibility."
+remediation = "Prefix the declaration with pub if it is meant to be public, or use a pub item of the module instead."
+owner = "1500-modules"
+requirement = "Cross-module visibility"
+allocated = "2026-09-04"
+
+[diagnostic.E1304]
+severity = "error"
+title = "unresolved name"
+description = "A name is held by no scope: a bare identifier naming no block-local binding, module declaration, import name, or prelude name; a qualified form whose qualifier is not an import name; or an item the imported module does not declare. Type positions resolve by the same rules. Fires under: Name resolution."
+remediation = "Fix the spelling, declare the name, import the module, or qualify through an existing import name."
+owner = "1500-modules"
+requirement = "Name resolution"
+allocated = "2026-09-04"
+
+[diagnostic.E1305]
+severity = "error"
+title = "main function signature violation"
+description = "The root module src/main.we declares no fn main, declares main without pub, or declares a main whose signature is not pub fn main() -> Result<(), E> with E a named sum type. The convention binds the root module alone; elsewhere main is an ordinary fn name. A well-shaped main whose error position violates the named-sum constraint is E1204's, not this code's. Fires under: The main convention."
+remediation = "Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type."
+owner = "1500-modules"
+requirement = "The main convention"
 allocated = "2026-09-04"

@@ -2,7 +2,7 @@
 
 ### Requirement: File structure and module identity
 
-A source file is a module. The file's top level is a sequence of top-level items: import declarations, fn declarations, record and newtype declarations per chapter 8, sum type declarations per chapter 9, interface declarations and impl blocks per chapter 10, and top-level let bindings. Items may appear in any order; ordering conventions are the formatter's business, not the grammar's. Statements and expressions MUST NOT appear as top-level items — they exist only inside blocks — and a top-level token sequence fitting no item production MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). The module's name is the dotted lowercase path naming it per chapter 1's naming conventions; how a path resolves to a file (directory mapping, standard-library priority, dependency cache) is ratified by the module-system chapter.
+A source file is a module. The file's top level is a sequence of top-level items: import declarations, fn declarations, record and newtype declarations per chapter 8, sum type declarations per chapter 9, interface declarations and impl blocks per chapter 10, and top-level let bindings. Items may appear in any order; ordering conventions are the formatter's business, not the grammar's. Statements and expressions MUST NOT appear as top-level items — they exist only inside blocks — and a top-level token sequence fitting no item production MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`). The module's name is the dotted lowercase path naming it per chapter 1's naming conventions; a path resolves to a file under chapter 15's mapping — directory nesting under the source root, the reserved `std` segment, and the dependency cache.
 
 #### Scenario: A file parses as one module
 
@@ -21,7 +21,7 @@ A source file is a module. The file's top level is a sequence of top-level items
 
 ### Requirement: Import declarations
 
-An import declaration is `import path` or `import path as name`. The path MUST be a dotted lowercase module path and the alias, when present, MUST be a lowercase identifier — both under chapter 1's module naming convention (`E0013` at the declaration). An import introduces exactly one name into the module's name space: the path's last segment, or the alias when present. Through that name, the importing module reaches the target module's public items per Visibility with pub; the resolution of the path and the enforcement of cross-module visibility are the module-system chapter's. Selective imports (`import a.{b, c}`), wildcard imports, and importing under more than one name do not exist.
+An import declaration is `import path` or `import path as name`. The path MUST be a dotted lowercase module path and the alias, when present, MUST be a lowercase identifier — both under chapter 1's module naming convention (`E0013` at the declaration). An import introduces exactly one name into the module's name space: the path's last segment, or the alias when present. Through that name, the importing module reaches the target module's public items per Visibility with pub; the path resolves under chapter 15's mapping and cross-module visibility is enforced by chapter 15 (`E1303`). Selective imports (`import a.{b, c}`), wildcard imports, and importing under more than one name do not exist.
 
 #### Scenario: Import without an alias introduces the last segment
 
@@ -98,7 +98,7 @@ A fn's body block is the function context. Inside it — including blocks nested
 
 ### Requirement: Top-level bindings
 
-A top-level binding is `let name = expr` or `pub let name = expr`, each optionally with a type annotation `name: type` before `=`, per chapter 2's binding form. `var` MUST NOT appear at the top level: a top-level `var` binding MUST be rejected with `E0403` — module-level mutable state does not exist, and `var` remains legal only inside blocks. The initializers of one module's top-level bindings evaluate at module initialization in source order; the cross-module initialization model is the module-system chapter's.
+A top-level binding is `let name = expr` or `pub let name = expr`, each optionally with a type annotation `name: type` before `=`, per chapter 2's binding form. `var` MUST NOT appear at the top level: a top-level `var` binding MUST be rejected with `E0403` — module-level mutable state does not exist, and `var` remains legal only inside blocks. The initializers of one module's top-level bindings evaluate at module initialization in source order; the cross-module initialization model — once per module, in import-graph post-order, before `main` — is chapter 15's.
 
 #### Scenario: A top-level let binding
 
@@ -117,14 +117,14 @@ A top-level binding is `let name = expr` or `pub let name = expr`, each optional
 
 ### Requirement: Visibility with pub
 
-`pub` is a prefix on the two ratified declaration kinds — fn declarations and top-level let bindings — and on declaration kinds ratified later, each entering through its owning chapter. A pub item is visible outside its module; an item without `pub` is module-local. Items of another module are reachable through an import only when pub; the diagnostic for using a non-pub item of another module, and the main-function convention, are the module-system chapter's. `pub` anywhere else — on an import, inside a block, before any other token sequence — fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`).
+`pub` is a prefix on ratified declaration kinds — fn declarations and top-level let bindings per this chapter, record and newtype declarations per chapter 8, sum type declarations per chapter 9, interface declarations and impl method definitions per chapter 10. A pub item is visible outside its module; an item without `pub` is module-local. Items of another module are reachable through an import only when pub; the diagnostic for using a non-pub item of another module is chapter 15's (`E1303`), and the main-function convention is chapter 15's. `pub` anywhere else — on an import, inside a block, before any other token sequence — fits no production and MUST be rejected under chapter 2's unexpected-token diagnostic (`E0105`).
 
 #### Scenario: pub marks an item visible across modules
 
 - **WHEN** module A imports module B and B declares `pub fn f()`
-- **THEN** `f` is reachable from A through the imported module name; the same fn without `pub` is module-local and its cross-module use is rejected by the module-system chapter's diagnostic
+- **THEN** `f` is reachable from A through the imported module name; the same fn without `pub` is module-local and its cross-module use is rejected with chapter 15's `E1303:` cross-module use of a module-local item
 
-#### Scenario: pub outside its two ratified items
+#### Scenario: pub outside its ratified items
 
 - **WHEN** `pub` prefixes an import or appears inside a block, for example `pub import std.io` or `let x = { pub fn f() { } }`
 - **THEN** the compiler rejects it with `E0105:` unexpected token
@@ -226,17 +226,11 @@ fn f() {
 ### Pending later chapters
 
 ```we
-// Module resolution (std priority, src/ root, circular-dependency
-// rejection), the cross-module visibility diagnostic, and the main
-// convention are the module-system chapter's:
+// Module resolution, the cross-module visibility diagnostic, and
+// the main convention landed with chapter 15; generic parameters
+// landed with the interfaces chapter. Effect annotations, mut
+// parameters, and foreign blocks are their owning chapters':
 //
-// import external.package.name
-// pub fn main() -> Result<(), Error> { Ok(()) }
-//
-// Generic parameters, effect annotations, mut parameters, and
-// foreign blocks are their owning chapters':
-//
-// pub fn pairOf<T>(x: T) -> List<T>
 // fn read(path: String) io -> String
 ```
 

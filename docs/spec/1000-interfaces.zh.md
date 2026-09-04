@@ -224,7 +224,7 @@ impl 声明是顶层项 `impl Name for Head { items }`——可选在 `impl` 后
 
 ### Requirement: Dyn 值
 
-`Dyn<Interface>` 是第 7 章修订下的类型引用，指名类型擦除箱：携带某实现类型之值的 gc 类别值，仅经接口的方法集触达。`Dyn` 是标准作用域的普通 PascalCase 类型名——非关键字——与基础类型名一样；其冲突与它们的一样归模块系统章。构造恰一形式，显式者：`Dyn<Interface>(expr)`，其中表达式的类型 MUST 实现该接口（否则 `E0818`）；上下文 `Dyn(expr)` 形式不存在、亦无待批者——所裁决的单形式规则，装箱处零推断。接口 MUST 是接口——`Dyn<Int64>`、`Dyn<User>`、`Dyn<T>` 以 `E0820` 拒绝——且 MUST NOT 声明关联类型（`E0819`）。裸接口名不是值类型：`let d: Describable` 或参数 `x: Describable` 以 `E0821` 拒绝——接口仅以 `Dyn<Interface>` 占类型槽。Dyn 箱上的成员调用只见接口的方法集（`E0815`）。Dyn 箱是 gc 值：赋值、绑定、传参与返回共享箱——被装箱值不发生拷贝。
+`Dyn<Interface>` 是第 7 章修订下的类型引用，指名类型擦除箱：携带某实现类型之值的 gc 类别值，仅经接口的方法集触达。`Dyn` 是标准作用域的普通 PascalCase 类型名——非关键字——与基础类型名一样；它是第 15 章预导入名之一，本地声明对它的遮蔽与对任何预导入名的一样。构造恰一形式，显式者：`Dyn<Interface>(expr)`，其中表达式的类型 MUST 实现该接口（否则 `E0818`）；上下文 `Dyn(expr)` 形式不存在、亦无待批者——所裁决的单形式规则，装箱处零推断。接口 MUST 是接口——`Dyn<Int64>`、`Dyn<User>`、`Dyn<T>` 以 `E0820` 拒绝——且 MUST NOT 声明关联类型（`E0819`）。裸接口名不是值类型：`let d: Describable` 或参数 `x: Describable` 以 `E0821` 拒绝——接口仅以 `Dyn<Interface>` 占类型槽。Dyn 箱上的成员调用只见接口的方法集（`E0815`）。Dyn 箱是 gc 值：赋值、绑定、传参与返回共享箱——被装箱值不发生拷贝。
 
 #### Scenario: Dyn 箱被构造并调用
 
