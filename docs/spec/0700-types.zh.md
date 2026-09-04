@@ -140,7 +140,7 @@ We 没有隐式转换。不同类型的操作数 MUST NOT 组合：混合整数�
 
 ## 示例（非权威）
 
-下面的示例只用第 1–7 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。协议、函数类型与转换/回绕方法清单标注为待其各自章节。
+下面的示例只用第 1–7 章及其所依托的可迭代协议已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。函数类型与转换/回绕方法清单标注为待其各自章节；字符串迭代归第 11 章。
 
 ### 字面量与默认
 
@@ -221,14 +221,19 @@ match next() {
 }
 ```
 
+### String 按码点迭代
+
+```we
+for c in name { step(c) }      // chapter 11: builtin Iterable<Rune>;
+                                // c binds each code point in order
+```
+
 ### 待后续章节
 
 ```we
 // Fn types arrive with the function-types chapter; the collection
 // types (List among them) with the collections chapter — the generic
-// application form they use is chapter 10's; String's logical
-// iteration protocol (for c in str yielding Rune) with the
-// iterable-protocols chapter:
+// application form they use is chapter 10's:
 //
 // let ids: List<UserId> = build()
 // fn forEach(items: List<Int64>) { }

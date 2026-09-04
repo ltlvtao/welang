@@ -91,7 +91,15 @@ owner = "1000-interfaces"
 # surface yet. E0832-E0899 reserved for amendments (Shareable,
 # codecs).
 
-[segments."E0900-E9999"]
+[segments."E0900-E0999"]
+domain = "iterable protocols"
+owner = "1100-iterables"
+# Intra-segment structure (chapter 11): E0900 boundary reserve,
+# E0901-E0904 for-legality / range-operand / resource-impl /
+# Iter-binding errors. E0905-E0999 reserved for amendments
+# (combinators, collections).
+
+[segments."E1000-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -786,4 +794,40 @@ description = "A where-clause equality `T.Assoc == X` has a right side that is n
 remediation = "Write a concrete type on the right side; parameterized equalities are not ratified."
 owner = "1000-interfaces"
 requirement = "Where clauses"
+allocated = "2026-09-04"
+
+[diagnostic.E0901]
+severity = "error"
+title = "for-in expression does not implement Iterable"
+description = "The for statement's iterable expression has a type that implements no Iterable<T>: a plain integer, a record without an impl, a Bytes value, or a bare Iterator<T> (an iterator alone is not a for iterable). Fires under: The for-loop protocol."
+remediation = "Iterate a type implementing Iterable - a collection, a String, a Range, or your own type's impl - and consume a bare iterator with explicit next() calls instead."
+owner = "1100-iterables"
+requirement = "The for-loop protocol"
+allocated = "2026-09-04"
+
+[diagnostic.E0902]
+severity = "error"
+title = "range operand is not an integer type"
+description = "A range operand (`start..end`) has a type other than chapter 7's eight integer types - a float, a rune, or any other type. Fires under: The Range type."
+remediation = "Give both bounds one integer type; express float spans as explicit loops over an integer index or a step method."
+owner = "1100-iterables"
+requirement = "The Range type"
+allocated = "2026-09-04"
+
+[diagnostic.E0903]
+severity = "error"
+title = "impl of Iterable for a resource-category type"
+description = "A byres (resource) record is the head of an impl of Iterable: an iterator holds a live view of its collection across the loop's executions, outliving the single deterministic release point a resource's discipline depends on. Fires under: Iterable implementer obligations."
+remediation = "Materialize the contents first - one explicit read into a collection - then iterate the collection."
+owner = "1100-iterables"
+requirement = "Iterable implementer obligations"
+allocated = "2026-09-04"
+
+[diagnostic.E0904]
+severity = "error"
+title = "impl binds Iter to a non-iterator type"
+description = "An impl of Iterable<T> binds its associated type Iter to a type that does not implement Iterator<T> for the same element type, for example `type Iter = Int64`. The handle contract is part of the interface. Fires under: The Iterable interface."
+remediation = "Bind Iter to a type implementing Iterator<T> for the same T - a cursor record of your own or a standard-library iterator type."
+owner = "1100-iterables"
+requirement = "The Iterable interface"
 allocated = "2026-09-04"
