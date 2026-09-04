@@ -171,7 +171,7 @@ Every subcommand accepts `--json` and then writes one JSON object per line — J
 
 ### Requirement: The project manifest
 
-The project manifest is a TOML file named `we.toml` at the project root — the directory holding it is the project root, chapter 15's fact restated. The skeleton this chapter fixes: `name`, a string under chapter 1's naming convention — an illegal value MUST be rejected with `E1904:` invalid project name; `version`, a string whose shape is the ecosystem's to constrain, not this specification's; `type`, one of `executable` or `library` — any other value is `E1903:` invalid toolchain configuration value; the `[vet]` table of the advisory layer's requirement; and the `[test]` table, whose key `explore-iterations` is a positive integer — a non-positive or non-integer value is `E1903`. A project invocation — a directory-path command — with no manifest, or a manifest missing `name`, `version`, or `type`, MUST be rejected with `E1905:` project manifest missing or incomplete. What the manifest does not yet carry: dependency declarations, version constraints, and lockfiles are not fixed here — the acquisition story is this chapter's named gap, and the manifest's `[dependencies]` table belongs to the change that designs it.
+The project manifest is a TOML file named `we.toml` at the project root — the directory holding it is the project root, chapter 15's fact restated. The skeleton this chapter fixes: `name`, a string under chapter 1's naming convention — an illegal value MUST be rejected with `E1904:` invalid project name; `version`, a semantic version under chapter 22's shape — an illegal value MUST be rejected with `E2004:` invalid version value; `type`, one of `executable` or `library` — any other value is `E1903:` invalid toolchain configuration value; the `[vet]` table of the advisory layer's requirement; and the `[test]` table, whose key `explore-iterations` is a positive integer — a non-positive or non-integer value is `E1903`. A project invocation — a directory-path command — with no manifest, or a manifest missing `name`, `version`, or `type`, MUST be rejected with `E1905:` project manifest missing or incomplete. The `[dependencies]` table and the lockfile are chapter 22's: the table is optional — absent it is an empty dependency set — its keys and values are checked under that chapter, and `we.lock` is machine-written by its resolution.
 
 #### Scenario: The skeleton is checked
 
@@ -188,11 +188,10 @@ The project manifest is a TOML file named `we.toml` at the project root — the 
 - **WHEN** `we new demo` runs
 - **THEN** the created `we.toml` carries `name = "demo"`, a `version`, `type = "executable"`, and no tables the toolchain does not define; `src/main.we` holds a `pub fn main` and `tests/` holds one empty test module
 
-#### Scenario: Dependencies are a named gap
+#### Scenario: Dependencies are chapter 22's
 
 - **WHEN** a manifest carries a `[dependencies]` table
-- **THEN** this specification fixes nothing about it — neither its rejection nor its meaning; the acquisition story is the named gap of this chapter's open-questions requirement
-
+- **THEN** its keys and values are checked under chapter 22 — an illegal name or the reserved `std` is `E2006`, a malformed constraint is `E2003` — and resolution and acquisition run under that chapter's requirements before any pipeline the command runs
 ### Requirement: Documentation generation
 
 `we doc` renders the `///` documentation units of chapter 6's attachment rule into API documentation. The documented surface is the `pub` declarations and nothing else — a non-pub item appears in no page, the visibility discipline of chapter 15 carried into the rendered output. The default output directory is the project's `docs/` directory, `--output` redirects it, and `--check` verifies without generating: it reports pub declarations that carry no documentation unit, as an advisory finding of the toolchain's own — the completeness policy is the project's, not the specification's, and this chapter registers no code for it. Cross-references in documentation content are the tool's rendering business; an unresolvable one is the tool's advisory finding, likewise unregistered.
@@ -228,12 +227,7 @@ A name declared in a foreign block binds to exactly one native symbol of the pla
 
 ### Requirement: What the toolchain does not fix
 
-This chapter names what it leaves open. Dependency acquisition — the manifest's `[dependencies]` table, version-constraint syntax, lockfile format, and any `install` or `publish` command — is not designed here; chapter 15 fixed the resolution mapping and the cache's priority, and the acquisition story that fills the cache awaits its own change, honestly named as this chapter's one registered gap. The Language Server Protocol lives in a separate document of its own, as v0.8 already intended — the one promise made here is consistency: an editor service's diagnostics are `we check`'s, the same pipeline reporting the same codes, and no editor surface may diverge from the command line's verdicts. Localization of diagnostic output is the toolchain's — the registry's entries are English and the translation layer is outside the specification. Incremental compilation, caching, and build parallelism are implementation details behind the one promise that the same inputs produce the same outputs. Cross-file test parallelism and reporting layout are likewise the implementation's. No performance budget — build time, latency, footprint — is promised anywhere in this chapter.
-
-#### Scenario: The acquisition gap is named, not hidden
-
-- **WHEN** a change proposal claims this chapter designed dependency acquisition
-- **THEN** it contradicts this requirement — the gap is registered here for a dedicated change, and `we.toml`'s dependency table belongs to it
+This chapter names what it leaves open. The Language Server Protocol lives in a separate document of its own, as v0.8 already intended — the one promise made here is consistency: an editor service's diagnostics are `we check`'s, the same pipeline reporting the same codes, and no editor surface may diverge from the command line's verdicts. Localization of diagnostic output is the toolchain's — the registry's entries are English and the translation layer is outside the specification. Incremental compilation, caching, and build parallelism are implementation details behind the one promise that the same inputs produce the same outputs. Cross-file test parallelism and reporting layout are likewise the implementation's. No performance budget — build time, latency, footprint — is promised anywhere in this chapter.
 
 #### Scenario: Editor diagnostics are check's diagnostics
 
@@ -244,7 +238,6 @@ This chapter names what it leaves open. Dependency acquisition — the manifest'
 
 - **WHEN** a toolchain is measured against this chapter for build speed or latency budgets
 - **THEN** nothing answers — the chapter promises output determinism and observable contracts, and performance is evaluation's to measure, not specification's to promise
-
 ### Requirement: Toolchain diagnostics segment
 
 The toolchain chapter owns the registry segment `E1900`–`E1999`, declared in `docs/spec/diagnostics.toml` under `[segments]`, and the unclaimed range narrows to `E2000`–`E9999`. `E` and `W` share the number space — chapter 99's rule, one number one severity — so the segment holds the errors `E1901` exploration detected nondeterminism, `E1902` unmocked effect executed during exploration, `E1903` invalid toolchain configuration value, `E1904` invalid project name, `E1905` project manifest missing or incomplete, `E1906` unresolved native symbol, `E1907` command path not found, and the warnings `W1910` unmocked custom effect in a test, `W1911` possible indirect nested access to one shared value, `W1912` function may block on a wait — the three advisories this chapter promises, v0.8's `W0601`, `W0755`, and `W0756` renumbered into the shared space. The segment's unallocated numbers — `1900`, `1908`–`1909`, and `1913`–`1999` — are reserved for this chapter's amendments, letterless per chapter 99's shared-space rule, for the numbers `1910`–`1912` are the warnings' own. Trigger semantics live in this chapter's requirements; the entries live in the registry.
@@ -266,8 +259,8 @@ The examples below use only surface forms ratified by chapters 1–21. They are 
 ### A project and its manifest
 
 ```toml
-# file: we.toml — the skeleton this chapter fixes; the [dependencies]
-# table is not designed yet and its absence is legal
+# file: we.toml — the skeleton chapter 21 fixes; [dependencies] is
+# chapter 22's table — optional, absent means an empty dependency set
 name = "demo"
 version = "0.1.0"
 type = "executable"
@@ -405,10 +398,9 @@ foreign "c" {
 ### Pending later changes
 
 ```toml
-# [dependencies] is the named gap: version constraints, lockfiles, install and
-# publish — the acquisition story awaits its own change. The LSP protocol lives
-# in a separate document; its one spec promise is here: editor diagnostics are
-# we check's.
+# Dependencies resolve under chapter 22; the registry and publish story is
+# that chapter's named gap. The LSP protocol lives in a separate document;
+# its one spec promise is here: editor diagnostics are we check's.
 ```
 
 ## Terminology

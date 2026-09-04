@@ -142,7 +142,8 @@ owner = "1600-effects"
 # conflict / impl-vs-interface disagreement / initializer impurity.
 # E1406-E1499 reserved for amendments (the testing codes landed in
 # chapter 20's E18xx segment; the FFI codes landed in chapter 19's E17xx
-# segment; the toolchain codes landed in chapter 21's E19xx segment).
+# segment; the toolchain codes landed in chapter 21's E19xx segment; the
+# dependency codes landed in chapter 22's E20xx segment).
 
 [segments."E1500-E1599"]
 domain = "collections"
@@ -183,7 +184,16 @@ owner = "2100-toolchain"
 # numbers 1910-1912 being the warnings' own); numbers 1900, 1908-1909,
 # and 1913-1999 reserved for amendments.
 
-[segments."E2000-E9999"]
+[segments."E2000-E2099"]
+domain = "dependencies"
+owner = "2200-dependencies"
+# Intra-segment structure (chapter 22): E2001-E2006 are all errors -
+# declaration checks, constraint grammar, resolution failures, lock
+# integrity; no W code is allocated in this segment (every finding
+# stops the run); numbers 2000 and 2007-2099 reserved for amendments,
+# letterless per the shared-space rule.
+
+[segments."E2100-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -1508,4 +1518,58 @@ description = "A function body directly calls one of the five operations whose w
 remediation = "No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded."
 owner = "2100-toolchain"
 requirement = "Advisory diagnostics and we vet"
+allocated = "2026-09-04"
+
+[diagnostic.E2001]
+severity = "error"
+title = "unknown dependency"
+description = "A declared dependency's name answers to no package in any source: the declaration is well-formed and the name simply resolves to nothing. The message names the package sought. Fires under: Resolution by the maximum of floors."
+remediation = "Check the spelling of the dependency name, or declare a package that exists."
+owner = "2200-dependencies"
+requirement = "Resolution by the maximum of floors"
+allocated = "2026-09-04"
+
+[diagnostic.E2002]
+severity = "error"
+title = "unsatisfiable dependency constraint"
+description = "The maximum-of-floors pick for a package violates a constraint's ceiling in the graph, or the demanded version exists in no source. The message names the package, the pick, and the violated constraint with its dependent chain. Fires under: Resolution by the maximum of floors."
+remediation = "Loosen or align the conflicting constraint - typically raise or drop an exact pin - so the graph's floors and ceilings admit one common version."
+owner = "2200-dependencies"
+requirement = "Resolution by the maximum of floors"
+allocated = "2026-09-04"
+
+[diagnostic.E2003]
+severity = "error"
+title = "invalid version constraint"
+description = "A dependency's constraint string falls outside the four forms - caret, tilde, greater-or-equal, exact - or its operand is not a well-formed version. The message names the key and the grammar. Fires under: Semantic versions and constraint meanings."
+remediation = "Write the constraint in one of the four forms with a three-part version operand, such as ^1.4.0."
+owner = "2200-dependencies"
+requirement = "Semantic versions and constraint meanings"
+allocated = "2026-09-04"
+
+[diagnostic.E2004]
+severity = "error"
+title = "invalid version value"
+description = "A version value is not a well-formed semantic version - three dot-separated non-negative integers without leading zeros. The manifest's own version field is the usual site; v0.8's E0151 renumbered and widened from the project's own version to any version value. Fires under: Dependency declarations."
+remediation = "Write the version as three integers, major.minor.patch, without leading zeros."
+owner = "2200-dependencies"
+requirement = "Dependency declarations"
+allocated = "2026-09-04"
+
+[diagnostic.E2005]
+severity = "error"
+title = "lockfile integrity mismatch"
+description = "Content acquired into the dependency cache does not hash to its we.lock entry's digest: the content is not what was locked, and the build refuses it. The message names the package. The digest algorithm itself is the toolchain's mechanism. Fires under: The lockfile."
+remediation = "Reacquire the package (clear the corrupted cache entry) or regenerate the lock if the dependency was legitimately replaced."
+owner = "2200-dependencies"
+requirement = "The lockfile"
+allocated = "2026-09-04"
+
+[diagnostic.E2006]
+severity = "error"
+title = "invalid dependency name"
+description = "A [dependencies] key is not a package name under chapter 1's naming convention - lowercase letters, digits, and hyphens - or is the reserved name std, which names the built-in standard library and is never a dependency. The message names the key and the convention. Fires under: Dependency declarations."
+remediation = "Use a lowercase-hyphenated package name; import the standard library directly, for std needs no declaration."
+owner = "2200-dependencies"
+requirement = "Dependency declarations"
 allocated = "2026-09-04"

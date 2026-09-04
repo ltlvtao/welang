@@ -170,7 +170,7 @@
 
 ### Requirement: 项目清单
 
-项目清单是项目根处名为 `we.toml` 的 TOML 文件——持有它的目录是项目根，第 15 章事实的复述。本章固定的骨架：`name`，第 1 章命名约定下的字符串——非法值 MUST 以 `E1904:` invalid project name 拒绝；`version`，一个字符串、其形状归生态约束、非本规范的；`type`，`executable` 或 `library` 之一——任何其他值是 `E1903:` invalid toolchain configuration value；建议层要求所定的 `[vet]` 表；以及 `[test]` 表，其键 `explore-iterations` 是正整数——非正或非整数值是 `E1903`。项目调用——目录路径命令——无清单、或清单缺 `name`、`version`、`type`，MUST 以 `E1905:` project manifest missing or incomplete 拒绝。清单尚未携带的：依赖声明、版本约束与锁文件不在此固定——获取故事是本章的指名留白，清单的 `[dependencies]` 表属于设计它的那个变更。
+项目清单是项目根处名为 `we.toml` 的 TOML 文件——持有它的目录是项目根，第 15 章事实的复述。本章固定的骨架：`name`，第 1 章命名约定下的字符串——非法值 MUST 以 `E1904:` invalid project name 拒绝；`version`，第 22 章形状下的语义版本——非法值 MUST 以 `E2004:` invalid version value 拒绝；`type`，`executable` 或 `library` 之一——任何其他值是 `E1903:` invalid toolchain configuration value；建议层要求所定的 `[vet]` 表；以及 `[test]` 表，其键 `explore-iterations` 是正整数——非正或非整数值是 `E1903`。项目调用——目录路径命令——无清单、或清单缺 `name`、`version`、`type`，MUST 以 `E1905:` project manifest missing or incomplete 拒绝。清单的 `[dependencies]` 表与锁文件是第 22 章的：该表可选——缺省即空依赖集——其键与值在那章受检，`we.lock` 由其解析机器书写。
 
 #### Scenario: 骨架被检查
 
@@ -187,10 +187,10 @@
 - **WHEN** `we new demo` 运行
 - **THEN** 所建的 `we.toml` 携 `name = "demo"`、一个 `version`、`type = "executable"`、无工具链未定义的表；`src/main.we` 持一个 `pub fn main`、`tests/` 持一个空测试模块
 
-#### Scenario: 依赖是指名留白
+#### Scenario: 依赖是第 22 章的
 
 - **WHEN** 一份清单携带 `[dependencies]` 表
-- **THEN** 本规范对它什么都不固定——既不拒绝它、也不定义它；获取故事是本章未决问题要求的指名留白
+- **THEN** 其键与值循第 22 章受检——非法名或保留的 `std` 是 `E2006`、坏约束是 `E2003`——且在该章要求下、命令所跑的任何管线之前先解析与获取
 
 ### Requirement: 文档生成
 
@@ -227,12 +227,7 @@ foreign 块中声明的名绑定平台 C ABI 的恰一个原生符号——第 1
 
 ### Requirement: 工具链不固定什么
 
-本章指名它所留白的东西。依赖获取——清单的 `[dependencies]` 表、版本约束语法、锁文件格式、任何 `install` 或 `publish` 命令——不在此设计；第 15 章已固定解析映射与缓存的优先级，填充缓存的获取故事等它自己的变更、被诚实指名为本章唯一的注册留白。语言服务器协议住在它自己的独立文档里，如 v0.8 本已意向的那样——这里作的唯一承诺是一致性：编辑器服务的诊断是 `we check` 的，同一管线报同样的码，任何编辑器表面不得偏离命令行的判定。诊断输出的本地化是工具链的——注册表条目是英文、翻译层在规范之外。增量编译、缓存与构建并行性是实现细节、藏在同输入同输出这唯一承诺后面。跨文件测试并行性与报告布局同样是实现的。任何性能预算——构建时长、延迟、足迹——在本章任何地方都不被承诺。
-
-#### Scenario: 获取留白被指名、不被藏匿
-
-- **WHEN** 一项变更提案声称本章设计了依赖获取
-- **THEN** 它与本 Requirement 冲突——留白在此为一个专门变更注册，`we.toml` 的依赖表属于它
+本章指名它所留白的东西。语言服务器协议住在它自己的独立文档里，如 v0.8 本已意向的那样——这里作的唯一承诺是一致性：编辑器服务的诊断是 `we check` 的，同一管线报同样的码，任何编辑器表面不得偏离命令行的判定。诊断输出的本地化是工具链的——注册表条目是英文、翻译层在规范之外。增量编译、缓存与构建并行性是实现细节、藏在同输入同输出这唯一承诺后面。跨文件测试并行性与报告布局同样是实现的。任何性能预算——构建时长、延迟、足迹——在本章任何地方都不被承诺。
 
 #### Scenario: 编辑器诊断是 check 的诊断
 
@@ -265,8 +260,8 @@ foreign 块中声明的名绑定平台 C ABI 的恰一个原生符号——第 1
 ### 一个项目与它的清单
 
 ```toml
-# file: we.toml — the skeleton this chapter fixes; the [dependencies]
-# table is not designed yet and its absence is legal
+# file: we.toml — the skeleton chapter 21 fixes; [dependencies] is
+# chapter 22's table — optional, absent means an empty dependency set
 name = "demo"
 version = "0.1.0"
 type = "executable"
@@ -404,10 +399,9 @@ foreign "c" {
 ### 待后续变更
 
 ```toml
-# [dependencies] is the named gap: version constraints, lockfiles, install and
-# publish — the acquisition story awaits its own change. The LSP protocol lives
-# in a separate document; its one spec promise is here: editor diagnostics are
-# we check's.
+# Dependencies resolve under chapter 22; the registry and publish story is
+# that chapter's named gap. The LSP protocol lives in a separate document;
+# its one spec promise is here: editor diagnostics are we check's.
 ```
 
 ## 术语对照
