@@ -116,7 +116,8 @@ let open = ..5              // E0105: both range bounds are required
 ```we
 // The iterable protocols are chapter 11's: String over Rune, ranges
 // over their integer type, and the for-loop protocol itself. The
-// combinators need closures and arrive with their owning change:
+// combinators take function values — chapter 12's closures carry
+// them — and still arrive with their owning change:
 //
 // let out = items.iterator()
 //     .filter(|x| x > 2)

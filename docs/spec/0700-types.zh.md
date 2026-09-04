@@ -83,7 +83,7 @@ We 没有隐式转换。不同类型的操作数 MUST NOT 组合：混合整数�
 
 ### Requirement: 类型引用
 
-类型引用——填充第 2 章与第 6 章批准的每个类型注解槽的形式——是命名类型或结构复合：命名类型是 PascalCase 标识符，可选模块限定为 `module.Name`，按第 6 章触达已导入模块的公开类型，并可选按第 10 章携带泛型应用 `Name<T1, ..., Tk>`——实参为类型引用、元数依声明自身的子句；元组类型是 `(T1, T2, ..., Tn)`，n 从 2 到 8，每个元素自身是类型引用；unit 类型是 `()`；`Dyn<Interface>` 按第 10 章指名类型擦除的接口箱。函数类型与其他一切类型文法尚不存在；各自随其归属章节经本章修订到达。类型槽持有命名引用、泛型应用、`Dyn<Interface>` 形式、元组类型与 unit 类型以外的任何东西 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。良构名字是否解析到已批准类型，随模块解析由模块系统章节决定。
+类型引用——填充第 2 章与第 6 章批准的每个类型注解槽的形式——是命名类型或结构复合：命名类型是 PascalCase 标识符，可选模块限定为 `module.Name`，按第 6 章触达已导入模块的公开类型，并可选按第 10 章携带泛型应用 `Name<T1, ..., Tk>`——实参为类型引用、元数依声明自身的子句；元组类型是 `(T1, T2, ..., Tn)`，n 从 2 到 8，每个元素自身是类型引用；unit 类型是 `()`；`Dyn<Interface>` 按第 10 章指名类型擦除的接口箱；函数类型 `fn(T1, ..., Tn) -> T` 按 fn-types 章是类型引用形式——零或多个逗号分隔的参数类型（每个是类型引用）、箭头、必写的返回类型（自身是类型引用，无值位为 unit 类型 `()`）；其文法与一致性归该章。其他一切类型文法尚不存在；随其归属章节经本章修订到达。类型槽持有命名引用、泛型应用、`Dyn<Interface>` 形式、元组类型、unit 类型或函数类型以外的任何东西 MUST 以第 2 章意外 token 诊断（`E0105`）拒绝。良构名字是否解析到已批准类型，随模块解析由模块系统章节决定。
 
 #### Scenario: 模块限定的类型引用
 
@@ -105,10 +105,15 @@ We 没有隐式转换。不同类型的操作数 MUST NOT 组合：混合整数�
 - **WHEN** 注解持有 `Dyn<Describable>`，`Describable` 是已声明的接口
 - **THEN** 它是按第 10 章的类型擦除箱的类型引用
 
+#### Scenario: 注解槽中的函数类型
+
+- **WHEN** 注解持有 `fn(Int64) -> Int64`
+- **THEN** 它是按 fn-types 章的函数类型形式；槽位持有该签名的函数
+
 #### Scenario: 未批准的类型文法被拒绝
 
-- **WHEN** 类型槽持有函数类型文法，例如 `fn(Int64) -> Int64`
-- **THEN** 编译器以 `E0105:` unexpected token 在槽处拒绝；该形式随其归属章节到达
+- **WHEN** 类型槽持有带效应段的函数类型，例如 `fn(Int64) io -> Int64`，或任何其他未批准的类型文法
+- **THEN** 编译器以 `E0105:` unexpected token 在槽处拒绝；该形式若会到来，随其归属章节到达
 
 ### Requirement: 条件位置
 
@@ -231,9 +236,12 @@ for c in name { step(c) }      // chapter 11: builtin Iterable<Rune>;
 ### 待后续章节
 
 ```we
-// Fn types arrive with the function-types chapter; the collection
-// types (List among them) with the collections chapter — the generic
-// application form they use is chapter 10's:
+// Fn types landed with the function-types chapter:
+//
+// let f: fn(Int64) -> Int64 = square
+//
+// The collection types (List among them) arrive with the collections
+// chapter — the generic application form they use is chapter 10's:
 //
 // let ids: List<UserId> = build()
 // fn forEach(items: List<Int64>) { }

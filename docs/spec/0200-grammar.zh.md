@@ -98,7 +98,7 @@
 
 ### Requirement: 表达式骨架
 
-初等表达式是：标识符、第 1 章批准的字面量、括号表达式 `( e )`——依第 8 章，`( e1, e2, ..., en )` 是元组表达式、`( )` 是 unit 值、括号化单表达式只是分组——以及 record 构造表达式 `TypeRef { field: expr, ... }`（依第 8 章，其头是命名类型引用：PascalCase 标识符或 `module.Name`）。后缀形式是成员访问 `receiver.name` 与调用 `expr(args)`，链式左结合；record 上的成员访问依第 8 章指名其字段，被访问名字是字段还是方法由第 10 章的成员名字解析解析。一元前缀运算符是 `!`、`-`、`~`，结合紧于一切二元运算符。关键字引领的表达式形式按归属章节批准：控制流章节批准带 else 的 `if`，match 章节批准 `match`；它们处于 primary/postfix/unary 骨架之外、不修改骨架，且关键字引领的表达式形式只能经其归属章节的 spec 层变更进入。索引语法 `expr[expr]` 延后至集合章节；`[` 与 `]` 仍是词法 token。
+初等表达式是：标识符、第 1 章批准的字面量、括号表达式 `( e )`——依第 8 章，`( e1, e2, ..., en )` 是元组表达式、`( )` 是 unit 值、括号化单表达式只是分组——以及 record 构造表达式 `TypeRef { field: expr, ... }`（依第 8 章，其头是命名类型引用：PascalCase 标识符或 `module.Name`）。后缀形式是成员访问 `receiver.name` 与调用 `expr(args)`，链式左结合；record 上的成员访问依第 8 章指名其字段，被访问名字是字段还是方法由第 10 章的成员名字解析解析。一元前缀运算符是 `!`、`-`、`~`，结合紧于一切二元运算符。关键字引领的表达式形式按归属章节批准：控制流章节批准带 else 的 `if`，match 章节批准 `match`；它们处于 primary/postfix/unary 骨架之外、不修改骨架，且关键字引领的表达式形式只能经其归属章节的 spec 层变更进入。fn-types 章批准闭包形式——关键字引领的 `fn(params) -> type block` 与 `|params| body` 短形式——同样坐落于本骨架之外；其文法、类型化与位置规则归该章。索引语法 `expr[expr]` 延后至集合章节；`[` 与 `]` 仍是词法 token。
 
 #### Scenario: 后缀链从左到右分组
 
@@ -114,6 +114,11 @@
 
 - **WHEN** 带 else 的 `if` 或 `match` 出现在表达式位置
 - **THEN** 该形式遵循其归属章节的 Requirements；本骨架的 primary、postfix、unary 层不变
+
+#### Scenario: 闭包形式的使用
+
+- **WHEN** `fn(x: Int64) -> Int64 { x }` 或 `|x: Int64| x` 出现在表达式位置
+- **THEN** 该形式遵循 fn-types 章的 Requirements；本骨架的 primary、postfix、unary 层不变
 
 #### Scenario: 构造表达式是初等表达式
 

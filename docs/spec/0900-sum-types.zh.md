@@ -41,7 +41,7 @@ sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一�
 
 ### Requirement: 变体构造器
 
-载荷变体以调用形式 `Name(e1, ..., ek)` 构造，k 与声明的载荷数一致，每个 `ei` 是其载荷类型在一致位置上的表达式（不一致则 `E0501`）；构造出的表达式类型是所属 sum 类型。单元变体以裸名构造——一个 PascalCase 标识符表达式，其类型即该 sum 类型。载荷变体的裸名是否为一等值归函数类型章；在此之前，未附带载荷使用的载荷构造器以 `E0704` 拒绝。已导入模块的公开变体按第 6 章以 `module.Name(args)` 触达——与其他所有模块级名字相同的限定形式。唯一名字空间保证一个名字绝不同时是函数与变体（`E0404`），故调用形式永无歧义。
+载荷变体以调用形式 `Name(e1, ..., ek)` 构造，k 与声明的载荷数一致，每个 `ei` 是其载荷类型在一致位置上的表达式（不一致则 `E0501`）；构造出的表达式类型是所属 sum 类型。单元变体以裸名构造——一个 PascalCase 标识符表达式，其类型即该 sum 类型。载荷变体的裸名不是一等值——fn-types 章对该问题作出了否定回答：构造只有调用形式，未附带载荷使用的载荷构造器以 `E0704` 拒绝；需要构造器函数时以闭包包装，`|r| Circle(r)`。已导入模块的公开变体按第 6 章以 `module.Name(args)` 触达——与其他所有模块级名字相同的限定形式。唯一名字空间保证一个名字绝不同时是函数与变体（`E0404`），故调用形式永无歧义。
 
 #### Scenario: 带载荷构造
 
@@ -61,7 +61,7 @@ sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一�
 #### Scenario: 缺实参的载荷构造器被拒绝
 
 - **WHEN** `Circle` 作为值出现，而声明为 `Circle(Float64)`
-- **THEN** 编译器以 `E0704:` payloaded variant constructor used without arguments 拒绝；一等构造器归函数类型章
+- **THEN** 编译器以 `E0704:` payloaded variant constructor used without arguments 拒绝；以调用形式构造，或需要构造器函数时以闭包包装
 
 ### Requirement: 值 sum
 
@@ -103,7 +103,7 @@ sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一�
 
 ## 示例（非权威）
 
-下面的示例只用第 1–9 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。产出 `Never` 的错误形式与一等构造器标注为待其各自章节。
+下面的示例只用第 1–9 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。产出 `Never` 的错误形式标注为待其章节；一等构造器之问已答——构造只有调用形式。
 
 ### 声明与构造
 
@@ -205,11 +205,14 @@ fn find(id: Int64) -> Int64 {
 
 ```we
 // The forms that produce Never (panic, todo, trap names) arrive with
-// the error-mechanism chapter; first-class constructors with the
-// function-types chapter — Eq/Show derives on sums and Dyn<...> open
-// sets landed with the interfaces chapter:
+// the error-mechanism chapter; Eq/Show derives on sums and Dyn<...>
+// open sets landed with the interfaces chapter. The first-class
+// constructor question the function-types chapter carried is answered
+// negatively — construction is the call form only:
 //
-// let g = Circle                        // pending first-class constructors
+// let g = Circle                        // E0704: payloaded variant
+//                                        // constructor used without
+//                                        // arguments; |r| Circle(r) wraps
 ```
 
 ## 术语对照

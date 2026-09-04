@@ -115,7 +115,8 @@ let open = ..5              // E0105: both range bounds are required
 
 ```we
 // 可迭代协议归第 11 章：String 于 Rune、区间于其整数类型、
-// for 循环协议本身。组合子需闭包，随其所属变更到来：
+// for 循环协议本身。组合子取函数值——第 12 章的闭包承载它们——
+// 仍随其所属变更到来：
 //
 // let out = items.iterator()
 //     .filter(|x| x > 2)

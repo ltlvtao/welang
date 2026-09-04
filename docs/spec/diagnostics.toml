@@ -99,7 +99,15 @@ owner = "1100-iterables"
 # Iter-binding errors. E0905-E0999 reserved for amendments
 # (combinators, collections).
 
-[segments."E1000-E9999"]
+[segments."E1000-E1099"]
+domain = "function types and closures"
+owner = "1200-fn-types"
+# Intra-segment structure (chapter 12): E1000 boundary reserve,
+# E1001-E1004 bare-closure-expectation / resource-capture /
+# captured-value-assignment / generic-fn-name errors.
+# E1005-E1099 reserved for amendments (combinators, collections).
+
+[segments."E1100-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -358,7 +366,7 @@ allocated = "2026-09-04"
 [diagnostic.E0401]
 severity = "error"
 title = "return outside a function body"
-description = "A return appears where no function-body control flow exists: at the module top level, or inside a defer body (which runs at function exit, where no live control flow remains to exit). Fires under: Function bodies, return and defer."
+description = "A return appears where no function-body control flow exists: at the module top level, or inside a defer body (which runs at function exit, where no live control flow remains to exit). The function-body contexts are chapter 6's named fns and chapter 12's closure bodies - a closure's return exits the closure. Fires under: Function bodies, return and defer."
 remediation = "Move the return inside the function whose value it carries; for exit-time cleanup use a defer body without control flow, and for module-level logic wrap it in a fn."
 owner = "0600-declarations"
 requirement = "Function bodies, return and defer"
@@ -830,4 +838,40 @@ description = "An impl of Iterable<T> binds its associated type Iter to a type t
 remediation = "Bind Iter to a type implementing Iterator<T> for the same T - a cursor record of your own or a standard-library iterator type."
 owner = "1100-iterables"
 requirement = "The Iterable interface"
+allocated = "2026-09-04"
+
+[diagnostic.E1001]
+severity = "error"
+title = "bare-parameter closure without an expected function type"
+description = "A short closure with bare parameters sits where no explicit function type is expected - no binding annotation, no parameter's declared function type, no declared return position. Fires under: The short closure form."
+remediation = "Annotate the parameters - |x: Int64| x + 1 - or give the binding a function-type annotation so the parameters take their types from it."
+owner = "1200-fn-types"
+requirement = "The short closure form"
+allocated = "2026-09-04"
+
+[diagnostic.E1002]
+severity = "error"
+title = "resource binding captured by a closure"
+description = "A closure body reads a byres (resource) binding of the enclosing scope: a closure outlives its creation site by construction, and a handle escaping the single deterministic release point a resource's discipline depends on is not honest. Fires under: Capture discipline."
+remediation = "Materialize the resource's contents first - one explicit read into a value - and capture the materialized value."
+owner = "1200-fn-types"
+requirement = "Capture discipline"
+allocated = "2026-09-04"
+
+[diagnostic.E1003]
+severity = "error"
+title = "assignment to a captured value-category binding"
+description = "A closure body assigns to a captured binding of a value-category type or a base type: such captures are copies fixed at closure creation, and the snapshot is frozen. Fires under: Capture discipline."
+remediation = "Carry the intermediate in a local binding of the closure body, or hold the state in a gc-category cell and capture that."
+owner = "1200-fn-types"
+requirement = "Capture discipline"
+allocated = "2026-09-04"
+
+[diagnostic.E1004]
+severity = "error"
+title = "generic function name in value position"
+description = "A fn carrying a generic clause is used by its bare name in value position: the generic clause makes the name a family, not one function, and no single function type names it; no instantiation syntax is ratified. Fires under: Function values."
+remediation = "Call the generic fn - pairUp(1, 2) - or write a closure over it at the types wanted."
+owner = "1200-fn-types"
+requirement = "Function values"
 allocated = "2026-09-04"

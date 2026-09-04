@@ -41,7 +41,7 @@ A sum type declaration is a top-level item `type Name = V1 | V2 | ... | Vn` with
 
 ### Requirement: Variant constructors
 
-A variant with payload is constructed by the call form `Name(e1, ..., ek)`, k matching the declared payload arity, each `ei` an expression of its payload type at an agreement position (`E0501` on mismatch); the constructed expression's type is the enclosing sum type. A unit variant is constructed by its bare name — a PascalCase identifier expression whose type is the sum type. Whether a payloaded variant's bare name is a first-class value is the function-types chapter's; until then a payloaded constructor used without its payload is rejected with `E0704`. A public variant of an imported module is reached as `module.Name(args)` per chapter 6, the same qualified form as every other module-level name. The one name space guarantees a name is never both a function and a variant (`E0404`), so the call form is never ambiguous.
+A variant with payload is constructed by the call form `Name(e1, ..., ek)`, k matching the declared payload arity, each `ei` an expression of its payload type at an agreement position (`E0501` on mismatch); the constructed expression's type is the enclosing sum type. A unit variant is constructed by its bare name — a PascalCase identifier expression whose type is the sum type. A payloaded variant's bare name is not a first-class value — the fn-types chapter answered the question negatively: construction is the call form only, and a payloaded constructor used without its payload is rejected with `E0704`; when a constructor function is wanted, a closure wraps it, `|r| Circle(r)`. A public variant of an imported module is reached as `module.Name(args)` per chapter 6, the same qualified form as every other module-level name. The one name space guarantees a name is never both a function and a variant (`E0404`), so the call form is never ambiguous.
 
 #### Scenario: Construct with payload
 
@@ -61,7 +61,7 @@ A variant with payload is constructed by the call form `Name(e1, ..., ek)`, k ma
 #### Scenario: A payloaded constructor without its payload is rejected
 
 - **WHEN** `Circle` appears as a value, `Circle(Float64)` declared
-- **THEN** the compiler rejects it with `E0704:` payloaded variant constructor used without arguments; first-class constructors are the function-types chapter's
+- **THEN** the compiler rejects it with `E0704:` payloaded variant constructor used without arguments; construct by the call form, or wrap a closure when a constructor function is wanted
 
 ### Requirement: Value sums
 
@@ -103,7 +103,7 @@ A `byval type` has value semantics under chapter 8's value category: constructio
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–9. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. The error forms that produce `Never` and first-class constructors are annotated as pending their chapters.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–9. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. The error forms that produce `Never` are annotated as pending their chapter; the first-class constructor question is answered — construction is the call form only.
 
 ### Declarations and construction
 
@@ -205,11 +205,14 @@ fn find(id: Int64) -> Int64 {
 
 ```we
 // The forms that produce Never (panic, todo, trap names) arrive with
-// the error-mechanism chapter; first-class constructors with the
-// function-types chapter — Eq/Show derives on sums and Dyn<...> open
-// sets landed with the interfaces chapter:
+// the error-mechanism chapter; Eq/Show derives on sums and Dyn<...>
+// open sets landed with the interfaces chapter. The first-class
+// constructor question the function-types chapter carried is answered
+// negatively — construction is the call form only:
 //
-// let g = Circle                        // pending first-class constructors
+// let g = Circle                        // E0704: payloaded variant
+//                                        // constructor used without
+//                                        // arguments; |r| Circle(r) wraps
 ```
 
 ## Terminology

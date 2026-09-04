@@ -239,9 +239,10 @@ for (a, b) in names { }                // E0501: the element type String
 
 ```we
 // Iterator combinators (map, filter, and the lazy and eager families)
-// need function values and arrive with their owning change as default
-// methods of Iterator; the collection types (List, Map, Set) arrive
-// with the collections chapter on this chapter's protocol:
+// take function values — chapter 12's closures carry them — and
+// arrive with their owning change as default methods of Iterator; the
+// collection types (List, Map, Set) arrive with the collections
+// chapter on this chapter's protocol:
 //
 // let out = names.iterator()
 //     .filter(|n| n.size() > 2)
