@@ -64,7 +64,7 @@ We 没有隐式转换。不同类型的操作数 MUST NOT 组合：混合整数�
 
 ### Requirement: 整数溢出语义
 
-整数算术是检查的；它 MUST NOT 静默回绕。编译期可判溢出——字面量表达式常量求值可见的溢出——是编译错误（`E0502`）。运行时溢出是检查陷阱：操作绝不产出回绕值，陷阱构造名与捕获边界由错误机制章节批准。回绕语义只能经显式方法获得（`wrappingAdd()` 及其同族；清单归标准库）。浮点算术遵循 IEEE 754，不设溢出检查。
+整数算术是检查的；它 MUST NOT 静默回绕。编译期可判溢出——字面量表达式常量求值可见的溢出——是编译错误（`E0502`）。运行时溢出是检查陷阱：操作绝不产出回绕值；陷阱是第 14 章指名操作的 `panic`，其捕获边界是进程中止——无处理器观察它。回绕语义只能经显式方法获得（`wrappingAdd()` 及其同族；清单归标准库）。浮点算术遵循 IEEE 754，不设溢出检查。
 
 #### Scenario: 常量溢出是编译错误
 
@@ -74,7 +74,7 @@ We 没有隐式转换。不同类型的操作数 MUST NOT 组合：混合整数�
 #### Scenario: 运行时溢出陷阱而非回绕
 
 - **WHEN** 整数操作在运行时溢出，例如相加两个和超过最大值的 `Int64`
-- **THEN** 操作不产出回绕值；它以检查失败陷阱，其构造由错误机制章节指名
+- **THEN** 操作不产出回绕值；它以指名操作的 `panic` 陷阱（第 14 章的构造），进程中止——无处理器观察它
 
 #### Scenario: 回绕是显式的
 
@@ -195,8 +195,8 @@ let boom = max + 1            // E0502: integer overflow (constant-folded)
 let hi: Int64 = 4611686018427387904
 let lo: Int64 = 4611686018427387904
 let pair = hi + lo            // runtime checked trap, never a wrapped
-                              // value; the trap's construct arrives with
-                              // the error-mechanism chapter
+                              // value; the trap is chapter 14's panic
+                              // naming the operation
 
 let hashed = hash()
 let mixed = hashed.wrappingAdd(1)   // wrapping is always explicit

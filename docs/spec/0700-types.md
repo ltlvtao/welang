@@ -64,7 +64,7 @@ We has no implicit conversions. Operands of different types MUST NOT combine: mi
 
 ### Requirement: Integer overflow semantics
 
-Integer arithmetic is checked; it MUST NOT silently wrap. A compile-time-detectable overflow — one visible to constant evaluation of literal expressions — is a compile error (`E0502`). A runtime overflow is a checked trap: the operation never produces a wrapped value, and the trapping construct's name and capture boundary are ratified by the error-mechanism chapter. Wrapping semantics are available only through explicit methods (`wrappingAdd()` and siblings; the inventory is the standard library's). Float arithmetic follows IEEE 754 and has no overflow check.
+Integer arithmetic is checked; it MUST NOT silently wrap. A compile-time-detectable overflow — one visible to constant evaluation of literal expressions — is a compile error (`E0502`). A runtime overflow is a checked trap: the operation never produces a wrapped value; the trap is chapter 14's `panic` naming the operation, and its capture boundary is the process abort — no handler observes it. Wrapping semantics are available only through explicit methods (`wrappingAdd()` and siblings; the inventory is the standard library's). Float arithmetic follows IEEE 754 and has no overflow check.
 
 #### Scenario: Constant overflow is a compile error
 
@@ -74,7 +74,7 @@ Integer arithmetic is checked; it MUST NOT silently wrap. A compile-time-detecta
 #### Scenario: Runtime overflow traps, never wraps
 
 - **WHEN** an integer operation overflows at run time, for example adding two `Int64` values whose sum exceeds the maximum
-- **THEN** the operation does not produce a wrapped value; it traps as a checked failure whose construct the error-mechanism chapter names
+- **THEN** the operation does not produce a wrapped value; it traps as a `panic` naming the operation (chapter 14's construct), and the process aborts — no handler observes it
 
 #### Scenario: Wrapping is explicit
 
@@ -195,8 +195,8 @@ let boom = max + 1            // E0502: integer overflow (constant-folded)
 let hi: Int64 = 4611686018427387904
 let lo: Int64 = 4611686018427387904
 let pair = hi + lo            // runtime checked trap, never a wrapped
-                              // value; the trap's construct arrives with
-                              // the error-mechanism chapter
+                              // value; the trap is chapter 14's panic
+                              // naming the operation
 
 let hashed = hash()
 let mixed = hashed.wrappingAdd(1)   // wrapping is always explicit

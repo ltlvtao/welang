@@ -27,7 +27,7 @@ The standard library declares the interface `Releasable` under chapter 10's decl
 
 ### Requirement: The scope resource statement
 
-The scope resource statement is `scope resource(name = expr, ..., name = expr) block`, with at least one binding. The two words `scope` and `resource` enter chapter 1's keyword list by this chapter's amendment; the statement opens with them, so chapter 2's statement-start class — which admits keywords — admits it with no further amendment, and chapter 2's statement-family enumeration credits this chapter. Each binding is `name = expr` with no annotation slot: the binding's type is the head expression's, and the head expression's type MUST implement Releasable — a head whose type does not is rejected with `E1103:` scope resource head does not implement Releasable; under the completeness obligation above the implementers are exactly the `byres record`s, so the check rejects every non-resource head. Head expressions evaluate left to right; each name binds for the block. At block exit the compiler guarantees exactly one `release` call per binding, in reverse declaration order; exits pierced by `return`, `break`, or `continue` are block exits and release the same way. A `defer` inside the scope block is chapter 3's `E0204` — defer is a direct function-body item only — and the scope-exit releases run before the enclosing function's own defers, the inner block exiting first. The statement produces no value: it is not an expression.
+The scope resource statement is `scope resource(name = expr, ..., name = expr) block`, with at least one binding. The two words `scope` and `resource` enter chapter 1's keyword list by this chapter's amendment; the statement opens with them, so chapter 2's statement-start class — which admits keywords — admits it with no further amendment, and chapter 2's statement-family enumeration credits this chapter. Each binding is `name = expr` with no annotation slot: the binding's type is the head expression's, and the head expression's type MUST implement Releasable — a head whose type does not is rejected with `E1103:` scope resource head does not implement Releasable; under the completeness obligation above the implementers are exactly the `byres record`s, so the check rejects every non-resource head. Head expressions evaluate left to right; each name binds for the block. At block exit the compiler guarantees exactly one `release` call per binding, in reverse declaration order; exits pierced by `return`, `break`, or `continue` are block exits and release the same way. A `defer` inside the scope block is chapter 3's `E0204` — defer is a direct function-body item only — and the scope-exit releases run before the enclosing function's own defers, the inner block exiting first. The statement produces no value: it is not an expression. A panic unwinding this block is a block exit of this guarantee: the releases run in reverse declaration order, before the enclosing function's defers — chapter 14's unwinding requirement extends the guarantee to unwound exits; every exit kind releases.
 
 #### Scenario: A fresh construction released at exit
 
@@ -48,6 +48,11 @@ The scope resource statement is `scope resource(name = expr, ..., name = expr) b
 
 - **WHEN** a scope resource statement appears in a loop body and the block contains `break`
 - **THEN** the releases run at that exit, before the loop is left
+
+#### Scenario: Panic unwinds the scope
+
+- **WHEN** a panic fires while the scope block is in progress
+- **THEN** the releases run at that exit per this requirement's guarantee, before the enclosing function's defers — chapter 14's unwinding requirement; every exit kind releases
 
 #### Scenario: A non-resource head is rejected
 
@@ -181,7 +186,7 @@ The resources chapter owns registry segment `E1100`–`E1199`, declared in `docs
 
 ## Examples (non-authoritative)
 
-The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–13. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits. Panic unwinding of a scope in flight is annotated as pending the error-mechanism chapter.
+The examples below illustrate the Requirements above using only surface forms ratified by chapters 1–13. They are illustrative and non-authoritative: in any conflict, the Requirements and Scenarios prevail. Lines marked with a diagnostic code are rejected forms, shown with the code the compiler emits.
 
 ### Releasable and its obligations
 

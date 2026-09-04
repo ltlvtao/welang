@@ -79,7 +79,7 @@ sum 类型声明是顶层项 `type Name = V1 | V2 | ... | Vn`，n 至少为一�
 
 ### Requirement: 底类型
 
-`Never` 是底类型：它没有值；`Never` 类型的表达式是从不产出值的计算。产出 `Never` 的形式归错误机制章；本章定该类型的位置与一致。`Never` 只可作为已声明的函数返回类型出现：变量绑定、字段、参数、变体载荷或元组元素标注为 `Never` 以 `E0703` 拒绝。`Never` 类型的表达式可出现于任何期望类型的类型一致位置——它从不产出可与之一致的值——这是第 7 章无隐式转换义务的唯一一处刻意豁免，如此记录。`Never` 自臂类型一致中脱出：对第 3 章与第 8 章下的 if、对第 4 章下的 match，`Never` 类型的臂被排除出一致检查，全 `Never` 的诸臂一致为 `Never`。
+`Never` 是底类型：它没有值；`Never` 类型的表达式是从不产出值的计算。产出 `Never` 的形式归第 14 章——标准库的 `panic` 与 `todo` 函数；本章定该类型的位置与一致。`Never` 只可作为已声明的函数返回类型出现：变量绑定、字段、参数、变体载荷或元组元素标注为 `Never` 以 `E0703` 拒绝。`Never` 类型的表达式可出现于任何期望类型的类型一致位置——它从不产出可与之一致的值——这是第 7 章无隐式转换义务的唯一一处刻意豁免，如此记录。`Never` 自臂类型一致中脱出：对第 3 章与第 8 章下的 if、对第 4 章下的 match，`Never` 类型的臂被排除出一致检查，全 `Never` 的诸臂一致为 `Never`。
 
 #### Scenario: 被禁止的标注被拒绝
 
@@ -186,8 +186,8 @@ match either {
 ### 底类型
 
 ```we
-fn bail() -> Never { ... }               // producers: error-mechanism
-                                         // chapter's
+fn bail() -> Never { ... }               // producers: chapter 14's:
+                                         // panic and todo
 
 let x: Never = bail()                    // E0703: only return-type
 fn f(x: Never) { }                       // annotations allowed
@@ -204,8 +204,8 @@ fn find(id: Int64) -> Int64 {
 ### 待后续章节
 
 ```we
-// The forms that produce Never (panic, todo, trap names) arrive with
-// the error-mechanism chapter; Eq/Show derives on sums and Dyn<...>
+// The forms that produce Never (panic, todo, the overflow trap)
+// landed with chapter 14; Eq/Show derives on sums and Dyn<...>
 // open sets landed with the interfaces chapter. The first-class
 // constructor question the function-types chapter carried is answered
 // negatively — construction is the call form only:

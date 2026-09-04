@@ -79,7 +79,7 @@ A `byval type` has value semantics under chapter 8's value category: constructio
 
 ### Requirement: The bottom type
 
-`Never` is the bottom type: it has no values; an expression of type `Never` is a computation that never produces one. The forms that produce `Never` are the error-mechanism chapter's; this chapter fixes the type's positions and agreements. `Never` may appear only as a declared function return type: a variable binding, field, parameter, variant payload, or tuple element annotated `Never` is rejected with `E0703`. An expression of type `Never` may appear at any type-agreement position of any expected type — it never produces a value to disagree — the one deliberate exemption from chapter 7's no-implicit-conversion obligation, recorded as such. `Never` drops out of arm agreement: for if under chapter 3 and chapter 8, and for match under chapter 4, an arm whose type is `Never` is excluded from the agreement check, and arms that are all `Never` agree as `Never`.
+`Never` is the bottom type: it has no values; an expression of type `Never` is a computation that never produces one. The forms that produce `Never` are chapter 14's — the standard library's `panic` and `todo` functions; this chapter fixes the type's positions and agreements. `Never` may appear only as a declared function return type: a variable binding, field, parameter, variant payload, or tuple element annotated `Never` is rejected with `E0703`. An expression of type `Never` may appear at any type-agreement position of any expected type — it never produces a value to disagree — the one deliberate exemption from chapter 7's no-implicit-conversion obligation, recorded as such. `Never` drops out of arm agreement: for if under chapter 3 and chapter 8, and for match under chapter 4, an arm whose type is `Never` is excluded from the agreement check, and arms that are all `Never` agree as `Never`.
 
 #### Scenario: A forbidden annotation is rejected
 
@@ -186,8 +186,8 @@ match either {
 ### The bottom type
 
 ```we
-fn bail() -> Never { ... }               // producers: error-mechanism
-                                         // chapter's
+fn bail() -> Never { ... }               // producers: chapter 14's:
+                                         // panic and todo
 
 let x: Never = bail()                    // E0703: only return-type
 fn f(x: Never) { }                       // annotations allowed
@@ -204,8 +204,8 @@ fn find(id: Int64) -> Int64 {
 ### Pending later chapters
 
 ```we
-// The forms that produce Never (panic, todo, trap names) arrive with
-// the error-mechanism chapter; Eq/Show derives on sums and Dyn<...>
+// The forms that produce Never (panic, todo, the overflow trap)
+// landed with chapter 14; Eq/Show derives on sums and Dyn<...>
 // open sets landed with the interfaces chapter. The first-class
 // constructor question the function-types chapter carried is answered
 // negatively — construction is the call form only:

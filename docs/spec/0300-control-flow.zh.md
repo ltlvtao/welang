@@ -78,7 +78,7 @@ while 语句是 `while cond block`；loop 语句是 `loop block`。二者都是�
 
 ### Requirement: Defer
 
-defer 语句是 `defer block`——体 MUST 是块；任何其他操作数以 `E0203` 拒绝。Defer 只作为函数体块的直接项才合法；任何其他位置以 `E0204` 拒绝（函数体由声明章节批准；在那之前可触发的是拒绝侧）。同一函数体中的多条 defer 在函数退出时逆序执行，包括经提前 return 或 break 的退出。Defer 只偏移执行时机；它不是资源安全保证——那是第 13 章的 scope resource，其块出口释放先于外围函数自己的 defer 运行，内块先出。defer 体内的错误传播与 effect 规则遵循错误与 effects 章节；defer 不引入对二者的任何例外。
+defer 语句是 `defer block`——体 MUST 是块；任何其他操作数以 `E0203` 拒绝。Defer 只作为函数体块的直接项才合法；任何其他位置以 `E0204` 拒绝（函数体由声明章节批准；在那之前可触发的是拒绝侧）。同一函数体中的多条 defer 在函数退出时逆序执行，包括经提前 return 或 break 的退出。Defer 只偏移执行时机；它不是资源安全保证——那是第 13 章的 scope resource，其块出口释放先于外围函数自己的 defer 运行，内块先出。defer 体内的错误传播是第 14 章的规则：`?` 运算符在那里被拒绝（`E1202`）——defer 体运行于出口、没有可传播的目标返回。defer 体内的 effect 规则遵循 effects 章节；defer 不引入对二者的任何例外。
 
 #### Scenario: Defer 体必须是块
 
@@ -89,6 +89,11 @@ defer 语句是 `defer block`——体 MUST 是块；任何其他操作数以 `E
 
 - **WHEN** 出现 `let x = { defer { log() } compute() }`——defer 在嵌套块表达式内而非函数体直接项
 - **THEN** 编译器以 `E0204:` defer placement 拒绝，具名不是函数体的包围块
+
+#### Scenario: defer 体内的传播
+
+- **WHEN** 出现 `defer { readFile(path)? }`——传播后缀在 defer 体内
+- **THEN** 编译器以 `E1202:` ? outside a function returning Result 拒绝；defer 体运行于出口，没有可传播的目标返回
 
 #### Scenario: 退出时逆序
 

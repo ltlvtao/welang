@@ -604,8 +604,8 @@ let nested: Box<Box<Int64> > = Box { value: Box { value: 1 } }
 
 fn empty<T>() -> Box<T> {
     ...                          // a Never expression satisfies any return;
-}                                // producers are the error-mechanism
-                                 // chapter's
+}                                // producers are chapter 14's: panic
+                                 // and todo
 
 let bad1 = empty()               // E0827: undetermined; write empty<Int64>()
 let bad2 = identity<Int64, String>(1)

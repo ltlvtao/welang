@@ -116,7 +116,16 @@ owner = "1300-resources"
 # E1107-E1199 reserved for amendments (panic binding, position
 # refinement of generic arguments).
 
-[segments."E1200-E9999"]
+[segments."E1200-E1299"]
+domain = "errors"
+owner = "1400-errors"
+# Intra-segment structure (chapter 14): E1200 boundary reserve,
+# E1201-E1204 propagation-operand / context / error-type-agreement /
+# error-position errors.
+# E1205-E1299 reserved for amendments (combinator-era codes, panic
+# message-shape codes).
+
+[segments."E1300-E9999"]
 domain = "later domains"
 owner = "unclaimed" # claimed by chapters via amendment
 
@@ -937,4 +946,40 @@ description = "A resource type appears outside binding positions: a tuple elemen
 remediation = "Keep the resource in its own binding and pass it by parameter or return; carry plain data in the composite instead, or a key the receiver can reopen the resource from."
 owner = "1300-resources"
 requirement = "Resources keep to binding positions"
+allocated = "2026-09-04"
+
+[diagnostic.E1201]
+severity = "error"
+title = "operand of ? is not a Result type"
+description = "The propagation postfix is applied to an operand that is not of a Result type, Option included. Only Result values propagate; an Option unwraps by match. Fires under: The propagation operator."
+remediation = "Match the value to take its payload, or call a function that returns Result before propagating."
+owner = "1400-errors"
+requirement = "The propagation operator"
+allocated = "2026-09-04"
+
+[diagnostic.E1202]
+severity = "error"
+title = "? outside a function returning Result"
+description = "The propagation postfix appears with no live propagation context: the innermost enclosing function or closure returns a non-Result type, the position is a defer body (which runs at exit and has no return to propagate to), or the position is the module top level. Fires under: The propagation operator."
+remediation = "Move the propagation into a function or closure whose return type is Result, or handle the value by match at this position."
+owner = "1400-errors"
+requirement = "The propagation operator"
+allocated = "2026-09-04"
+
+[diagnostic.E1203]
+severity = "error"
+title = "? error type disagrees with the declared error type"
+description = "The operand's error type E_src is not the same named type as the propagation context's declared error type E_dst. There is no implicit wrapping or lifting; error conversion is explicit. Fires under: The propagation operator."
+remediation = "Convert explicitly - a match that wraps the error into the declared type, or a standard-library combinator when its change ratifies one."
+owner = "1400-errors"
+requirement = "The propagation operator"
+allocated = "2026-09-04"
+
+[diagnostic.E1204]
+severity = "error"
+title = "Result error type is not a named sum type"
+description = "The error parameter of Result is not a named sum type: a base type (String included), a record, an interface, a Dyn box, or a generic parameter appears in the error position. The constraint is exhaustiveness: a named sum's variant set is closed, so a match on a Result covers Ok and Err with all of E's variants visible. Fires under: The Result type."
+remediation = "Declare a named sum type carrying the failure variants and use it as the error parameter."
+owner = "1400-errors"
+requirement = "The Result type"
 allocated = "2026-09-04"

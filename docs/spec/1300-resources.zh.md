@@ -27,7 +27,7 @@
 
 ### Requirement: scope resource 语句
 
-scope resource 语句是 `scope resource(name = expr, ..., name = expr) block`，至少一个绑定。`scope` 与 `resource` 两词经本章修正进入第 1 章的关键字列表；语句以它们开头，故第 2 章的语句首位类——它接纳关键字——接纳它而无需进一步修正，第 2 章的语句族枚举记入本章名下。每个绑定是 `name = expr`，没有注解位：绑定的类型即头表达式的类型，且头表达式的类型 MUST 实现 Releasable——类型不实现的头以 `E1103:` scope resource head does not implement Releasable 拒绝；在上述完备性义务下实现者恰是 `byres record`，故该检查拒绝一切非资源头。头表达式从左到右求值；每个名字为该块绑定。块出口处编译器保证每绑定恰一次 `release` 调用，按声明逆序；被 `return`、`break` 或 `continue` 穿透的出口是块出口，同样释放。scope 块内的 `defer` 是第 3 章的 `E0204`——defer 仅是函数体直接项——且块出口释放先于外围函数自己的 defer 运行，内块先出。该语句不产生值：它不是表达式。
+scope resource 语句是 `scope resource(name = expr, ..., name = expr) block`，至少一个绑定。`scope` 与 `resource` 两词经本章修正进入第 1 章的关键字列表；语句以它们开头，故第 2 章的语句首位类——它接纳关键字——接纳它而无需进一步修正，第 2 章的语句族枚举记入本章名下。每个绑定是 `name = expr`，没有注解位：绑定的类型即头表达式的类型，且头表达式的类型 MUST 实现 Releasable——类型不实现的头以 `E1103:` scope resource head does not implement Releasable 拒绝；在上述完备性义务下实现者恰是 `byres record`，故该检查拒绝一切非资源头。头表达式从左到右求值；每个名字为该块绑定。块出口处编译器保证每绑定恰一次 `release` 调用，按声明逆序；被 `return`、`break` 或 `continue` 穿透的出口是块出口，同样释放。scope 块内的 `defer` 是第 3 章的 `E0204`——defer 仅是函数体直接项——且块出口释放先于外围函数自己的 defer 运行，内块先出。该语句不产生值：它不是表达式。panic 展开本块是本保证的一种块出口：释放按声明逆序运行，先于外围函数的 defer——第 14 章的展开 Requirements 将保证扩展至展开出口；每种出口都释放。
 
 #### Scenario: 新建构造在出口释放
 
@@ -48,6 +48,11 @@ scope resource 语句是 `scope resource(name = expr, ..., name = expr) block`�
 
 - **WHEN** scope resource 语句出现在循环体内且块内含 `break`
 - **THEN** 释放在该出口运行，先于循环被离开
+
+#### Scenario: panic 展开 scope
+
+- **WHEN** panic 在 scope 块进行中触发
+- **THEN** 释放在该出口按本 Requirement 的保证运行，先于外围函数的 defer——第 14 章的展开 Requirements；每种出口都释放
 
 #### Scenario: 非资源头被拒绝
 
@@ -181,7 +186,7 @@ scope resource 语句是 `scope resource(name = expr, ..., name = expr) block`�
 
 ## 示例（非权威）
 
-下面的示例只用第 1–13 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。进行中 scope 的 panic 展开标注为待错误机制章。
+下面的示例只用第 1–13 章已批准的表面形式阐释上述 Requirements。它们是说明性的、非权威的：任何冲突以 Requirements 与 Scenarios 为准。标注诊断码的行是被拒绝的形式，展示编译器发出的码。
 
 ### Releasable 与其义务
 
