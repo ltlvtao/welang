@@ -1,0 +1,18 @@
+{
+  "name": "check-e0501-annotation",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "let n: Int32 = 42\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:5: error[E0501]: mixed types — the expression is Int64, the annotation is Int32; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "let n: Int32 = 42\n"
+  }
+}

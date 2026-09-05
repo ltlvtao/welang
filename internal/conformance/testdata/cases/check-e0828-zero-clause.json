@@ -1,0 +1,18 @@
+{
+  "name": "check-e0828-zero-clause",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "type S = A | B\nfn f(x: S<Int64>) {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:10: error[E0828]: type argument arity mismatch — \"S\" wants 0 type arguments, got 1; match the declaration's arity\n",
+  "files": {
+    "demo/main.we": "type S = A | B\nfn f(x: S<Int64>) {\n    return\n}\n"
+  }
+}

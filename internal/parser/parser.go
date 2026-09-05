@@ -26,7 +26,6 @@ const (
 	bndCtl    = "chapter 3 (control flow) forms"
 	bndMatch  = "chapter 4 (match) forms"
 	bndIter   = "chapter 5 (iteration) forms"
-	bndTypes  = "chapter 7 (types) forms"
 	bndComp   = "chapter 8 (composites) forms"
 	bndGener  = "chapter 10 (interfaces and generics) forms"
 	bndClosur = "chapter 12 (fn types and closures) forms"
@@ -56,6 +55,8 @@ var helps = map[string]string{
 	"E0405": "Add the declaration the documentation describes, convert the lines to ordinary // comments, or remove them.",
 	"E0012": "Rename the binding to camelCase (for example userId) and update references; constants also use camelCase.",
 	"E0013": "Rename the module to lowercase with dot separation (for example net.http.client) and update imports.",
+	"E0011": "Rename the type to PascalCase (for example UserRecord) and update references; conventions are enforced at the declaration.",
+	"E0701": "Declare the variant with one record payload, which names its fields: `Moved(Point)`.",
 }
 
 // NotImplemented reports a ratified-but-unimplemented form. What names the
@@ -188,13 +189,31 @@ func (p *parser) checkCamel(t lex.Token) {
 	}
 }
 
-// declare enters a name into the module name space; the later of two
-// colliding declarations is rejected (chapter 6).
-func (p *parser) declare(t lex.Token) {
+// checkPascal enforces E0011 at a type or variant name token (sum type
+// names and variant names follow the one rule).
+func (p *parser) checkPascal(t lex.Token) {
+	if !isPascal(t.Text) {
+		p.failTok(t, "E0011",
+			fmt.Sprintf("type name must be PascalCase — %q is not PascalCase", t.Text))
+	}
+}
+
+// dupCheck rejects a name already held by the module name space. Used at
+// declaration tokens whose registration completes later (fn bodies), so
+// the collision (E0404) outranks the naming convention (E0012) at the
+// same token — the chapter 9 scenario reports E0404 for a variant name
+// that collides with a PascalCase fn name.
+func (p *parser) dupCheck(t lex.Token) {
 	if line, dup := p.names[t.Text]; dup {
 		p.failTok(t, "E0404",
 			fmt.Sprintf("duplicate name in one module — %q is already declared at line %d; one module has one name space", t.Text, line))
 	}
+}
+
+// declare enters a name into the module name space; the later of two
+// colliding declarations is rejected (chapter 6).
+func (p *parser) declare(t lex.Token) {
+	p.dupCheck(t)
 	p.names[t.Text] = t.Line
 }
 
@@ -264,11 +283,23 @@ func (p *parser) parseItem() ast.Item {
 			if isKw(p.cur(), "let") {
 				return p.parseTopLet(true, t.Line, t.Col)
 			}
+			if isKw(p.cur(), "type") {
+				return p.parseSumDecl(true, false, t.Line, t.Col)
+			}
+			if isKw(p.cur(), "byval") {
+				bv := p.cur()
+				p.next()
+				if isKw(p.cur(), "type") {
+					return p.parseSumDecl(true, true, t.Line, t.Col)
+				}
+				p.failTok(bv, "E0105",
+					"unexpected token — byval prefixes type here; the prefix order is pub, then byval, then type")
+			}
 			if p.atEnd() {
 				p.fail(t.Line, t.Col, "E0105", "unexpected end of file — pub prefixes a fn or let declaration")
 			}
 			p.failTok(p.cur(), "E0105",
-				fmt.Sprintf("unexpected token — %q after pub: pub prefixes fn and let", p.cur().Text))
+				fmt.Sprintf("unexpected token — %q after pub: pub prefixes fn, let, and byval type", p.cur().Text))
 		case "fn":
 			return p.parseFnDecl(false, t.Line, t.Col)
 		case "let":
@@ -279,10 +310,20 @@ func (p *parser) parseItem() ast.Item {
 		case "return":
 			p.failTok(t, "E0401",
 				"return outside a function body — no function context encloses this return; module-level logic belongs in a fn")
-		case "record", "byval", "byres", "newtype":
+		case "record", "byres", "newtype":
+			p.bnd(bndComp)
+		case "byval":
+			if isKw(p.peek(), "type") {
+				p.next() // byval
+				return p.parseSumDecl(false, true, t.Line, t.Col)
+			}
+			if isKw(p.peek(), "pub") {
+				p.failTok(p.peek(), "E0105",
+					`unexpected token — "pub" after byval: the prefix order is pub, then byval, then type`)
+			}
 			p.bnd(bndComp)
 		case "type":
-			p.bnd(bndTypes)
+			return p.parseSumDecl(false, false, t.Line, t.Col)
 		case "interface", "impl":
 			p.bnd(bndGener)
 		case "effect":
@@ -307,6 +348,7 @@ func (p *parser) parseImport() *ast.Import {
 	imp := &ast.Import{Line: kw.Line, Col: kw.Col}
 	last := p.moduleSeg()
 	imp.Path = append(imp.Path, last.Text)
+	imp.PathLine, imp.PathCol = last.Line, last.Col
 	for p.cur().Kind == "." {
 		p.next()
 		last = p.moduleSeg()
@@ -362,6 +404,7 @@ func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 		p.failTok(t, "E0105",
 			fmt.Sprintf("unexpected token — %q where a fn name goes: a fn declaration is fn name(params) [-> type] { body }", t.Text))
 	}
+	p.dupCheck(t)
 	p.checkCamel(t)
 	d.Name, d.NameLine, d.NameCol = t.Text, t.Line, t.Col
 	p.next()
@@ -430,8 +473,102 @@ func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 			fmt.Sprintf("unexpected token — %q where a fn body block opens", p.cur().Text))
 	}
 	d.Body = p.parseBlock(&fnCtx{name: d.Name, hasRet: d.Ret != nil})
-	p.declare(lex.Token{Kind: lex.KindIdent, Text: d.Name, Line: d.NameLine, Col: d.NameCol})
+	p.names[d.Name] = d.NameLine
 	return d
+}
+
+// parseSumDecl parses chapter 9's sum declaration: `[pub] [byval] type
+// Name = V1 | … | Vn`, each variant bare (a unit variant) or carrying
+// 1..8 payload type references. The generic parameter clause and the
+// derives clause stay at chapter 10's parse boundary. The prefixes are
+// consumed by the caller; line/col anchor at the outermost one.
+func (p *parser) parseSumDecl(pub, byval bool, line, col int) *ast.SumDecl {
+	p.next() // type
+	d := &ast.SumDecl{Pub: pub, Byval: byval, Line: line, Col: col}
+	t := p.cur()
+	if t.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(t, "E0105", "unexpected end of file — a sum declaration is type Name = V1 | … | Vn")
+		}
+		p.failTok(t, "E0105",
+			fmt.Sprintf("unexpected token — %q where the type name goes: a sum declaration is type Name = V1 | … | Vn", t.Text))
+	}
+	p.dupCheck(t)
+	p.checkPascal(t)
+	d.Name, d.NameLine, d.NameCol = t.Text, t.Line, t.Col
+	p.names[d.Name] = d.NameLine
+	p.next()
+	if p.cur().Kind == "<" {
+		p.bnd(bndGener)
+	}
+	if p.cur().Kind != "=" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a sum declaration is type Name = V1 | … | Vn")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where the = of a sum declaration goes", p.cur().Text))
+	}
+	p.next() // = (a trailing = or | continues per chapter 2's set)
+	for {
+		vt := p.cur()
+		if vt.Kind != lex.KindIdent {
+			if p.atEnd() {
+				p.failTok(vt, "E0105", "unexpected end of file — a variant list wants at least one variant")
+			}
+			p.failTok(vt, "E0105",
+				fmt.Sprintf("unexpected token — %q where a variant name goes: variants are Name or Name(payload types)", vt.Text))
+		}
+		p.dupCheck(vt)
+		p.checkPascal(vt)
+		p.names[vt.Text] = vt.Line
+		v := ast.Variant{Name: vt.Text, Line: vt.Line, Col: vt.Col}
+		p.next()
+		if p.cur().Kind == "(" {
+			p.next()
+			for {
+				if p.cur().Kind == ")" {
+					if len(v.Payload) == 0 {
+						p.failTok(p.cur(), "E0105",
+							"unexpected token — an empty payload list fits no production: a variant is bare, or carries one to eight payload types")
+					}
+					p.next()
+					break
+				}
+				if p.atEnd() {
+					p.failTok(p.cur(), "E0105", "unexpected end of file — a payload list closes with )")
+				}
+				v.Payload = append(v.Payload, p.parseTypeRef())
+				if p.cur().Kind == "," {
+					p.next()
+					continue
+				}
+				if p.cur().Kind == ")" {
+					p.next()
+					break
+				}
+				p.failTok(p.cur(), "E0105",
+					fmt.Sprintf("unexpected token — %q in a payload list: payloads are comma-separated type references and the list closes with )", p.cur().Text))
+			}
+			if len(v.Payload) > 8 {
+				p.failTok(vt, "E0701",
+					fmt.Sprintf("variant payload arity above eight — %q declares %d payload types; a record payload names its fields", vt.Text, len(v.Payload)))
+			}
+		}
+		d.Variants = append(d.Variants, v)
+		if p.cur().Kind == "|" {
+			// A line-starting | after a complete variant ends the
+			// declaration; checkStart reports it (E0102).
+			if p.brokeLine() {
+				return d
+			}
+			p.next()
+			continue
+		}
+		if isKw(p.cur(), "derives") {
+			p.bnd(bndGener)
+		}
+		return d
+	}
 }
 
 // attachDocs resolves each /// unit against the next top-level item; a
@@ -840,7 +977,12 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 		p.next()
 		p.depth++
 		if p.cur().Kind == ")" {
-			p.bnd(bndComp) // the unit value
+			// the unit value: the one value of the unit type (chapter 8's
+			// sliver this milestone implements)
+			u := &ast.Unit{Line: t.Line, Col: t.Col}
+			p.next()
+			p.depth--
+			return u
 		}
 		e := p.parseExpr(valueCtx)
 		if p.cur().Kind == "," {
@@ -887,7 +1029,8 @@ func (p *parser) parseTypeRef() ast.TypeRef {
 			if p.cur().Kind == "." {
 				p.failTok(p.cur(), "E0105", typeRefMsg(p.cur()))
 			}
-			return &ast.NamedType{Name: t.Text, Line: t.Line, Col: t.Col, Args: p.genericArgs()}
+			al, ac := p.anglePos()
+			return &ast.NamedType{Name: t.Text, Line: t.Line, Col: t.Col, Args: p.genericArgs(), ArgLine: al, ArgCol: ac}
 		}
 		// lowercase head: a module qualifier path ending in the type name
 		quals := []string{t.Text}
@@ -903,7 +1046,8 @@ func (p *parser) parseTypeRef() ast.TypeRef {
 				if p.cur().Kind == "." {
 					p.failTok(p.cur(), "E0105", typeRefMsg(p.cur()))
 				}
-				return &ast.NamedType{Qual: joinDot(quals), Name: nt.Text, Line: t.Line, Col: t.Col, Args: p.genericArgs()}
+				al, ac := p.anglePos()
+				return &ast.NamedType{Qual: joinDot(quals), Name: nt.Text, Line: t.Line, Col: t.Col, Args: p.genericArgs(), ArgLine: al, ArgCol: ac}
 			}
 			quals = append(quals, nt.Text)
 			last = nt
@@ -965,6 +1109,15 @@ func (p *parser) parseParenType() ast.TypeRef {
 	}
 }
 
+// anglePos reports the position of a generic clause's `<` when one is
+// next, else the zero position — the application's anchor.
+func (p *parser) anglePos() (int, int) {
+	if p.cur().Kind == "<" {
+		return p.cur().Line, p.cur().Col
+	}
+	return 0, 0
+}
+
 // genericArgs consumes a `<T1, …, Tk>` application when present. Type
 // slots are unambiguous contexts, so `<` here is never a comparison.
 func (p *parser) genericArgs() []ast.TypeRef {
@@ -996,24 +1149,19 @@ func (p *parser) genericArgs() []ast.TypeRef {
 	}
 }
 
-// closeAngle consumes one closing `>` of a generic application and reports
-// whether it did. The lexer's maximal munch merges adjacent bytes, so a
-// two-byte token starting with `>` splits here: the consumed closer is the
-// first byte, and the remainder — `>` for a nested closer, `=` before an
-// initializer written without a space — stays as the current token, shifted
-// one column. Type slots are unambiguous contexts, so a `>`-led token at a
-// closer position is always a closer.
+// closeAngle consumes the closing `>` of a generic application and reports
+// whether it did. Only the bare `>` closes: maximal munch makes `>>` and
+// `>=` the shift and ge operators, so a two-byte `>`-led token at a closer
+// position means the nested closers were not separated — chapter 10
+// rejects that form under E0105 with the separation remediation.
 func (p *parser) closeAngle() bool {
 	switch t := p.cur(); t.Kind {
 	case ">":
 		p.next()
 		return true
-	case ">>":
-		p.toks[p.pos] = lex.Token{Kind: ">", Text: ">", Line: t.Line, Col: t.Col + 1}
-		return true
-	case ">=":
-		p.toks[p.pos] = lex.Token{Kind: "=", Text: "=", Line: t.Line, Col: t.Col + 1}
-		return true
+	case ">>", ">=":
+		p.failTok(t, "E0105",
+			fmt.Sprintf("unexpected token — %q merges the nested closers: nested closers are separated — write Name<Name<Int64> >; %q is the shift operator (chapter 1)", t.Text, t.Text))
 	}
 	return false
 }

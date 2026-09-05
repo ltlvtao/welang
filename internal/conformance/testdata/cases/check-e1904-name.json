@@ -1,0 +1,20 @@
+{
+  "name": "check-e1904-name",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"Demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E1904]: invalid project name — \"Demo\" is not lowercase letters, digits, and hyphens; use chapter 1's naming convention\n",
+  "files": {
+    "we.toml": "name = \"Demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+  }
+}

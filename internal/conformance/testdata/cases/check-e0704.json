@@ -1,0 +1,18 @@
+{
+  "name": "check-e0704",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "type Shape = Circle(Float64)\nfn f() {\n    let g = Circle\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:13: error[E0704]: payloaded variant constructor used without arguments — \"Circle\" carries a payload; construct with the call form Circle(...)\n",
+  "files": {
+    "demo/main.we": "type Shape = Circle(Float64)\nfn f() {\n    let g = Circle\n}\n"
+  }
+}

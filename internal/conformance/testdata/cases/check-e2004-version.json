@@ -1,0 +1,20 @@
+{
+  "name": "check-e2004-version",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E2004]: invalid version value — \"1.0\" is not three dot-separated non-negative integers without leading zeros; write the version as major.minor.patch\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+  }
+}

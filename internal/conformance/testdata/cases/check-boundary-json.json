@@ -4,7 +4,7 @@
     "check",
     "--json"
   ],
-  "exit": 70,
-  "stdout": "",
-  "stderr": "we: project compilation is not implemented in this reference build yet\n"
+  "exit": 1,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"error\",\"code\":\"E1905\",\"message\":\"project manifest missing or incomplete — no we.toml in the project directory; create we.toml with the name, version, and type keys, or run we new to write the skeleton\",\"file\":\"we.toml\",\"line\":1,\"column\":1,\"help\":\"Create we.toml with the name, version, and type keys, or run we new to write the skeleton.\"}\n",
+  "stderr": ""
 }

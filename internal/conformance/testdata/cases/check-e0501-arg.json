@@ -1,0 +1,18 @@
+{
+  "name": "check-e0501-arg",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn id(x: Int64) -> Int64 {\n    return x\n}\n\nfn f() {\n    let y = id(3.14)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:16: error[E0501]: mixed types — the argument is Float64, the parameter is Int64; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "fn id(x: Int64) -> Int64 {\n    return x\n}\n\nfn f() {\n    let y = id(3.14)\n}\n"
+  }
+}

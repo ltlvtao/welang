@@ -1,0 +1,18 @@
+{
+  "name": "check-bnd-panic",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    panic(\"boom\")\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: termination functions (chapter 14) are not implemented in this reference build yet\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    panic(\"boom\")\n}\n"
+  }
+}

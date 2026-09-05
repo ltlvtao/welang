@@ -1,0 +1,20 @@
+{
+  "name": "check-e1305-shape",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub fn main(x: Int64) -> Result<(), AppError> {\n    return Ok(x)\n}\n\ntype AppError = Failed(String)\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:1:1: error[E1305]: main function signature violation — main's signature is not pub fn main() -> Result<(), E>: it declares parameters; declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "pub fn main(x: Int64) -> Result<(), AppError> {\n    return Ok(x)\n}\n\ntype AppError = Failed(String)\n"
+  }
+}

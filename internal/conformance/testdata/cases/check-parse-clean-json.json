@@ -12,7 +12,7 @@
   },
   "exit": 70,
   "stdout": "",
-  "stderr": "we: type checking is not implemented in this reference build yet\n",
+  "stderr": "we: standard-library modules (chapter 15) are not implemented in this reference build yet\n",
   "files": {
     "demo/main.we": "import std.io as io\n\npub let maxRetries = 3\n\npub fn handle(id: Int64) -> Int64 {\n    let base = compute(\n        id,\n        maxRetries,\n    )\n    var total: Int64 = 0\n    total = base * 2 + 1\n    let flag = {\n        let mask = total - 1\n        mask & total == id\n    }\n    let y = svc.\n        query()\n    let z = -total + ~mask\n    let span = a..b\n    io.println(\"done\")\n    flag\n}\n\nfn compute(id: Int64, budget: Int64) -> Int64 {\n    id + budget\n}\n"
   }

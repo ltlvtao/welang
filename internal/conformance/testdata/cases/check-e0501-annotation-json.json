@@ -1,0 +1,19 @@
+{
+  "name": "check-e0501-annotation-json",
+  "args": [
+    "check",
+    "demo/main.we",
+    "--json"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "let n: Int32 = 42\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"error\",\"code\":\"E0501\",\"message\":\"mixed types — the expression is Int64, the annotation is Int32; no coercion is ever inserted\",\"file\":\"demo/main.we\",\"line\":1,\"column\":5,\"help\":\"Make the types agree at the source: use a literal suffix (42i32) or an explicit conversion method (toInt64(), toBytes()); the method inventory is the standard library's.\"}\n",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "let n: Int32 = 42\n"
+  }
+}

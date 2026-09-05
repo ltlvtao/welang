@@ -1,0 +1,18 @@
+{
+  "name": "check-e0404-variant-fn",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "type Shape = Circle(Float64)\nfn Circle(r: Float64) { }\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:4: error[E0404]: duplicate name in one module — \"Circle\" is already declared at line 1; one module has one name space\n",
+  "files": {
+    "demo/main.we": "type Shape = Circle(Float64)\nfn Circle(r: Float64) { }\n"
+  }
+}

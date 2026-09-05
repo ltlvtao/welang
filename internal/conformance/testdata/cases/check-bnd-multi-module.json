@@ -1,0 +1,22 @@
+{
+  "name": "check-bnd-multi-module",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import util\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "src/util.we": "pub fn helper() { return }\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: multi-module programs (chapter 15) are not implemented in this reference build yet\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import util\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "src/util.we": "pub fn helper() { return }\n"
+  }
+}

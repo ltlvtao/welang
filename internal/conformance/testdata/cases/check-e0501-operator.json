@@ -1,0 +1,18 @@
+{
+  "name": "check-e0501-operator",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(a: Int64, b: Int32) {\n    let s = a + b\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:15: error[E0501]: mixed types — operands of \"+\" are Int64 and Int32; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "fn f(a: Int64, b: Int32) {\n    let s = a + b\n}\n"
+  }
+}

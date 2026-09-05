@@ -1,0 +1,18 @@
+{
+  "name": "check-e0605-tail",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    \"tail\"\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:5: error[E0605]: non-unit value dropped — the final expression is String, not (); bind it, chain it onward, declare a return type, or discard it explicitly with let _ = expr\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    \"tail\"\n}\n"
+  }
+}

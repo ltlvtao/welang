@@ -133,6 +133,8 @@ func exprStr(e ast.Expr) string {
 		return exprStr(x.Fn) + "(" + strings.Join(args, ",") + ")"
 	case *ast.Member:
 		return exprStr(x.Recv) + "." + x.Name
+	case *ast.Unit:
+		return "()"
 	case *ast.BlockExpr:
 		return "{...}"
 	}
@@ -196,7 +198,6 @@ const (
 	topStmtPart  = "fits no top-level item production"
 	stmtPart     = "fits no statement production"
 	exprPart     = "cannot begin an expression"
-	typeForms7   = "chapter 7 (types) forms"
 	compForms8   = "chapter 8 (composites) forms"
 	generic10    = "chapter 10 (interfaces and generics) forms"
 	closureForms = "chapter 12 (fn types and closures) forms"
@@ -242,7 +243,7 @@ var dispatchTable = []struct {
 	{"byres", "B {}", bd(compForms8), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"newtype", "N {}", bd(compForms8), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"with", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"type", "T = Int64", bd(typeForms7), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"type", "T = Int64", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"interface", "I {}", bd(generic10), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"impl", "I {}", bd(generic10), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"where", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
@@ -445,6 +446,7 @@ func TestExpressions(t *testing.T) {
 		{"!x", "(!x)"}, {"~m", "(~m)"}, {"!!x", "(!(!x))"},
 		{"a.b(c).d(e, f)", "a.b(c).d(e,f)"},
 		{"(a)", "a"},
+		{"()", "()"},
 	}
 	for _, c := range cases {
 		if got := exprStr(exprOf(t, c.expr)); got != c.want {
@@ -456,8 +458,8 @@ func TestExpressions(t *testing.T) {
 	wantBnd(t, "fn f() {\n    let y = x?\n}\n", "chapter 14 (errors) forms")
 	wantDiag(t, "fn first(list: Int64) {\n    let first = list[0]\n}\n",
 		"E0105", `postfix is .name or (args)`, 2, 21)
-	// Unit, tuple, construction: chapter 8 boundaries.
-	wantBnd(t, "fn f() {\n    let u = ()\n}\n", compForms8)
+	// Unit is the chapter 8 sliver M3 implements; tuple expressions and
+	// construction braces stay chapter 8 boundaries.
 	wantBnd(t, "fn f() {\n    let t = (a, b)\n}\n", compForms8)
 	wantBnd(t, "fn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    id\n}\n", compForms8)
 	wantBnd(t, "fn f() {\n    let u = net.User { }\n}\n", compForms8)
@@ -557,6 +559,72 @@ func TestDeclarations(t *testing.T) {
 		"E0105", topStmtPart, 5, 1)
 }
 
+// --- chapter 9: sum declarations (D7) -----------------------------------------
+
+func TestSumDecls(t *testing.T) {
+	// Full form: pub and byval prefixes, unit and payloaded variants.
+	f := wantClean(t, "pub byval type Shape = Dot | Circle(Float64) | Rect(Float64, Float64)\n")
+	d := f.Items[0].(*ast.SumDecl)
+	if !d.Pub || !d.Byval || d.Name != "Shape" || len(d.Variants) != 3 {
+		t.Fatalf("sum decl: %+v", d)
+	}
+	if d.Variants[0].Name != "Dot" || len(d.Variants[0].Payload) != 0 {
+		t.Fatalf("unit variant: %+v", d.Variants[0])
+	}
+	if d.Variants[1].Name != "Circle" || len(d.Variants[1].Payload) != 1 ||
+		typStr(d.Variants[1].Payload[0]) != "Float64" {
+		t.Fatalf("payloaded variant: %+v", d.Variants[1])
+	}
+	if len(d.Variants[2].Payload) != 2 || typStr(d.Variants[2].Payload[1]) != "Float64" {
+		t.Fatalf("two payloads: %+v", d.Variants[2])
+	}
+	// Positions: the decl anchors at its outermost prefix token, the name
+	// and each variant at their own tokens.
+	if d.Line != 1 || d.Col != 1 || d.NameCol != 16 || d.Variants[1].Col != 30 {
+		t.Fatalf("positions: %+v", d)
+	}
+	// Bare type, and payload type references reuse the full grammar.
+	f = wantClean(t, "type R = Wrap(Result<Int64, AppError>)\n")
+	d = f.Items[0].(*ast.SumDecl)
+	if d.Pub || d.Byval || typStr(d.Variants[0].Payload[0]) != "Result<Int64,AppError>" {
+		t.Fatalf("bare sum: %+v", d)
+	}
+	// `=` and trailing `|` continue per chapter 2's continuation set; a
+	// variant list may span lines that way.
+	f = wantClean(t, "type Shape =\n    Dot |\n    Circle(Float64)\n")
+	if len(f.Items) != 1 || len(f.Items[0].(*ast.SumDecl).Variants) != 2 {
+		t.Fatalf("line continuation: %+v", f.Items)
+	}
+	// A line-STARTING `|` after a complete variant ends the declaration;
+	// checkStart reports it as a statement that cannot begin (E0102).
+	wantDiag(t, "type Shape = Dot\n| Circle(Float64)\n",
+		"E0102", "cannot begin a statement", 2, 1)
+	// `type T = Int64` is a one-variant sum whose variant is named Int64 —
+	// legal syntax; the shadowing is chapter 15's to resolve.
+	f = wantClean(t, "type T = Int64\n")
+	if d := f.Items[0].(*ast.SumDecl); d.Name != "T" || d.Variants[0].Name != "Int64" {
+		t.Fatalf("shadowing variant: %+v", d)
+	}
+	// Naming: sum and variant names are PascalCase (E0011), and all names
+	// share the one module name space (E0404 names the earlier line).
+	wantDiag(t, "type bad = A | B\n", "E0011", `"bad" is not PascalCase`, 1, 6)
+	wantDiag(t, "type Good = ok\n", "E0011", `"ok" is not PascalCase`, 1, 13)
+	wantDiag(t, "type Shape = Circle(Float64)\nfn Circle(r: Float64) { }\n",
+		"E0404", `"Circle" is already declared at line 1`, 2, 4)
+	// Payload arity above eight is E0701 at the variant name.
+	wantDiag(t, "type Big = V(Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64)\n",
+		"E0701", "variant payload arity above eight", 1, 12)
+	// Generic parameter clauses and derives clauses stop at chapter 10's
+	// parse boundary.
+	wantBnd(t, "type Pair<A, B> = P(A, B)\n", generic10)
+	wantBnd(t, "type Shape = Dot derives(Eq)\n", generic10)
+	// The prefix order is fixed: pub outside byval, byval outside type.
+	wantDiag(t, "byval pub type B = V\n", "E0105", "after byval", 1, 7)
+	// The declaration closes at its line break; a stray token after the
+	// last variant is E0105.
+	wantDiag(t, "type Shape = Dot Circle\n", "E0105", "after a top-level item", 1, 18)
+}
+
 // --- D7/Q3: type references ---------------------------------------------------
 
 func TestTypeRefs(t *testing.T) {
@@ -571,8 +639,10 @@ func TestTypeRefs(t *testing.T) {
 		{"client.Reader", "client.Reader"},
 		{"net.http.Client", "net.http.Client"},
 		{"Vec<Int64>", "Vec<Int64>"},
-		{"Map<String, Vec<Int64>>", "Map<String,Vec<Int64>>"},
-		{"Vec<Vec<Int64>>", "Vec<Vec<Int64>>"},
+		// F3 (chapter 10): nested closers are separated — the canonical
+		// render keeps them adjacent, the source must not.
+		{"Map<String, Vec<Int64> >", "Map<String,Vec<Int64>>"},
+		{"Vec<Vec<Int64> >", "Vec<Vec<Int64>>"},
 		{"Dyn<I>", "Dyn<I>"},
 		{"(Int64, String)", "(Int64,String)"},
 		{"(Int64, String,)", "(Int64,String)"},
@@ -586,11 +656,15 @@ func TestTypeRefs(t *testing.T) {
 			t.Errorf("%s: got %s, want %s", c.src, got, c.want)
 		}
 	}
-	// A `>=` junction (no space before =) splits the same way. The `>>=` form
-	// lexes as `>>` + `=` (two closers then the equals); the single-closer
-	// `>=` form lexes as one `>=` token and splits at the close itself.
-	wantClean(t, "let m: Map<String, Vec<Int64>>= never\n")
-	wantClean(t, "let n: Map<String, Int64>= never\n")
+	// F3 (chapter 10): at a closer position only the bare `>` is the closer.
+	// `>>` and `>=` there are the shift and ge operators maximal munch made,
+	// so the unseparated form is E0105 with the separation remediation; the
+	// separated form needs its own space before `=`.
+	wantDiag(t, "let m: Map<String, Vec<Int64>>= never\n", "E0105", "nested closers are separated", 1, 29)
+	wantDiag(t, "let n: Map<String, Int64>= never\n", "E0105", "nested closers are separated", 1, 25)
+	wantDiag(t, "let v: Vec<Vec<Int64>> = 1\n", "E0105", "nested closers are separated", 1, 21)
+	wantClean(t, "let m: Map<String, Vec<Int64> > = never\n")
+	wantClean(t, "let n: Map<String, Int64> = never\n")
 	// Slot violations are E0105 naming the productions considered.
 	wantDiag(t, "let x: int64 = 1\n", "E0105", "fits no type reference production", 1, 8)
 	wantDiag(t, "let x: (Int64) = 1\n", "E0105", "fits no type reference production", 1, 8)
@@ -615,10 +689,8 @@ func TestBoundaryForms(t *testing.T) {
 		{"fn f() {\n    if true {}\n}\n", "chapter 3 (control flow) forms"},
 		{"fn f() {\n    match x\n}\n", "chapter 4 (match) forms"},
 		{"fn f() {\n    for x in y {}\n}\n", "chapter 5 (iteration) forms"},
-		{"type T = Int64\n", typeForms7},
 		{"record User {}\n", compForms8},
 		{"fn f() {\n    let u = User { id: 1 }\n}\n", compForms8},
-		{"fn f() {\n    let u = ()\n}\n", compForms8},
 		{"fn f() {\n    let t = (a, b)\n}\n", compForms8},
 		{"fn f(t: Int64) {\n    let (a, b) = t\n}\n", compForms8},
 		{"interface I {}\n", generic10},

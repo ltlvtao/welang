@@ -1,0 +1,18 @@
+{
+  "name": "check-e0703-binding",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    let x: Never = 1\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:12: error[E0703]: Never in a non-return annotation position — the bottom type has no values; it annotates only a declared fn return type\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    let x: Never = 1\n}\n"
+  }
+}

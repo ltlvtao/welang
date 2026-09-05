@@ -7,13 +7,13 @@
   ],
   "setup": {
     "files": {
-      "demo/main.we": "pub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+      "demo/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: chapter 8 (composites) forms are not implemented in this reference build yet\n",
+  "stderr": "",
   "files": {
-    "demo/main.we": "pub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    "demo/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
   }
 }

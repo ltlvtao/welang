@@ -1,0 +1,18 @@
+{
+  "name": "check-e0011-variant-name",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "type Good = ok\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:13: error[E0011]: type name must be PascalCase — \"ok\" is not PascalCase\n",
+  "files": {
+    "demo/main.we": "type Good = ok\n"
+  }
+}

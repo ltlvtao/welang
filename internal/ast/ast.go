@@ -31,6 +31,10 @@ type Import struct {
 	Path      []string
 	Alias     string
 	Line, Col int // at the import keyword
+	// PathLine/PathCol sit at the FIRST path segment — the module's own
+	// token, where the module-resolution diagnostics anchor.
+	PathLine int
+	PathCol  int
 }
 
 // FnDecl is a fn declaration: `[pub] fn name(params) [-> type] block`. Ret
@@ -59,6 +63,29 @@ type TopLet struct {
 	Pub       bool
 	Binding   Binding
 	Line, Col int // at let (or pub)
+}
+
+// SumDecl is a sum type declaration (chapter 9): `[pub] [byval] type Name =
+// V1 | ... | Vn`, n at least one, each variant bare (a unit variant) or
+// carrying 1..8 payload type references. The generic parameter clause and
+// derives clause are chapter 10's and stop at their parse boundary, so this
+// node holds no fields for them.
+type SumDecl struct {
+	Pub       bool
+	Byval     bool
+	Name      string
+	Variants  []Variant
+	Line, Col int // at type (or byval/pub)
+	NameLine  int
+	NameCol   int
+}
+
+// Variant is one variant of a sum declaration: the bare name alone, or the
+// name with its payload type references.
+type Variant struct {
+	Name      string
+	Payload   []TypeRef
+	Line, Col int // at the variant name
 }
 
 // Block is `{ items }` — itself an expression whose value is its final
@@ -156,6 +183,12 @@ type BlockExpr struct {
 	Line, Col int // at {
 }
 
+// Unit is the unit value `()` — the one value of the unit type (chapter 8's
+// sliver of the composite chapter this slice implements).
+type Unit struct {
+	Line, Col int
+}
+
 // TypeRef is the form filling a type-annotation slot (chapter 7's type
 // references): a named reference, a tuple, the unit type, or a fn type.
 type TypeRef interface{ typeref() }
@@ -168,6 +201,10 @@ type NamedType struct {
 	Name      string
 	Args      []TypeRef
 	Line, Col int
+	// ArgLine/ArgCol sit at the `<` when a generic clause is present —
+	// the application token, where its arity diagnostic anchors.
+	ArgLine int
+	ArgCol  int
 }
 
 // TupleType is `(T1, ..., Tn)` with n at least 2 (chapter 7 defers the
@@ -194,6 +231,7 @@ type FnType struct {
 func (Import *Import) item()  {}
 func (f *FnDecl) item()       {}
 func (t *TopLet) item()       {}
+func (s *SumDecl) item()      {}
 func (b *Binding) stmt()      {}
 func (a *Assign) stmt()       {}
 func (r *Return) stmt()       {}
@@ -205,6 +243,7 @@ func (b *Binary) expr()       {}
 func (c *Call) expr()         {}
 func (m *Member) expr()       {}
 func (b *BlockExpr) expr()    {}
+func (u *Unit) expr()         {}
 func (n *NamedType) typeref() {}
 func (t *TupleType) typeref() {}
 func (u *UnitType) typeref()  {}

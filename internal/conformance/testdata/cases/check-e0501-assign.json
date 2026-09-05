@@ -1,0 +1,18 @@
+{
+  "name": "check-e0501-assign",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    let x: Int64 = 1\n    x = 2.5\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:5: error[E0501]: mixed types — the value is Float64, \"x\" is Int64; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    let x: Int64 = 1\n    x = 2.5\n}\n"
+  }
+}
