@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-unit-pattern",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() -> Int64 {\n    return match () {\n        () => 1\n        _ => 2\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:9: error[E0105]: unexpected token — \"()\" fits no pattern production: the pattern set has no unit pattern; use the wildcard _ for unit values\n",
+  "files": {
+    "demo/main.we": "fn f() -> Int64 {\n    return match () {\n        () => 1\n        _ => 2\n    }\n}"
+  }
+}

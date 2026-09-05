@@ -1,0 +1,18 @@
+{
+  "name": "check-e0605-stmt-match",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(c: Bool) {\n    match c {\n        _ => 1\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:5: error[E0605]: non-unit value dropped — the unbound match-arm bodies are Int64, not (); bind it, chain it onward, or discard it explicitly with let _ = expr\n",
+  "files": {
+    "demo/main.we": "fn f(c: Bool) {\n    match c {\n        _ => 1\n    }\n}"
+  }
+}

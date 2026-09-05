@@ -1,0 +1,18 @@
+{
+  "name": "check-e0702-value-sum-gc-payload",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Inner { name: String }\n\nbyval type Shape = Circle(Inner)\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:27: error[E0702]: value sum payload is not of the value category or a base type — the payload of \"Circle\" is \"Inner\", a gc record; a copy is only honest when everything in it is copyable by value\n",
+  "files": {
+    "demo/main.we": "record Inner { name: String }\n\nbyval type Shape = Circle(Inner)\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}"
+  }
+}

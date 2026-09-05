@@ -1,0 +1,18 @@
+{
+  "name": "check-ch4-match-value-exhaustive",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type Light = Red | Green | Yellow\n\nfn code(l: Light) -> Int64 {\n    return match l {\n        Red => 1\n        Green => 2\n        Yellow => 3\n    }\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "pub type Light = Red | Green | Yellow\n\nfn code(l: Light) -> Int64 {\n    return match l {\n        Red => 1\n        Green => 2\n        Yellow => 3\n    }\n}"
+  }
+}

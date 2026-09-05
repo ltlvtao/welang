@@ -1,0 +1,18 @@
+{
+  "name": "check-e0503-guard-cond",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type Shape = Circle(Float64) | Square(Float64)\n\nfn f(s: Shape) -> Float64 {\n    return match s {\n        Circle(r) if r => r\n        _ => 0.0\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:22: error[E0503]: condition is not Bool — the match guard is Float64; condition positions are if, while, and match guard\n",
+  "files": {
+    "demo/main.we": "pub type Shape = Circle(Float64) | Square(Float64)\n\nfn f(s: Shape) -> Float64 {\n    return match s {\n        Circle(r) if r => r\n        _ => 0.0\n    }\n}"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-ch12-closure-full",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() -> Int64 {\n    let add = fn(a: Int64, b: Int64) -> Int64 { return a + b }\n    let run = fn() { }\n    run()\n    return add(1, 2)\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn f() -> Int64 {\n    let add = fn(a: Int64, b: Int64) -> Int64 { return a + b }\n    let run = fn() { }\n    run()\n    return add(1, 2)\n}"
+  }
+}

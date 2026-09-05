@@ -1,0 +1,18 @@
+{
+  "name": "check-ch4-match-tuple-exhaustive",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type Opt = Hit(Int64) | Miss\n\nfn f(p: (Opt, Opt)) -> Int64 {\n    return match p {\n        (Hit(a), Hit(b)) => a + b\n        (Hit(a), Miss) => a\n        (Miss, Hit(b)) => b\n        (Miss, Miss) => 0\n    }\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "pub type Opt = Hit(Int64) | Miss\n\nfn f(p: (Opt, Opt)) -> Int64 {\n    return match p {\n        (Hit(a), Hit(b)) => a + b\n        (Hit(a), Miss) => a\n        (Miss, Hit(b)) => b\n        (Miss, Miss) => 0\n    }\n}"
+  }
+}

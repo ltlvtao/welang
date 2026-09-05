@@ -1,0 +1,18 @@
+{
+  "name": "check-ch8-byval-record",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byval record Point { x: Int64, y: Int64 }\n\nfn shift(p: Point) -> Point {\n    return Point { x: p.x + 1, y: p.y }\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let p = Point { x: 1, y: 2 }\n    let q = shift(p)\n    return Ok(())\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "byval record Point { x: Int64, y: Int64 }\n\nfn shift(p: Point) -> Point {\n    return Point { x: p.x + 1, y: p.y }\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let p = Point { x: 1, y: 2 }\n    let q = shift(p)\n    return Ok(())\n}"
+  }
+}

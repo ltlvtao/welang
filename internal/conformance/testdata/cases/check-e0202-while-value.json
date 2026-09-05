@@ -1,0 +1,18 @@
+{
+  "name": "check-e0202-while-value",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() -> Int64 {\n    let x = while true { break }\n    return x\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:13: error[E0202]: valueless form in value position — \"while\" produces no value and cannot stand in a let initializer; valueless forms are statements\n",
+  "files": {
+    "demo/main.we": "fn f() -> Int64 {\n    let x = while true { break }\n    return x\n}"
+  }
+}

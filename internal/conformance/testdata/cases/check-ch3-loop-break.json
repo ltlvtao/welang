@@ -1,0 +1,18 @@
+{
+  "name": "check-ch3-loop-break",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    loop {\n        break\n    }\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn f() {\n    loop {\n        break\n    }\n}"
+  }
+}

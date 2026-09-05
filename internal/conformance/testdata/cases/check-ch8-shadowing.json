@@ -1,0 +1,18 @@
+{
+  "name": "check-ch8-shadowing",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn g(x: Int64) -> String {\n    return \"s\"\n}\n\nfn laterBinding() -> String {\n    let x = 1\n    let x = g(x)\n    return x\n}\n\nfn paramShadow(n: Int64) -> String {\n    let n = \"s\"\n    return n\n}\n\nfn nearestBinding() -> Int64 {\n    let x = 1\n    if true {\n        let x = \"s\"\n    }\n    return x\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn g(x: Int64) -> String {\n    return \"s\"\n}\n\nfn laterBinding() -> String {\n    let x = 1\n    let x = g(x)\n    return x\n}\n\nfn paramShadow(n: Int64) -> String {\n    let n = \"s\"\n    return n\n}\n\nfn nearestBinding() -> Int64 {\n    let x = 1\n    if true {\n        let x = \"s\"\n    }\n    return x\n}"
+  }
+}

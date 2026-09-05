@@ -1,0 +1,18 @@
+{
+  "name": "check-e1002-resource-capture",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record Conn { host: String }\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let c = Conn { host: \"h\" }\n    let f = |x: Int64| c\n    return Ok(())\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:7:24: error[E1002]: resource binding captured by a closure — the closure reads \"c\", a byres binding; a handle escaping the single deterministic release point is not honest\n",
+  "files": {
+    "demo/main.we": "byres record Conn { host: String }\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let c = Conn { host: \"h\" }\n    let f = |x: Int64| c\n    return Ok(())\n}"
+  }
+}

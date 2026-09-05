@@ -1,0 +1,18 @@
+{
+  "name": "check-ch3-if-value-else-if",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn classify(n: Int64) -> String {\n    let label = if n > 0 { \"pos\" } else if n < 0 { \"neg\" } else { \"zero\" }\n    return label\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn classify(n: Int64) -> String {\n    let label = if n > 0 { \"pos\" } else if n < 0 { \"neg\" } else { \"zero\" }\n    return label\n}"
+  }
+}

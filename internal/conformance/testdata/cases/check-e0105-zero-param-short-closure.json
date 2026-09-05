@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-zero-param-short-closure",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let f = || 1\n    return Ok(())\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:13: error[E0105]: unexpected token — \"||\" is the logical-or operator: no zero-parameter short closure exists; a zero-parameter closure is written in the full form fn() { ... }\n",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let f = || 1\n    return Ok(())\n}"
+  }
+}

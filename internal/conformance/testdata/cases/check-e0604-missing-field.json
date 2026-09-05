@@ -1,0 +1,18 @@
+{
+  "name": "check-e0604-missing-field",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record User { name: String, age: Int64 }\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    return Ok(())\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:13: error[E0604]: field set does not match the record — the construction of \"User\" leaves out \"age\"; a full construction names every declared field exactly once\n",
+  "files": {
+    "demo/main.we": "record User { name: String, age: Int64 }\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    return Ok(())\n}"
+  }
+}

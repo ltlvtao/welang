@@ -195,17 +195,15 @@ func dg(code, part string) outcome { return outcome{code: code, part: part} }
 func bd(what string) outcome       { return outcome{what: what} }
 
 const (
-	topStmtPart  = "fits no top-level item production"
-	stmtPart     = "fits no statement production"
-	exprPart     = "cannot begin an expression"
-	compForms8   = "chapter 8 (composites) forms"
-	generic10    = "chapter 10 (interfaces and generics) forms"
-	closureForms = "chapter 12 (fn types and closures) forms"
-	scopeForms   = "chapter 13 and 18 (scope) forms"
-	effectForms  = "chapter 16 (effects) forms"
-	concurForms  = "chapter 18 (concurrency) forms"
-	ffiForms     = "chapter 19 (ffi) forms"
-	testForms    = "chapter 20 (testing) forms"
+	topStmtPart = "fits no top-level item production"
+	stmtPart    = "fits no statement production"
+	exprPart    = "cannot begin an expression"
+	generic10   = "chapter 10 (interfaces and generics) forms"
+	scopeForms  = "chapter 13 and 18 (scope) forms"
+	effectForms = "chapter 16 (effects) forms"
+	concurForms = "chapter 18 (concurrency) forms"
+	ffiForms    = "chapter 19 (ffi) forms"
+	testForms   = "chapter 20 (testing) forms"
 )
 
 // dispatchTable is design D6 verbatim: keyword, its completion text, and
@@ -223,25 +221,25 @@ var dispatchTable = []struct {
 	{"import", "a.b", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"as", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"mut", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"fn", "f() {}", okRes(), bd(closureForms), bd(closureForms)},
-	{"if", "true {}", dg("E0105", topStmtPart), bd("chapter 3 (control flow) forms"), bd("chapter 3 (control flow) forms")},
+	{"fn", "f() {}", okRes(), dg("E0105", "where a closure's parameter list opens"), dg("E0105", "where a closure's parameter list opens")},
+	{"if", "true {}", dg("E0105", topStmtPart), okRes(), dg("E0202", "an if without else")},
 	{"else", "", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"return", "", dg("E0401", "return outside a function body"), okRes(), dg("E0105", exprPart)},
-	{"match", "x", dg("E0105", topStmtPart), bd("chapter 4 (match) forms"), bd("chapter 4 (match) forms")},
+	{"match", "x { _ => 1 }", dg("E0105", topStmtPart), okRes(), okRes()},
 	{"for", "x in y {}", dg("E0105", topStmtPart), bd("chapter 5 (iteration) forms"), dg("E0105", exprPart)},
 	{"in", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"while", "true {}", dg("E0105", topStmtPart), bd("chapter 3 (control flow) forms"), dg("E0105", exprPart)},
-	{"loop", "{}", dg("E0105", topStmtPart), bd("chapter 3 (control flow) forms"), dg("E0105", exprPart)},
-	{"break", "", dg("E0105", topStmtPart), bd("chapter 3 (control flow) forms"), dg("E0105", exprPart)},
-	{"continue", "", dg("E0105", topStmtPart), bd("chapter 3 (control flow) forms"), dg("E0105", exprPart)},
-	{"defer", "f()", dg("E0105", topStmtPart), bd("chapter 3 (control flow) forms"), dg("E0105", exprPart)},
+	{"while", "true {}", dg("E0105", topStmtPart), okRes(), dg("E0202", `"while" produces no value`)},
+	{"loop", "{}", dg("E0105", topStmtPart), okRes(), dg("E0202", `"loop" produces no value`)},
+	{"break", "", dg("E0105", topStmtPart), dg("E0201", `"break" stands in a block`), dg("E0202", `"break" produces no value`)},
+	{"continue", "", dg("E0105", topStmtPart), dg("E0201", `"continue" stands in a block`), dg("E0202", `"continue" produces no value`)},
+	{"defer", "{ () }", dg("E0105", topStmtPart), okRes(), dg("E0202", `"defer" produces no value`)},
 	{"true", "", dg("E0105", topStmtPart), okRes(), okRes()},
 	{"false", "", dg("E0105", topStmtPart), okRes(), okRes()},
 	{"foreign", "", bd(ffiForms), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"record", "User {}", bd(compForms8), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"byval", "B {}", bd(compForms8), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"byres", "B {}", bd(compForms8), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"newtype", "N {}", bd(compForms8), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"record", "User {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"byval", "record B {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"byres", "record B {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"newtype", "N(Int64)", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"with", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"type", "T = Int64", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"interface", "I {}", bd(generic10), dg("E0105", stmtPart), dg("E0105", exprPart)},
@@ -430,9 +428,8 @@ func TestStatements(t *testing.T) {
 	wantDiag(t, "var count = 0\n", "E0403", "var at the top level", 1, 1)
 	wantDiag(t, "pub var v = 1\n", "E0105", "after pub", 1, 5)
 	// Binding head violations.
-	wantDiag(t, "fn f() {\n    let fn = 1\n}\n", "E0105", "in a binding head", 2, 9)
+	wantDiag(t, "fn f() {\n    let fn = 1\n}\n", "E0105", "fits no binding name production", 2, 9)
 	wantDiag(t, "fn f() {\n    let a 1\n}\n", "E0105", "in a binding head", 2, 11)
-	wantBnd(t, "fn f(t: Int64) {\n    let (a, b) = t\n}\n", compForms8)
 	// The bare underscore is punctuation, not in the statement-start class.
 	wantDiag(t, "fn f() {\n    _ = 5\n}\n", "E0102", "continuation token", 2, 5)
 }
@@ -458,16 +455,16 @@ func TestExpressions(t *testing.T) {
 	wantBnd(t, "fn f() {\n    let y = x?\n}\n", "chapter 14 (errors) forms")
 	wantDiag(t, "fn first(list: Int64) {\n    let first = list[0]\n}\n",
 		"E0105", `postfix is .name or (args)`, 2, 21)
-	// Unit is the chapter 8 sliver M3 implements; tuple expressions and
-	// construction braces stay chapter 8 boundaries.
-	wantBnd(t, "fn f() {\n    let t = (a, b)\n}\n", compForms8)
-	wantBnd(t, "fn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    id\n}\n", compForms8)
-	wantBnd(t, "fn f() {\n    let u = net.User { }\n}\n", compForms8)
+	// Tuple expressions, construction braces (chapter 8), and the two
+	// closure forms (chapter 12) parse since M5; their typing lands with
+	// the typecheck passes.
+	wantClean(t, "fn f() {\n    let t = (a, b)\n}\n")
+	wantClean(t, "fn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    id\n}\n")
+	wantClean(t, "fn f() {\n    let u = net.User { }\n}\n")
 	wantDiag(t, "fn f() {\n    let u = b { }\n}\n", "E0105", "construction heads are PascalCase", 2, 15)
 	wantDiag(t, "fn f() {\n    f() { }\n}\n", "E0105", "construction heads are PascalCase", 2, 9)
-	// Closures are chapter 12's.
-	wantBnd(t, "fn f() {\n    let g = |x| x\n}\n", closureForms)
-	wantBnd(t, "fn f() {\n    let g = fn(x: Int64) { x }\n}\n", closureForms)
+	wantClean(t, "fn f() {\n    let g = |x| x\n}\n")
+	wantClean(t, "fn f() {\n    let g = fn(x: Int64) { x }\n}\n")
 	// `..` has no prefix form.
 	wantDiag(t, "fn f() {\n    let r = ..a\n}\n", "E0105", exprPart, 2, 13)
 	// A block is an expression whose value is its final expression item.
@@ -686,18 +683,11 @@ func TestBoundaryForms(t *testing.T) {
 		src  string
 		what string
 	}{
-		{"fn f() {\n    if true {}\n}\n", "chapter 3 (control flow) forms"},
-		{"fn f() {\n    match x\n}\n", "chapter 4 (match) forms"},
 		{"fn f() {\n    for x in y {}\n}\n", "chapter 5 (iteration) forms"},
-		{"record User {}\n", compForms8},
-		{"fn f() {\n    let u = User { id: 1 }\n}\n", compForms8},
-		{"fn f() {\n    let t = (a, b)\n}\n", compForms8},
-		{"fn f(t: Int64) {\n    let (a, b) = t\n}\n", compForms8},
 		{"interface I {}\n", generic10},
 		{"impl I for X {}\n", generic10},
 		{"fn f<T>(x: T) {}\n", generic10},
 		{"fn f() {\n    self.x = 1\n}\n", generic10},
-		{"fn f() {\n    let g = |x| x\n}\n", closureForms},
 		{"fn f() {\n    scope x {}\n}\n", scopeForms},
 		{"fn f() {\n    let y = x?\n}\n", "chapter 14 (errors) forms"},
 		{"effect io {}\n", effectForms},

@@ -1,0 +1,18 @@
+{
+  "name": "check-e1003-captured-value-assign",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    var n = 1\n    let f = |x: Int64| { n = x }\n    f(2)\n    return Ok(())\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:26: error[E1003]: assignment to a captured value-category binding — \"n\" is captured as a copy fixed at closure creation and the snapshot is frozen; mutations belong to gc bindings\n",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    var n = 1\n    let f = |x: Int64| { n = x }\n    f(2)\n    return Ok(())\n}"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0602-tuple-type-9",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() -> (Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64) {\n    return ()\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:11: error[E0602]: tuple arity above eight — the tuple type has 9 elements; the arity bound forces naming: the longer the tuple, the more it wants to be a record\n",
+  "files": {
+    "demo/main.we": "fn f() -> (Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64) {\n    return ()\n}"
+  }
+}

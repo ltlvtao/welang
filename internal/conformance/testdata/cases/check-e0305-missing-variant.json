@@ -1,0 +1,18 @@
+{
+  "name": "check-e0305-missing-variant",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type Light = Red | Green | Yellow\n\nfn f(l: Light) -> Int64 {\n    return match l {\n        Red => 1\n        Green => 2\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:12: error[E0305]: match is not exhaustive — the variant \"Yellow\" of \"Light\" is not covered; the unguarded arms must match every value of the scrutinee's type\n",
+  "files": {
+    "demo/main.we": "pub type Light = Red | Green | Yellow\n\nfn f(l: Light) -> Int64 {\n    return match l {\n        Red => 1\n        Green => 2\n    }\n}"
+  }
+}

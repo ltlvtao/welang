@@ -1,0 +1,18 @@
+{
+  "name": "check-e0307-variant-twice",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type Light = Red | Green | Yellow\n\nfn f(l: Light) -> Int64 {\n    return match l {\n        Red => 1\n        Red => 2\n        _ => 3\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:9: error[E0307]: unreachable match arm — every value matching this arm's pattern is already covered by earlier arms; statically decidable dead arms are rejected\n",
+  "files": {
+    "demo/main.we": "pub type Light = Red | Green | Yellow\n\nfn f(l: Light) -> Int64 {\n    return match l {\n        Red => 1\n        Red => 2\n        _ => 3\n    }\n}"
+  }
+}

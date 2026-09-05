@@ -1,0 +1,18 @@
+{
+  "name": "check-e0203-defer-expr",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn cleanup() {\n}\n\nfn f() {\n    defer cleanup()\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:5: error[E0203]: defer body must be a block — the operand is an expression, not a block; the single ratified shape is defer { ... }\n",
+  "files": {
+    "demo/main.we": "fn cleanup() {\n}\n\nfn f() {\n    defer cleanup()\n}"
+  }
+}

@@ -55,6 +55,12 @@ func Emit(f *ast.File, module string) (string, *NotImplemented) {
 			return "", &NotImplemented{What: bndOtherFns}
 		case *ast.TopLet:
 			return "", &NotImplemented{What: bndTopLets}
+		case *ast.RecordDecl, *ast.NewtypeDecl:
+			// Records and newtypes erase (design D11): their declarations
+			// emit zero IR. Their value expressions (construction, update,
+			// the call form) never reach this stage within the accepted
+			// main-body shapes — the M4 body boundary holds them.
+			continue
 		case *ast.Import:
 			// Unreachable: typecheck stops std/multi-module forms at its own
 			// boundary before code generation runs. Row 3 is the nearest

@@ -1,0 +1,18 @@
+{
+  "name": "check-ch8-newtype",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "newtype UserId(Int64)\n\nfn raw(id: UserId) -> Int64 {\n    return id.value\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let id = UserId(42)\n    let n = raw(id)\n    return Ok(())\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "newtype UserId(Int64)\n\nfn raw(id: UserId) -> Int64 {\n    return id.value\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let id = UserId(42)\n    let n = raw(id)\n    return Ok(())\n}"
+  }
+}

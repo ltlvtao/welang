@@ -1,0 +1,18 @@
+{
+  "name": "check-e0301-zero-arms",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(c: Bool) -> Int64 {\n    return match c { }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:20: error[E0301]: match requires at least one arm — the brace group holds no arms; with zero arms no arm can be taken and the match could never produce a value\n",
+  "files": {
+    "demo/main.we": "fn f(c: Bool) -> Int64 {\n    return match c { }\n}"
+  }
+}

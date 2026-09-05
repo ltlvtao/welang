@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-short-closure-operand",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() -> Int64 {\n    let n = 1 + |x| x\n    return n\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:17: error[E0105]: unexpected token — \"|\" fits no production here: a short closure in operand position must be parenthesized, as in 1 + (|x| x)\n",
+  "files": {
+    "demo/main.we": "fn f() -> Int64 {\n    let n = 1 + |x| x\n    return n\n}"
+  }
+}

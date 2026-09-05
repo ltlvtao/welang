@@ -17,7 +17,7 @@
 | M2 | `parser-core` | 第 2 章文法骨架与第 6 章声明；`we check` 跑词法+解析（E0101、E0102、声明诊断） | done 2026-09-05 |
 | M3 | `types-and-main` | 第 7 章类型子集、第 15 章根模块与 main 形状、第 14 章 `Result`；`we check .` 对 `we new` 骨架跑绿 | done 2026-09-05 |
 | M4 | `native-vertical` | 最小 LLVM IR 发射、最小 C 运行时（启动、分配器）、骨架程序端到端 `we build` 与 `we run` | done 2026-09-05 |
-| M5 | `control-and-composites` | 第 3 章控制流、第 4 章 match、第 8 章复合类型与所有权、第 9 章和类型、第 12 章函数类型与闭包 | pending |
+| M5 | `control-and-composites` | 第 3 章控制流、第 4 章 match、第 8 章复合类型与所有权、第 9 章和类型、第 12 章函数类型与闭包 | done 2026-09-05 |
 | M6 | `modules-generics-errors` | 第 10 章接口与泛型、第 11 章可迭代、第 13 章 resource、第 14 章全量、第 15 章模块解析全量、第 17 章集合 | pending |
 | M7 | `effects` | 第 16 章效果声明与效果检查 | pending |
 | M8 | `stdlib-and-gc` | `std.io` 核心；运行时精确 GC 设计落地 | pending |
@@ -45,3 +45,6 @@
 4. **运算符类型域表。** 已批准文本点名第 2 章接受的运算符的数值与 Bool 操作数，但没有任何 Requirement 固定逐运算符的完整域表（每个运算符在每个操作数位接受哪些基类型）。修订批准前，超出已批准数值/Bool/比较域的同型操作数对停在诚实边界（`arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)`）；两侧不一致仍是 E0501。M3（`types-and-main` design D4）发现。
 5. **调用实参个数与非函数被调的诊断码。** 没有已批准 Requirement 固定「调用实参个数与被调声明不符」或「被调者不是函数」时的诊断。修订认领前，两者均停在诚实边界（`calls with an argument count the callee does not declare (spec gap; roadmap follow-up)`、`calls on values that are not functions (spec gap; roadmap follow-up)`）。M3（`types-and-main` design D10）发现。
 6. **单文件构建工件命名。** 第 21 章 R2 说构建工件由 manifest 命名，但单文件编译（R1 固定的 `[path]` 文件形）没有 manifest 可取名。工具链修订固定单文件工件的名字与位置前，`we build <file>.we` / `we run <file>.we` 先跑完整管线（诊断照常报告），干净后停在诚实边界（`single-file builds (spec gap; roadmap follow-up)`）。M4（`native-vertical` 裁决 Q3）发现。
+7. **赋值目标可变性。** 没有已批准 Requirement 固定 `let` 绑定名被重赋值（`let x = 1; x = 2`）时的规则与诊断；第 8 章所有权文本固定的是捕获类别，不是非 `var` 绑定的重赋值。修订认领前，实现维持 M3 行为（赋值对照绑定的类型检查通过）。M5（`control-and-composites` design D14）发现。
+8. **注册表 E0604 陈旧子句。** E0604 的注册表描述含「a member access names an undeclared field / Fires under: Field access」，与第 8 章 R5 的路由（记录上未知名走 E0816，「一个规则一个码」）冲突——章文是触发语义权威，M5 在该处发 E0816。陈旧子句的清除归属下一个触 `diagnostics.toml` 的变更（或专门维护变更）。M5（`control-and-composites` design D10）发现。
+9. **`we run` 自项目目录外的路径解析。** `we run <path>` 把子进程工作目录设为项目路径、却按相对路径解析工件，从项目目录外调用时报 `fork/exec … no such file or directory`；从目录内调用（`we run .`，conformance runner 同款）正常。工具链修复应在切换子进程 cwd 前按调用目录解析工件绝对路径。M5（`control-and-composites` T7 观察；M4 遗留，`internal/cli` 未被 M5 触碰）发现。

@@ -1,0 +1,18 @@
+{
+  "name": "check-ch4-match-int-wildcard",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(n: Int64) -> Int64 {\n    return match n {\n        0 => n\n        _ => n + 1\n    }\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn f(n: Int64) -> Int64 {\n    return match n {\n        0 => n\n        _ => n + 1\n    }\n}"
+  }
+}

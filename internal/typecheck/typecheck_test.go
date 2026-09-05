@@ -232,9 +232,9 @@ func TestSumsAndCtors(t *testing.T) {
 	wantDiag(t, "type Shape = Circle(Float64)\nlet s = Shape\n",
 		"E1304", `"Shape" is held by no scope`, 2, 9)
 	// Monomorphic named fns call by signature; their bare name as a value
-	// is chapter 12's.
+	// carries the fn type (chapter 12 landed with M5).
 	wantOK(t, "fn id(x: Int64) -> Int64 {\n    return x\n}\nlet y = id(3)\n")
-	wantBnd(t, "fn id(x: Int64) -> Int64 {\n    return x\n}\nlet g = id\n", bndFnValues)
+	wantOK(t, "fn id(x: Int64) -> Int64 {\n    return x\n}\nlet g: fn(Int64) -> Int64 = id\n")
 	// E0703: the enumerated non-return positions of Never.
 	wantDiag(t, "fn f() {\n    let x: Never = 1\n}\n",
 		"E0703", "Never in a non-return annotation position", 2, 12)

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0604-undeclared-field",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record User { name: String }\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", email: \"b\" }\n    return Ok(())\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:31: error[E0604]: field set does not match the record — \"User\" declares no field \"email\"; a construction or update names only declared fields\n",
+  "files": {
+    "demo/main.we": "record User { name: String }\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", email: \"b\" }\n    return Ok(())\n}"
+  }
+}

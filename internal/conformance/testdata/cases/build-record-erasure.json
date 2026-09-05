@@ -1,0 +1,16 @@
+{
+  "name": "build-record-erasure",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "record User { name: String, age: Int64 }\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

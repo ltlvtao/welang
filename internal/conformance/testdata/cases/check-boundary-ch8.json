@@ -6,13 +6,13 @@
   ],
   "setup": {
     "files": {
-      "demo/main.we": "fn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    id\n}\n"
+      "demo/main.we": "record User { id: Int64 }\n\nfn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    u.id\n}"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: chapter 8 (composites) forms are not implemented in this reference build yet\n",
+  "stderr": "",
   "files": {
-    "demo/main.we": "fn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    id\n}\n"
+    "demo/main.we": "record User { id: Int64 }\n\nfn build(id: Int64) -> Int64 {\n    let u = User { id: id }\n    u.id\n}"
   }
 }

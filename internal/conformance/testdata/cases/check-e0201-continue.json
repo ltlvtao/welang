@@ -1,0 +1,18 @@
+{
+  "name": "check-e0201-continue",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    continue\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:5: error[E0201]: break or continue outside a loop — \"continue\" stands in a block that is not inside a loop body; bare break and continue control the innermost enclosing while or loop\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    continue\n}"
+  }
+}

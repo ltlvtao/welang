@@ -1,0 +1,18 @@
+{
+  "name": "check-ch12-gc-live-capture",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Counter { n: Int64 }\n\nfn f() -> Int64 {\n    var c = Counter { n: 0 }\n    let bump = fn() -> Int64 {\n        c = Counter { n: c.n + 1 }\n        return c.n\n    }\n    let _ = bump()\n    return c.n\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "record Counter { n: Int64 }\n\nfn f() -> Int64 {\n    var c = Counter { n: 0 }\n    let bump = fn() -> Int64 {\n        c = Counter { n: c.n + 1 }\n        return c.n\n    }\n    let _ = bump()\n    return c.n\n}"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0816-newtype-member",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "newtype UserId(Int64)\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let id = UserId(42)\n    let raw = id.inner\n    return Ok(())\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:7:18: error[E0816]: no such member on the receiver's type — \"UserId\" has no member \"inner\"; a newtype's single member is \"value\"\n",
+  "files": {
+    "demo/main.we": "newtype UserId(Int64)\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let id = UserId(42)\n    let raw = id.inner\n    return Ok(())\n}"
+  }
+}

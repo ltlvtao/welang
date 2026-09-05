@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-let-variant-pattern",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type Shape = Circle(Float64) | Square(Float64)\n\nfn f(s: Shape) -> Float64 {\n    let Circle(r) = s\n    return r\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:9: error[E0105]: unexpected token — \"Circle\" fits no binding name production: refutable patterns are match-only; the let name position takes an identifier or an irrefutable tuple pattern\n",
+  "files": {
+    "demo/main.we": "pub type Shape = Circle(Float64) | Square(Float64)\n\nfn f(s: Shape) -> Float64 {\n    let Circle(r) = s\n    return r\n}"
+  }
+}

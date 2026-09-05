@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-arm-comma",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(c: Bool) -> Int64 {\n    return match c {\n        true => 1,\n        false => 2\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:18: error[E0105]: unexpected token — \",\" fits no production: match arms are separated by newlines and carry no separator token\n",
+  "files": {
+    "demo/main.we": "fn f(c: Bool) -> Int64 {\n    return match c {\n        true => 1,\n        false => 2\n    }\n}"
+  }
+}

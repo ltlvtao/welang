@@ -1,0 +1,18 @@
+{
+  "name": "check-e0303-unknown-variant",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type Shape = Circle(Float64) | Square(Float64)\n\nfn f(s: Shape) -> Float64 {\n    return match s {\n        Triangle(r) => r\n        _ => 0.0\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:9: error[E0303]: pattern names no variant of the scrutinee's type — \"Triangle\" is not a variant of \"Shape\"; variant patterns resolve lexically against the declaration, with no nearest-match search\n",
+  "files": {
+    "demo/main.we": "pub type Shape = Circle(Float64) | Square(Float64)\n\nfn f(s: Shape) -> Float64 {\n    return match s {\n        Triangle(r) => r\n        _ => 0.0\n    }\n}"
+  }
+}

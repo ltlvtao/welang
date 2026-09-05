@@ -1,0 +1,18 @@
+{
+  "name": "check-e0302-or-names",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(x: Int64) -> Int64 {\n    return match x {\n        a | b => a\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:11: error[E0302]: or-pattern branches must bind the same names — the branches bind different names (\"a\" and \"b\"); whichever branch matches, the arm body must see one binding set\n",
+  "files": {
+    "demo/main.we": "fn f(x: Int64) -> Int64 {\n    return match x {\n        a | b => a\n    }\n}"
+  }
+}

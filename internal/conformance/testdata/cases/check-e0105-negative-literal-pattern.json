@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-negative-literal-pattern",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(n: Int64) -> Int64 {\n    return match n {\n        -1 => n\n        _ => n\n    }\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:9: error[E0105]: unexpected token — \"-\" fits no pattern production: patterns take chapter-1 literals, which carry no sign\n",
+  "files": {
+    "demo/main.we": "fn f(n: Int64) -> Int64 {\n    return match n {\n        -1 => n\n        _ => n\n    }\n}"
+  }
+}

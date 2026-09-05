@@ -1,0 +1,18 @@
+{
+  "name": "check-ch8-record-construct-access-update",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record User { name: String, age: Int64 }\n\nfn label(u: User) -> String {\n    return u.name\n}\n\nfn older(u: User) -> User {\n    return User { age: u.age + 1 with &u }\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", age: 1 }\n    let v = older(u)\n    return Ok(())\n}"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "record User { name: String, age: Int64 }\n\nfn label(u: User) -> String {\n    return u.name\n}\n\nfn older(u: User) -> User {\n    return User { age: u.age + 1 with &u }\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", age: 1 }\n    let v = older(u)\n    return Ok(())\n}"
+  }
+}

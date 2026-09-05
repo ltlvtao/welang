@@ -1,0 +1,18 @@
+{
+  "name": "check-e0501-fn-signature-mismatch",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn greet(n: String) -> Int64 {\n    return 1\n}\n\nfn apply(f: fn(Int64) -> Int64, v: Int64) -> Int64 {\n    return f(v)\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return apply(greet, 1)\n}"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:12:18: error[E0501]: mixed types — the argument is fn(String) -> Int64, the parameter is fn(Int64) -> Int64; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "fn greet(n: String) -> Int64 {\n    return 1\n}\n\nfn apply(f: fn(Int64) -> Int64, v: Int64) -> Int64 {\n    return f(v)\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return apply(greet, 1)\n}"
+  }
+}
