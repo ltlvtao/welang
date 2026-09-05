@@ -37,14 +37,14 @@ var subcommands = map[string]struct {
 	implemented bool
 }{
 	"new":     {takesPath: false, implemented: true},
-	"build":   {takesPath: true},
+	"build":   {takesPath: true, implemented: true},
 	"check":   {takesPath: true, implemented: true},
-	"run":     {takesPath: true},
+	"run":     {takesPath: true, implemented: true},
 	"test":    {takesPath: true},
 	"fmt":     {takesPath: true},
 	"vet":     {takesPath: true},
 	"doc":     {takesPath: true},
-	"clean":   {takesPath: true},
+	"clean":   {takesPath: true, implemented: true},
 	"version": {takesPath: false, implemented: true},
 	"lsp":     {takesPath: true},
 }
@@ -103,12 +103,21 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.runVersion(positional)
 	case "new":
 		return e.runNew(positional)
-	case "check":
+	case "check", "build", "run", "clean":
 		path := "."
 		if len(positional) == 1 {
 			path = positional[0]
 		}
-		return e.runCheck(path, info)
+		switch name {
+		case "check":
+			return e.runCheck(path, info)
+		case "build":
+			return e.runBuild(path, info)
+		case "run":
+			return e.runRun(path, info)
+		default:
+			return e.runClean(path, info)
+		}
 	}
 	// Unreachable: every implemented subcommand is handled above.
 	return e.usageErr("unknown subcommand %q", name)

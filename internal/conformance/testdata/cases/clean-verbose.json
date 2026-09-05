@@ -1,0 +1,22 @@
+{
+  "name": "clean-verbose",
+  "args": [
+    "clean",
+    ".",
+    "--verbose"
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "build/dummy": "stub\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "we: removed build/dummy\nwe: removed build/\n",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "build-single-file-diag",
+  "args": [
+    "build",
+    "bad.we"
+  ],
+  "setup": {
+    "files": {
+      "bad.we": "fn f() {\n    let s = \"abc\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "bad.we:2:13: error[E0002]: unterminated string literal — not closed before the end of the line\n"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "build-library",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"library\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: library artifacts (chapter 21) are not implemented in this reference build yet\n"
+}

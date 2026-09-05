@@ -1,0 +1,15 @@
+{
+  "name": "run-single-file",
+  "args": [
+    "run",
+    "main.we"
+  ],
+  "setup": {
+    "files": {
+      "main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: single-file builds (spec gap; roadmap follow-up) are not implemented in this reference build yet\n"
+}

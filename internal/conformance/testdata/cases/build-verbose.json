@@ -1,0 +1,17 @@
+{
+  "name": "build-verbose",
+  "args": [
+    "build",
+    ".",
+    "--verbose"
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "we: built build/demo\n",
+  "stderr": ""
+}
