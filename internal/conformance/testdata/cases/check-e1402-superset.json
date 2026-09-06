@@ -1,0 +1,18 @@
+{
+  "name": "check-e1402-superset",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect db\n\nfn save(s: String) effect db { return }\nfn send(s: String) effect net { return }\n\nlet f: fn(String) db -> () = |s: String| {\n    save(s)\n    send(s)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:5: error[E1402]: function value effect set does not match the expected type's — the value performs effect \"net\" and the expected type's effect segment does not include it; widen the expected type's effect segment to cover the value's set, or supply a value that performs less\n",
+  "files": {
+    "demo/main.we": "effect db\n\nfn save(s: String) effect db { return }\nfn send(s: String) effect net { return }\n\nlet f: fn(String) db -> () = |s: String| {\n    save(s)\n    send(s)\n}\n"
+  }
+}

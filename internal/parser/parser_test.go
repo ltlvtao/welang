@@ -200,7 +200,6 @@ const (
 	exprPart       = "cannot begin an expression"
 	concScopeForms = "chapter 18 (scope) forms"
 	valPart        = "produces no value"
-	effectForms    = "chapter 16 (effects) forms"
 	concurForms    = "chapter 18 (concurrency) forms"
 	ffiForms       = "chapter 19 (ffi) forms"
 	testForms      = "chapter 20 (testing) forms"
@@ -248,7 +247,7 @@ var dispatchTable = []struct {
 	{"derives", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"scope", "x {}", dg("E0105", topStmtPart), bd(concScopeForms), dg("E0202", valPart)},
 	{"resource", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"effect", "io {}", bd(effectForms), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"effect", "db", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"task", "f() {}", dg("E0105", topStmtPart), bd(concurForms), bd(concurForms)},
 	{"select", "{}", dg("E0105", topStmtPart), bd(concurForms), bd(concurForms)},
 	{"case", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
@@ -522,7 +521,9 @@ func TestDeclarations(t *testing.T) {
 	wantDiag(t, "fn bad(x) { }\n", "E0105", `parameter "x" carries no annotation`, 1, 8)
 	wantClean(t, "fn f<T>(x: T) { }\n")
 	wantBnd(t, "fn f(mut x: Int64) { }\n", "mut parameters")
-	wantBnd(t, "fn read(p: String) effect io -> String { return p }\n", effectForms)
+	// M7: the chapter 16 segment parses (io is a built-in tag — legal in a
+	// segment; the checker resolves it).
+	wantClean(t, "fn read(p: String) effect io -> String { return p }\n")
 	wantDiag(t, "fn f()\n", "E0105", "a fn wants its body block", 2, 1)
 	wantDiag(t, "fn f() 1\n", "E0105", "where a fn body block opens", 1, 8)
 	// Imports: forms, aliases, and E0013.
@@ -708,8 +709,6 @@ func TestBoundaryForms(t *testing.T) {
 	}{
 		{"fn f() {\n    scope x {}\n}\n", concScopeForms},
 		{"fn f() {\n    scope timeout(1) {}\n}\n", concScopeForms},
-		{"effect io {}\n", effectForms},
-		{"fn f(x: Int64) effect io -> Int64 {\n    return x\n}\n", effectForms},
 		{"fn f() {\n    task g() {}\n}\n", concurForms},
 		{"fn f() {\n    select {}\n}\n", concurForms},
 		{"foreign fn f() {}\n", ffiForms},

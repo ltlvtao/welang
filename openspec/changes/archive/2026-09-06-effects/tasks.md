@@ -1,0 +1,86 @@
+# tasks — effects
+
+- [x] T1 测试先行 A：D12 黄金表落盘（~50 新增 + 0 改写），对当前构建运行必须先红
+  来源：proposal 目标 1 2 3 4 5 6 7 8 9 / design D1 D2 D3 D4 D5 D6 D7 D8 D9 D11 D12 D13
+  验证：`go test ./internal/conformance/ -run TestGoldenCases` 红（新增失败清单，其余 356 枚既有全绿零回归），red 证据与锁定/翻绿分类记于完成记录
+
+  **完成记录（2026-09-06）**：48 案例落盘（生成器 `/tmp/m7-goldens/gen.py`，/tmp 惯例；锚点全部标记子串程序化定位）。conformance 对账：总数 404（356 既有 + 48 新），**失败 43 = 全部新枚**（comm 交叉核对红名单与新集合：红 ∖ 新 = 空），通过 361 = 356 既有（零回归）+ 5 锁定枚。分布：E1401 六形（direct/method/bound/fn-type-value/defer/multi-tag）、E1402 六形（纯入效果槽绿翻绿钉/效果入纯槽/superset/结构不一致仍 E0501/嵌套 fn 型精确 E0501/实参位）、E1403 两形（io/time）、E1404 四形（extra/missing/green/default-override 绿）、E1405 三形（direct/multi-tag/闭包构造豁免绿）、E1304/E1303 三形（bare/no-import/nonpub）、名字纪律三形（E0012/E0404 撞名/E0404 先于 E1403 次序钉）、E0105 五形（闭包段 keyword/闭包段裸标签/声明位裸标签锁定/类型位 keyword 锁定/全闭包绿锁定）、声明段绿四形（fn/多标签/bound 调用/impl 方法调用）、闭包推断五形（实参绿/构造不污染/嵌套跳过/短闭包推断/闭包调用绿）、跨模块三形（合格名两写法同键绿/declares-no/nonpub）、panic 零集两形（调用绿/顶层绿）、defer 归属绿、综合绿两形（三族全/三模块链）。
+  **红因分类**：43 红全部 exit 70 bndEffect 解析边界（一切含 `effect` 语法的源停在解析期，先于任何类型期行为）；**5 锁定枚**（今日已过）：check-e0105-decl-bare-tag / check-e0105-fntype-keyword（今日已正确发 E0105，报文探针逐字核对）+ check-ch16-closure-green / check-ch16-panic-zero-green / check-ch16-panic-toplevel-green（今日已绿的真机探针源，钉 panic 零集与全闭包面防回归）。**翻绿面披露**：check-e1402-pure-into-effect-slot 今日红于 70（源含 effect 行），M7 后绿——sameType 今日对 tags 精确比较的假报形今日实际不可达（文件先停解析），D11 的「今日假报 E0501」实证由探针独立源（仅 fn 型段、无 effect 关键字）承担。**0 改写**：`grep -rlE "fn\([^)]*\) [a-z][a-zA-Z.]* ->" testdata` 零命中——356 既有零携带类型段；git diff --stat 既有文件零触碰。
+  **D12 对账**：预估 ~50 → 实落 48（D12 分布表中「defer ×2」其一已计入 E1401 六形（e1401-defer），独立 defer 绿 1 枚；「E0105 ×5」中第五形（全闭包绿）为锁定枚补充）。**design D13 第 4 条实现前修正**：原稿「M6a 默认体为空标记」不实——check-e0815-default-body 既有黄金证明默认方法体是真实走查代码；已改为「默认体计入该接口方法自身声明集 + override 走 E1404」，并落 check-e1404-default-override 绿枚钉之。
+  **黄金措辞修正与重分类（T3 实现前，真机探针揭出）**：闭包段位两枚的 E0105 报文原拟「where a fn body block opens」（镜像声明位锁形），探针实证闭包位既有措辞为「where a ** closure's ** body block opens」且裸标签形今日已正确发（`fn(s: String) io {` → E0105 @ 2:27 closure 措辞）——两枚措辞已改（生成器同步），check-e0105-closure-bare-tag 随之从预期红重分类为**锁定枚**。修正后对账：**42 红 + 6 锁定枚**（42+6=48；356 既有零回归不变，总 404）。
+
+- [x] T2 测试先行 B：parser 单测（effect 项声明面纪律矩阵 E0012/E0404/E1403 次序、三声明段位、闭包段 E0105 两形、锁定枚两形、fn 型段互串）与 typecheck 单测（canonical 键矩阵、resolveEffectTag 裸/合格/内建、E1401 四路 + defer + panic 零集、E1402 织入分流两形、闭包推断并集/嵌套/构造豁免、E1404 精确、E1405）先写先红
+  来源：proposal 目标 1–8 / design D1 D2 D3 D4 D5 D6 D7 D8
+  验证：`go test ./internal/parser/ ./internal/typecheck/` 红（新用例引用未定义节点/分支失败），red 证据记于完成记录
+
+  **完成记录（2026-09-06）**：`internal/parser/m7_test.go`（6 函数：EffectDeclItem/EffectDeclNames/DeclEffectSegment/ClosureSegmentE0105/FnTypeEffectTags + helper m7File）+ `internal/typecheck/m7_test.go`（8 函数：EffectTagResolution/CallSiteEffect/EffectAgreement/ClosureInference/ImplEffectMatch/TopLetEffect/PanicZeroEffect）落盘，负例源逐字镜像 T1 黄金表。red 证据：parser 编译红——`undefined: ast.EffectDecl`、`FnDecl.EffectTags undefined`、`MethodSig.EffectTags undefined`（恰为 D1 新节点/新字段）；typecheck 7 函数红且红因正确——全部停 bndEffect 解析边界（TestPanicZeroEffect 两例今日已绿为锁定——panic 零集防回归钉，与 T1 锁定枚同面）。**AST 实名核对**（M6b 教训）：接口方法为 `ast.MethodSig`（非 FnDecl）、fn 型为 `ast.FnType`（非 FnTypeRef）、impl 方法与 fn 声明共用 `ast.FnDecl`（Recv 区分）——测试按实名写，零臆造。**跨模块拆分披露**（沿 M6b T2 先例）：合格标签跨模块面（declares-no/nonpub/两写法同键）是 CLI 装载面（design D9），包级单测不适用单文件 helper，其契约由 T1 项目形黄金（已红）钉死；本文件覆盖裸/无导入两形 E1304。
+
+- [x] T3 parser：D1 AST（EffectDecl + 三段位字段）与产生式（五停点替换、闭包段 E0105、fn 型段核对）、D2 名字纪律（E0012/E0404/E1403 判序）、bndEffect 删
+  来源：proposal 目标 1 2 / design D1 D2
+  验证：`go test ./internal/parser/` 效果套件绿；既有套件零回归
+
+  **完成记录（2026-09-06）**：D1 落地——`ast.EffectDecl`（Pub/Name + 名字锚 NameLine/NameCol）+ FnDecl/MethodSig 三字段（EffectTags/EffectLine/EffectCol，段首标签为锚）；五停点替换（fn 声明位 / MethodSig 位 / impl 方法位 / 顶层 effect / pub effect 分派，段位于参数表与 `->`/体之间、where 之前）；**闭包位零代码替换**（删 bndEffect 检查后 `effect` keyword 自然落入 `{` 检查，发既有 closure 措辞 E0105——最小 diff，Q4 裁决面）；bndEffect 常量删（边界表剩五）。D2 判序 dupCheck → E1403 → E0012 全锚名字 token。**合格标签段（实现期揭出的真缺口）**：xm 黄金 `effect b.db` 停 E0105——原实现只循环裸 ident；新增 `effectTagList` 共用文法（声明段与 fn 型槽两处），`mod.name` 同行点续接，连接串原样入 checker（解析为类型期 face E1304）；单测钉裸/合格混排、断点形 E0105（`"{" where a qualified effect tag names its effect`）、fn 型槽合格形。**既有 parser 测试三处更新**（钉的是已删除的 bndEffect 边界）：dispatch 表 effect 行 top 位 → okRes + 补全文本改 ratified 形 `db`；TestDeclarations 段位行 → wantClean；TestBoundaryForms 删两行；effectForms 常量随之删。
+  **T1 黄金源实现前修正（自有新增黄金自由修正，全部披露）**：(a) **13 枚 `effect net` 声明删**——T3 翻绿对账揭出生成器笔误：net 是内建标签无需声明，声明恰是 E1403 靶（段内裸用合法保留）；xm-comprehensive 主模块 `b.net` → 裸 `net`；(b) **E0404×2 锚 keyword → 名字 token**（设计 D2 锚规，报文本已同）；(c) **七枚锚对齐既有锚惯例**：E0501 注解位锚绑定名（check-e0501-annotation 1:5 钉）、实参位锚实参首 token（check-e0501-arg 6:16 钉）、E1404 锚 impl 方法名 token、E1304 锚段首标签——原 marker 误取 let/fn/effect keyword 列；(d) **e1402-superset 源多行化**——单行闭包块体双语句本非法（E0105 after-a-complete-statement），块体语句以换行分隔；typecheck m7_test 同步全部同源修正与锚平移。m7 parser 测试两处列位修正（`pub effect db` 名字 1:12；qualified 断点 `{` 1:21——源含空格）。
+  **对账**：conformance 404 全跑，**22 红 = 全部新枚的类型期机器面**：T4×4（E1304 bare/no-import + E1303 nonpub + xm-declares-no）、T5×6（E1401 六形全「got a clean check」）、T6×8（E1402 六形 + 翻绿×2：closure-arg/short-closure-infer 今日红于 E0501 tags 精确比较——**design D11「今日假报」面真机实证**）、T7×2（E1404）、T8×2（E1405）；**解析面全绿**：E1403×2、E0012、E0404×2、E0105 closure-keyword 及一切纯解析绿枚翻绿；**356 既有零回归**（红名单 ∩ 既有 = 空，comm 交叉核对）。附带实证两条入 T4/T6 依据：sameType 今日对 fn 型 tags 精确比较（closure-arg got「argument is fn(String) -> (), parameter is fn(String) db -> ()」）；fn 符号到 fn 型的渲染丢声明段 tags（nested-exact value 侧外层 db 缺）——fnType.tags 翻转点的实证。gofmt 空、vet/build 过、parser 套件全绿、typecheck 6 函数正确行为级红。
+
+- [x] T4 typecheck 声明与名字：D3 canonical 键与 fnType.tags 翻转、resolveEffectTag（内建/裸/合格）、E1304 两形、importSym 扩 effect kind、声明段/方法段/fn 型段标签入集
+  来源：proposal 目标 1 3 / design D3 D9
+  验证：`go test ./internal/typecheck/` 声明与名字套件绿
+
+  **完成记录（2026-09-06）**：D3 落地——`resolveEffectTag`（内建 io/net/time 裸键；裸自定义 → `<模块键>.<名>`（checker 新增 `modKey`，ingest 记录）；合格 `b.db` → importQualifier → importSym 既有 pub 门（E1303/E1304 declares-no 沿用逐字）→ `b.db`；裸自定义无声明 → E1304 裸形，锚段首标签）；`resolveEffectTags` 去重保序；fnType.tags 翻转——resolveTypeRef 的 fn 型槽逐标签 resolve（原样搬运改 canonical），`displayTag`（末点后缀：内建裸、自定义显效果名）统一供 fnType.String() 与后续报文——`main.db` 渲染 `db`，与 E0501 黄金报文一致。**名字注册**：symEffect kind + EffectDecl 入 checkModule Pass 1（名字纪律全 parser 面，checker 只记 pub 位）；importSym 经 resolveEffectTag 的 kind 判定扩 effect（类型/值位遇 effect 名仍走各自 default E1304，自然无 panic）。**三段位入集**：FnDecl 位 Pass 2a（源序：参数 → 段 → 返回 → where）；impl 方法位 checkImplDecl 签名解析处；接口方法位 checkInterface（ifaceMethod 增 tags 字段，源序同形）；fn 符号→fn 型两处（identType/importMember）+ impl 方法注册视图 + 继承默认视图全部携带声明段集（`fnTags` map AST 键跨模块共享）。
+  **AST 增补（实现期揭出的 D1 缺口）**：ast.FnType 增 TagLine/TagCol（parseFnType 记段首标签）——fn 型槽 E1304 需锚标签 token，原节点只有 fn 关键字位。
+  **T1 黄金/测试实现前修正（自有新增，全部披露）**：(a) m7_test fn 型槽 E1304 期望列 18→19——源 `let f: fn(String) db …` 的 `db` 实居 19 列，原期望 off-by-one；(b) 两枚项目形黄金（e1303-effect-nonpub / xm-declares-no）stderr 路径 `demo/main.we`→`src/main.we`——项目模式实际输出与既有项目形黄金（check-e1304-undeclared-item）同前缀，生成器笔误，码/报文/锚零改。
+  **对账**：conformance 404 全跑，**17 红 = T5×6（E1401 全「got a clean check」）+ T6×7（E1402 六形之五——argument/effect-into-pure-slot/pure-into-effect-slot/structure-e0501/superset + 翻绿×2 closure-arg/short-closure-infer）+ T7×2（E1404 clean check）+ T8×2（E1405 clean check）**；**T4×4 翻绿**（e1304-bare/no-import、e1303-nonpub、xm-declares-no）+ **nested-exact 提前翻绿**（T3 名单曾归 T6——fn 符号→fn 型携带声明段后值侧 `take` 渲染 `fn(fn(String) db -> ()) db -> ()`，与注解 net 精确比较即 E0501，黄金逐字命中；此为 T4 tags 翻转直接产物，非额外机器）；structure-e0501 值侧暂无 tags、superset 暂报 E0501——闭包推断（T6）到位后自然归位，D11 今日假报面实证承接。**356 既有零回归**（48 新枚全 untracked，红名单 ∩ 既有 = 空）。TestEffectTagResolution 六探针绿（含合格/裸混排解析与 fn 型槽同查）；TestPanicZeroEffect 锁定绿；其余 5 函数 T5–T8 行为级正确红。gofmt 空、vet 清。
+
+- [x] T5 E1401 调用位：D4 calleeSet 四路（fn 符号/方法两视角/fn 型值/panic 天然零集）、defer 归属（fnTags 语境）、报文成分（效果名 + callee）
+  来源：proposal 目标 4 / design D4
+  验证：`go test ./internal/typecheck/` 调用位套件绿
+
+  **完成记录（2026-09-06）**：D4 落地——checker 语境字段 `bodyTags/bodyName/inBody/inClosure`（bodyTags 为外围声明解析集，nil=纯也判；inBody=false 时跳过（topLet 初始化器是 T8 E1405 的面）；inClosure=true 时抑制（闭包构造≠执行，体内调用并入其推断集——T6 收集器同点）；defer 体走查只换 prop 语境不换效果语境——ch3 只偏移时机不偏移归属）。判序核心 `checkCallEffect(calleeTags, callee, line, col)`：差集（canonical 键比较）非空即 E1401，报文 `undeclared effect at a call — "save" performs effect "net" which "work" does not declare; add the missing tag to …`（差集标签 displayTag 渲染，`quoteTags` 单标签 `"net"`/多标签 `"db", "net"`），锚与被调名三路一致规则：**调用头首 token**（裸头=被调名 token；member 头=接收者首 token）。三挂点（各在函数入口，先于任何应用机器——效果段永不泛型）：`fnCall`（`c.fnTags[fd]`、`fd.Name`、exprPos(x.Fn)；跨模块 importCall 复用此路，fnTags AST 键共享）；`methodCall`（视图 ft.tags、m.Name、接收者首 token）；`fnValueCall`（ft.tags、`calleeSite(x.Fn)` 头名+头首 token）——**panic 族零集天然旁路**（空集差集恒空，零代码）。
+  **体走查语境设置**：checkFnDecl（fnTags[fd]/fd.Name）与 checkMethodBody（签名增 tags 参数：impl 体传 fnTags[fd]、接口默认体传 im.tags——两调用点）入口设置/出口恢复四字段；closureType 体走查前 inClosure=true（保存/恢复，嵌套闭包保真）。**实现期揭出两缺口**：(a) **非泛型方法调用走 fnValueCall 不走 methodCall**（methodCall 只接 clause 位持有视图）——calleeSite 统一「头首 token」锚规则后两路同锚，method 14:5/bound 6:5 黄金均命中；(b) **三接收者视图漏带 tags**（ifaceType 接收者/dynType 箱/paramRef where-bound 的成员查找 `fnType{params: im.params, ret: …}` 无 tags——T4 只补了注册视图）——三处补 `tags: im.tags`（substFn 已保 tags），bound 黄金随之翻绿。**附带补全**：parser helps 增 E1403（T3 遗漏——JSON face 的 remediation 位；Human face 不渲染 help，零黄金影响）。tHelps 增 E1401。
+  **对账**：conformance 404 全跑，**11 红 = T6×7（E1402 五形 + 翻绿×2 closure-arg/short-closure-infer）+ T7×2（E1404）+ T8×2（E1405）**；**E1401 六形翻绿**（direct 8:5 / method 14:5 / bound 6:5 / fn-type-value 4:5 / defer 8:13 / multi-tag 8:5，报文逐字命中）；**356 既有零回归**（红名单 ∩ 既有 = 空）。TestCallSiteEffect 六探针绿；TestEffectTagResolution/TestPanicZeroEffect 锁定绿；typecheck 包余四红家族恰为 T6–T8 预期行为级红。gofmt 空、vet 清、`go test ./...` 其余包全绿。
+
+- [x] T6 E1402 织入一致 + 闭包推断：D5 fnAgree 子集比较器四挂点（E0501 分流次序、嵌套精确、翻绿面）、D6 收集器（并集/嵌套跳过/构造 ≠ 执行/短闭包同规则）
+  来源：proposal 目标 5 6 / design D5 D6
+  验证：`go test ./internal/typecheck/` 一致位与推断套件绿
+
+  **完成记录（2026-09-06）**：D5 落地——`checkFnSlot(value, slot, line, col)`（site 的 plain agree 已失败后调用）：两侧 fnType 时**结构先行**（顶层 tags 置零后 agree——参数/返回/嵌套 fn 型经既有精确比较，无方差）；结构一致则顶层段判**单向 ⊆**：值集 ⊆ 槽集 → 翻绿（Q3：纯值入效果槽合法，无诊断）；值集多出 → E1402（报文 `function value effect set does not match the expected type's — the value performs effect "net" and the expected type's effect segment does not include it; widen …`，多标签 quoteTags join），锚 = 该 site 的 E0501 同锚；非 fnType 或结构不一致 → 返回 false，site 的既有 E0501 原文零改。**五代码位覆盖四概念挂点**（let 注解定型两 AST 形——具名绑定/模式绑定、checkArgs 实参、checkReturn 返回值、constructType 字段初始化与 update），agree 本体与 E0830/E0808/checkImplMethodSig/unify 恒等位零触碰（Q3 被拒面）。D6 落地——checker 增 `closureTags [][]string` 推断账本（与 closures 账本同点 push/pop）；`checkCallEffect` 的 inClosure 分支改**收集**：被调集并入最内层（嵌套闭包体只入自己的层——外层构造内层不执行；外层闭包体走查遇闭包字面量经 closureType 进内层语境，外层天然零污染）；closureType 返回 `fnType{params, tags: 最内层账本, ret}`——推断集此后与声明集同权（E1402 一致位、E1401 经 fn 型值调用）；三臂（全注解/短/裸参）同一体走查位收集，短闭包期望线程零改。
+  **实现期修正（自有新增测试，披露）**：m7_test TestEffectAgreement 实参位探针期望 13:10 → **12:10**——源第 12 行才是 `pure(|s: String| …)` 调用行，机器与 conformance 黄金（check-e1402-argument 钉 12:10，本任务翻绿逐字命中）一致，原期望 off-by-one 行。**附带补全**：exprPos 增 `*ast.Closure/*ast.If/*ast.Match` 三 case（原缺省落 1,1——闭包值在实参/返回位锚其 `|`/`fn`/`if`/`match` 首 token；黄金 12:10 即闭包 `|` 位）。
+  **对账**：conformance 404 全跑，**4 红 = T7×2（E1404 extra/missing）+ T8×2（E1405 direct/multi-tag）**；**T6×7 翻绿**（E1402 argument/effect-into-pure-slot/pure-into-effect-slot（Q3 翻绿钉）/structure-e0501/superset + 翻绿×2 closure-arg-green/short-closure-infer-green——D11「今日假报」面闭合）；**356 既有零回归**。TestEffectAgreement 六探针 + TestClosureInference 五探针绿；typecheck 包余二红家族恰为 T7/T8 预期。gofmt 空、vet 清、`go test ./...` 六包 ok。
+
+- [x] T7 E1404 + 跨模块：D7 checkImplMethodSig 精确一致（双向差/缺省段纯/override 同判）、D9 合格标签跨模块黄金面
+  来源：proposal 目标 1 7 / design D7 D9
+  验证：`go test ./internal/typecheck/ ./internal/cli/` 接口位与多模块套件绿
+
+  **完成记录（2026-09-06）**：D7 落地——checkImplMethodSig 尾部（签名 sameType 各判之后）增精确一致判：`tagSetEq(c.fnTags[m.fd], im.tags)`（canonical 集双向相等——等长 + 单向包含即相等，段解析已去重）；不等 → E1404（锚 impl 方法名 token nl/nc，E0808 同位先例；报文 `impl method effect set disagrees with the interface — the impl method declares "db" and the interface method declares no effect segment; copy …`，双侧 side 渲染：空集 = `declares no effect segment`、多标签 quoteTags；缺省段=空集=纯参与比较）；override 默认方法走同一判（M6a 机制同路），默认体自身调用归 T5 checkIfaceBodies 语境。tHelps 增 E1404。**D9 跨模块面**：xm 黄金（两写法同键绿/declares-no/nonpub）自 T4 起已绿，本任务核对 cli 套件 `ok` 零回归——合格标签跨模块装载面无新增机器（T4 的 resolveEffectTag 合格路即全部）。
+  **对账**：conformance 404 全跑，**2 红 = T8×2（E1405 direct/multi-tag）**；**T7×2 翻绿**（E1404 extra 10:8/missing 10:8 报文逐字命中）；**356 既有零回归**。TestImplEffectMatch 四探针绿（含精确相等绿 + 默认体/override 绿）；typecheck 包余一红家族（TestTopLetEffect，T8 预期）。
+
+- [x] T8 E1405 + 收尾：D8 topLet 初始化器纯（闭包构造豁免/panic topLet 不回归）、conformance 全绿（356 既有 + ~50 新增零回归）、`go test ./...` 清缓存全绿
+  来源：proposal 目标 8 9 / design D8
+  验证：`go test ./...` 全绿；T1 名单逐枚翻绿零回归
+
+  **完成记录（2026-09-06）**：D8 落地——checker 增 `topLetName` 语境字段（pass 2b TopLet 臂在 checkBinding 前设置/后恢复绑定名）；`checkCallEffect` 重构为三分支：**(1)** 被调集空 → 直接返回（panic 族零集适配一切语境——`let boom = die()` 与函数体两路同旁路，零代码）；**(2)** inClosure → 收集入最内层（topLet 里的闭包字面量经 closureType 入自己的层——构造 ≠ 执行豁免在 D6 同一点闭合，`let f = |s| save(s)` 绿）；**(3)** !inBody → **E1405 即地发**（panic-stop 协议下首个效果调用即首个报错——「首个效果调用首 token」锚天然成立；报文 `effectful call in a top-level initializer — the initializer of "base" calls "save", which performs effect "db"; move the work into main, …`，效果名报被调**全集**（topLevel 无外围集无差集可言），锚 callee 名 token（fnCall 路 exprPos(x.Fn)）。tHelps 增 E1405。
+  **实现期修正（自有新增测试，披露）**：m7_test TestTopLetEffect 多标签探针期望 6:12 → **7:12**——源第 7 行才是 `let base = …`（空行计数漏一），机器与 conformance 黄金（check-e1405-multi-tag 钉 7:12）一致。
+  **对账**：conformance 404 全跑 **404/404 全绿**（E1405×2 翻绿：direct 7:12 / multi-tag 7:12 报文逐字命中；闭包构造豁免绿枚随翻）；**356 既有 + 48 新增零回归**；T1 名单 48 枚终态全绿（42 红全翻 + 6 锁定枚保持）。`go clean -testcache && go test ./...` 九包全 ok；gofmt 空、vet 清；typecheck m7 套件 8 函数全绿。
+
+- [x] T9 全量验证与真机电池：既有 356 枚零改写核对；真机黑盒——三族检查综合绿程序静默、多模块效果程序（合格标签 + 两写法同键）、逐码负例真机报文核对（5 首发码全覆盖）、build 对带效果程序停既有接收集行；D13 不可达清单逐条实证记录
+  来源：proposal 目标 1–9 / design D10 D11 D13
+  验证：输出与不可达实证记于完成记录
+
+  **完成记录（2026-09-06）**：真机二进制 `go build ./cmd/we`，全部黑盒经 CLI 面（Human face）。
+  **零改写核对**：`git diff --name-only` ∩ conformance testdata = 空——356 既有黄金零触碰，48 新枚全 untracked。
+  **电池 1（三族综合绿静默）**：单模块程序含 E1401 面（直接/方法/fn 型值/defer/闭包构造+调用六形齐）、E1402 面（fn 型参数 `fn(String) db -> ()`）、E1404 面（接口+impl 段一致）、闭包推断（`|s: String| { save(s) }` 构造后调用）——`check` exit 0 全静默。
+  **电池 2（多模块）**：xm 黄金源真机复刻（main/b/c 三模块——c 声明 `pub effect db`、b 合格 `c.db` 段、main `effect net c.db` 合格+内建混排、b→c 跨模块调用链）check 静默 exit 0——合格标签 canonical 同键（裸 `db` 声明 ↔ 合格 `c.db` 使用）与两写法并存真机成立；check-ch16-xm-qualified-green 同过。
+  **电池 3（逐码真机报文）**：**48/48 新枚全部真机复刻**（临时目录落黄金 setup 文件 → 真二进制跑 args → stdout/stderr/exit 三面逐字 diff）——**20 绿静默 + 28 负例报文逐字命中**；E1401 六形 / E1402 六形（含 Q3 翻绿钉静默、结构不一致 E0501、嵌套精确 E0501）/ E1403 两形 / E1404 两形 / E1405 两形 / E1304×3 + E1303 / 名字纪律三形 / E0105 闭包段全覆盖。
+  **电池 4（build 接收集，D10）**：A/B 对照——纯 main 与带 `effect db` 段 main（同体形：let + return 两语句）**同停 bndMainBody 同文案**（`main bodies beyond a single Ok or Err return statement…`，exit 70）——效果段在 build 面零行为差（编译期擦除实证）；带效果调用程序（main 体 `save("x")` + save 函数）停 bndOtherFns（M4 四行接收集诚实顺序——函数面先行）；**main 携带效果段 check 绿**（E1305 签名纪律只管 pub/name/返回形，段合法）；codegen 唯一改动为 `*ast.EffectDecl` 的显式擦除 case（新 AST 节点在 Emit switch 的归处——IR 结构零改，Q2/D10）。
+  **D13 逐条实证**：(1) ch18 task 段拼写——函数体内 `task effect net {` 真机停 bndConc（`chapter 18 (concurrency) forms`，exit 70），段 token 不可达 ✓；(2) ch20 test 免检查——`test saves { save("x") }` 真机停 bndTest（exit 70），体内效果调用先停解析边界不可达 ✓；(3) 等待原语零效果——ch16 句面遵守，ch18 原语无实现无机器可违，运行面 M9（记录）✓；(4) 接口默认方法体——真机双针：默认体调用未声明 → E1401 @ 9:9 报 **接口方法自身**名（"save" performs "db" which "put" does not declare——默认体调用计入该方法声明集的计入口径实证）；override 段不一致 → E1404 @ 18:8（`the impl method declares no effect segment and the interface method declares "db"`）✓；(5) 内建三词无库内容——io/net/time 无 std 函数携带注解，M8（记录）✓；(6) 效果多态/处理器——规范未定义，无面可落（记录）✓。
+
+- [x] T10 验证阶梯 + 实现审查（welang-code-review 7 条，真二进制证据）+ 归档（status → archived，归档目录带日期前缀）+ roadmap M7 → done 双语同步
+  来源：研发流程 + design D13 披露义务
+  验证：gofmt -l 空、go build/vet 过、validate --all --strict 过、docs_sync 对数不变、git diff --check 干净；归档目录存在
+
+  **完成记录（2026-09-06）**：**验证阶梯**——gofmt -l 空；go build ./... / go vet ./... 过；`validate.py --all --strict` OK（1 change valid, registry clean）；`docs_sync.py` 30 对齐（对数不变）；`git diff --check` 干净；conformance 404/404。**实现审查**（welang-code-review 7 条全过，结论落 proposal.md「## 实现审查记录（active → complete 关卡）」，真二进制证据）：规范符合性（7 Requirement 逐条真机黑盒对照——含 R1「内建词作普通名合法」场景真机绿 `fn time(n: Int64)` + `let net = 3` exit 0、R5 默认体/override 双针、R7 段位注册表）；验证诚实性（T1–T9 逐项复核，红名单递减链 43→22→17→11→4→2→0 与终态零矛盾，修正全披露）；测试先行（T1 43 红/T2 编译红先于实现、§52 Human face 逐字 48/48 + §62 JSON Lines `--json` 字段实证）；诊断协议稳定（internal/diag 零 diff、零新码、复用码无扩容）；单一权威（零规范增量无提升面、代码注释中文行数 0）；红线复核（无 refr/ 路径、diff 面与 proposal 影响范围一致——codegen EffectDecl 擦除 case 为新 AST 节点必要归处 D10 在案）；最小可信验证（阶梯全项 + 真机 48/48）。**归档**——roadmap M7 → done 双语同步（en/zh 行 23）；零 specs/ 提升面（ch16 规范先行已批）；无 ADR 级政策变更（M6b 先例，长期取舍随 design.md 归档留存）；目录移至 `openspec/changes/archive/2026-09-06-effects/`（变更工件全程 untracked，git mv 不适用于未跟踪源——普通 mv，M7 工件随 T11 提交首次入库）+ status → archived；复验 `validate.py --all --strict` OK（no changes found——active 集空即净）+ docs_sync 30 对齐。
+
+- [ ] T11 记忆更新与提交：project-overview 增 M7 条目（下一里程碑指向）、MEMORY.md 索引行更新；英文提交信息（无署名 trailer；refr/ 不入提交）
+  来源：研发流程 + 用户红线
+  验证：`git log -1` 消息为英文且无 Co-Authored-By；`git show --stat` 无 refr/ 路径

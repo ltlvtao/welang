@@ -1,0 +1,18 @@
+{
+  "name": "check-ch16-panic-toplevel-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn die() -> Never { panic(\"boom\") }\nlet boom = die()\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn die() -> Never { panic(\"boom\") }\nlet boom = die()\n"
+  }
+}

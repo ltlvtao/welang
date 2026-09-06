@@ -1,0 +1,18 @@
+{
+  "name": "check-e1401-fn-type-value",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect db\n\nfn run(f: fn(String) db -> ()) {\n    f(\"x\")\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:5: error[E1401]: undeclared effect at a call — \"f\" performs effect \"db\" which \"run\" does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead\n",
+  "files": {
+    "demo/main.we": "effect db\n\nfn run(f: fn(String) db -> ()) {\n    f(\"x\")\n    return\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e1404-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect db\n\ninterface Store {\n    fn put(self, s: String) effect db\n}\n\nrecord Rec { fd: Int64 }\n\nimpl Store for Rec {\n    fn put(self, s: String) effect db {\n        return\n    }\n}\n\nfn work(r: Rec) effect db {\n    r.put(\"x\")\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "effect db\n\ninterface Store {\n    fn put(self, s: String) effect db\n}\n\nrecord Rec { fd: Int64 }\n\nimpl Store for Rec {\n    fn put(self, s: String) effect db {\n        return\n    }\n}\n\nfn work(r: Rec) effect db {\n    r.put(\"x\")\n    return\n}\n"
+  }
+}

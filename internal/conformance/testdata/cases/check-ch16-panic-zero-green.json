@@ -1,0 +1,18 @@
+{
+  "name": "check-ch16-panic-zero-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn die() -> Never { panic(\"boom\") }\nfn work() {\n    die()\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn die() -> Never { panic(\"boom\") }\nfn work() {\n    die()\n    return\n}\n"
+  }
+}

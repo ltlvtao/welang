@@ -1,0 +1,18 @@
+{
+  "name": "check-e1304-effect-bare",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn work() effect db {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:18: error[E1304]: unresolved name — no effect named \"db\" is declared in this module; declare it, fix the spelling, or import the module that declares it\n",
+  "files": {
+    "demo/main.we": "fn work() effect db {\n    return\n}\n"
+  }
+}

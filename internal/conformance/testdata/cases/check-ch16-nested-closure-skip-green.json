@@ -1,0 +1,18 @@
+{
+  "name": "check-ch16-nested-closure-skip-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect db\n\nfn save(s: String) effect db { return }\n\nlet outer: fn(String) -> () = |s: String| {\n    let inner = |t: String| { save(t) }\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "effect db\n\nfn save(s: String) effect db { return }\n\nlet outer: fn(String) -> () = |s: String| {\n    let inner = |t: String| { save(t) }\n    return\n}\n"
+  }
+}

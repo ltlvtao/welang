@@ -1,0 +1,18 @@
+{
+  "name": "check-e0012-effect-name",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect Db\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:8: error[E0012]: effect names must be camelCase — \"Db\" is not camelCase\n",
+  "files": {
+    "demo/main.we": "effect Db\n"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "check-ch16-xm-declares-no",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import b\n\n\npub type AppError = Failed(String)\n\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect b.db {\n    return\n}\n",
+      "src/b.we": "pub fn helper() {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:11:18: error[E1304]: unresolved name — the module \"b\" declares no \"db\"; qualify through a declared pub item of the import\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import b\n\n\npub type AppError = Failed(String)\n\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect b.db {\n    return\n}\n",
+    "src/b.we": "pub fn helper() {\n    return\n}\n"
+  }
+}

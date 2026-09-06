@@ -1,0 +1,18 @@
+{
+  "name": "check-e1401-direct",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect db\n\nfn save(s: String) effect db {\n    return\n}\n\nfn work() {\n    save(\"x\")\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:8:5: error[E1401]: undeclared effect at a call — \"save\" performs effect \"db\" which \"work\" does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead\n",
+  "files": {
+    "demo/main.we": "effect db\n\nfn save(s: String) effect db {\n    return\n}\n\nfn work() {\n    save(\"x\")\n    return\n}\n"
+  }
+}

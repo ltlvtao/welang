@@ -68,6 +68,11 @@ func Emit(f *ast.File, module string) (string, *NotImplemented) {
 			// a silent fall-through: a future form arriving here must decide,
 			// never vanish.
 			continue
+		case *ast.EffectDecl:
+			// Effect declarations erase (M7 design D10): chapter 16 is a
+			// compile-time discipline — the check stage consumes every
+			// segment, and the tag names reach no IR and no runtime face.
+			continue
 		case *ast.Import:
 			// A multi-module root reaches here now that chapter 15's loader
 			// type-checks the graph (M6b): Emit still takes one module, so

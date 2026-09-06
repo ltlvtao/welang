@@ -93,6 +93,10 @@ var tHelps = map[string]string{
 	"E1302": "Create the file at the expected path, fix the path spelling, or add the dependency to the cache.",
 	"E1304": "Fix the spelling, declare the name, import the module, or qualify through an existing import name.",
 	"E1305": "Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type.",
+	"E1401": "Add the missing tag to the enclosing declaration's effect segment, or call a pure function instead.",
+	"E1402": "Widen the expected type's effect segment to cover the value's set, or supply a value that performs less.",
+	"E1404": "Copy the interface method's effect segment into the impl method's signature exactly, in both directions.",
+	"E1405": "Move the work into main, or initialize from a pure computation over constants.",
 }
 
 // stop and bstop unwind the check at the first diagnostic or boundary,
@@ -146,7 +150,11 @@ type fnType struct {
 func (f fnType) String() string {
 	s := "fn(" + typeJoin(f.params) + ")"
 	if len(f.tags) > 0 {
-		s += " " + strings.Join(f.tags, " ")
+		ds := make([]string, len(f.tags))
+		for i, t := range f.tags {
+			ds[i] = displayTag(t)
+		}
+		s += " " + strings.Join(ds, " ")
 	}
 	return s + " -> " + f.ret.String()
 }
@@ -432,13 +440,16 @@ type ifaceInfo struct {
 
 // ifaceMethod is one interface method: the receiver mutability, the
 // parameter and return types resolved against the interface's clause and
-// associated types, an optional default body, its own method clause, and
-// its name token (the E0808/E0814 anchors).
+// associated types, the resolved effect segment (chapter 16 — canonical
+// keys, nil = pure; an impl's method must equal it exactly, E1404), an
+// optional default body, its own method clause, and its name token (the
+// E0808/E0814 anchors).
 type ifaceMethod struct {
 	name       string
 	recvMut    bool
 	params     []Type
 	ret        Type // nil = valueless
+	tags       []string
 	typeParams []string
 	body       *ast.Block
 	line, col  int
@@ -1284,6 +1295,7 @@ const (
 	symRecord
 	symNewtype
 	symIface
+	symEffect
 )
 
 type symbol struct {
@@ -1313,6 +1325,34 @@ type checker struct {
 	fnRet    Type // the enclosing fn's declared return; nil = valueless
 	fnParams map[*ast.FnDecl][]Type
 	fnRets   map[*ast.FnDecl]Type
+	// fnTags holds each fn or method declaration's resolved effect segment
+	// (chapter 16): canonical keys, first-occurrence order (design D3).
+	// nil/absent = pure. AST-keyed, so one checker's every module shares it.
+	fnTags map[*ast.FnDecl][]string
+	// modKey is the live module's canonical key (the ingest argument):
+	// a bare custom tag canonicalizes against it, and the qualified
+	// resolution reads the same spelling back from the import's bucket.
+	modKey string
+	// The body context of the declaration whose body is being walked
+	// (chapter 16, design D4): bodyTags/bodyName carry its resolved effect
+	// segment and its name — every call in the body judges its callee's
+	// set against bodyTags (E1401), and the message names bodyName.
+	// inBody is false outside any body walk (a top-level initializer is
+	// E1405's own face); inClosure suspends the judgment inside a closure
+	// body — constructing a closure is not performing it, and the body's
+	// calls join the closure's own inferred set (design D6). A defer body
+	// keeps the enclosing context: chapter 3 shifts its timing, never its
+	// ownership.
+	bodyTags  []string
+	bodyName  string
+	inBody    bool
+	inClosure bool
+	// topLetName carries the binding name of the top-level initializer
+	// being walked (chapter 16, design D8): that walk runs outside any
+	// declaration body (inBody false), so the first effectful call it
+	// types is E1405's — the one ratified position that evaluates outside
+	// a signature, and it must stay pure.
+	topLetName string
 	// typeScope is the generic-clause layer stack: a declaration's clause
 	// parameters (and an impl's associated bindings) shadow the module
 	// namespace while its annotations and bodies resolve (chapter 10).
@@ -1337,6 +1377,13 @@ type checker struct {
 	// the outer closure's too).
 	closures      []map[string]captureInfo
 	closureBounds []int
+	// closureTags is chapter 16's inference ledger (design D6): one layer
+	// per active closure — the union of the callee sets of the calls its
+	// body performs, recorded into the innermost layer only (a nested
+	// closure's body is its own inference, never the outer's).
+	// closureType reads the layer back as the closure value's own fn-type
+	// segment.
+	closureTags [][]string
 	// resLets records each let's resource category as the walk types it
 	// (chapter 13): the liveness pass (resource.go) reads the facts back
 	// when it re-walks a typed-clean body.
@@ -1423,6 +1470,7 @@ func newChecker(mode Mode) *checker {
 		isRoot:     true,
 		fnParams:   map[*ast.FnDecl][]Type{},
 		fnRets:     map[*ast.FnDecl]Type{},
+		fnTags:     map[*ast.FnDecl][]string{},
 		fnWheres:   map[*ast.FnDecl]*whereInfo{},
 		implWheres: map[*ast.ImplDecl]*whereInfo{},
 		resLets:    map[*ast.Binding]bool{},
@@ -1455,6 +1503,7 @@ func stopTo(d **diag.Diagnostic, ni **NotImplemented) {
 func (c *checker) ingest(f *ast.File, file, key string, root bool) {
 	c.file = file
 	c.isRoot = root
+	c.modKey = key
 	c.syms = map[string]*symbol{}
 	c.modules[key] = c.syms
 	c.locals = nil
@@ -1547,6 +1596,12 @@ func (c *checker) checkModule(f *ast.File) {
 				inf.assocs = append(inf.assocs, a.Name)
 			}
 			c.syms[x.Name] = &symbol{kind: symIface, iface: inf, pub: x.Pub}
+		case *ast.EffectDecl:
+			// The parser has settled the name discipline (E0012, the
+			// built-in conflict E1403, and the one-name-space rule E0404);
+			// the checker's face is the pub bit alone (chapter 15) and the
+			// declaration a bare or qualified tag resolves against.
+			c.syms[x.Name] = &symbol{kind: symEffect, pub: x.Pub}
 		case *ast.ImplDecl:
 			implDecls = append(implDecls, x)
 		}
@@ -1653,6 +1708,7 @@ func (c *checker) checkModule(f *ast.File) {
 				params = append(params, c.resolveTypeRef(p.Type, slotAnn))
 			}
 			c.fnParams[x] = params
+			c.fnTags[x] = c.resolveEffectTags(x.EffectTags, x.EffectLine, x.EffectCol)
 			if x.Ret != nil {
 				c.fnRets[x] = c.resolveTypeRef(x.Ret, slotRet)
 			}
@@ -1678,7 +1734,13 @@ func (c *checker) checkModule(f *ast.File) {
 	// member sets.
 	for _, it := range f.Items {
 		if x, ok := it.(*ast.TopLet); ok {
+			// The initializer walks under its binding's name (chapter 16):
+			// outside any declaration body, its first effectful call is
+			// E1405's own face.
+			savedTopLet := c.topLetName
+			c.topLetName = x.Binding.Name
 			t := c.checkBinding(&x.Binding)
+			c.topLetName = savedTopLet
 			if catOf(t) == "resource" {
 				// The module top level binds no resource (chapter 13): no
 				// channel exists outside function bodies, so no path could
@@ -1836,7 +1898,7 @@ func (c *checker) importMember(mod string, id *ast.Ident, x *ast.Member) Type {
 		if r, has := c.fnRets[sym.fn]; has {
 			ret = r
 		}
-		return fnType{params: c.fnParams[sym.fn], ret: ret}
+		return fnType{params: c.fnParams[sym.fn], tags: c.fnTags[sym.fn], ret: ret}
 	case symLet:
 		return sym.letType
 	case symVariant:
@@ -1878,6 +1940,237 @@ func (c *checker) importQualifier(name string) (string, bool) {
 		return "", false
 	}
 	return sym.mod, true
+}
+
+// --- chapter 16: effect tag resolution ---------------------------------------
+
+// builtInTag names one of the language-level tags (io, net, time): they
+// name their effect with no declaration anywhere — a bare use in a segment
+// resolves on sight, and no module item may take their names (E1403 is the
+// parser's face at the declaration).
+func builtInTag(name string) bool {
+	return name == "io" || name == "net" || name == "time"
+}
+
+// displayTag renders a canonical effect key for a message or a type
+// rendering: a built-in key is bare already, and a custom key shows its
+// effect's own name (the part after the module). Every message that names
+// a tag and the fn type rendering both go through here, so one effect has
+// one display everywhere.
+func displayTag(key string) string {
+	if i := strings.LastIndex(key, "."); i >= 0 {
+		return key[i+1:]
+	}
+	return key
+}
+
+// resolveEffectTag resolves one segment tag — the bare spelling or the
+// qualified module.name — to its canonical key (design D3): a built-in is
+// its own bare key; a custom effect's key is <module key>.<name>, so the
+// bare spelling inside the declaring module and the qualified spelling
+// through an import meet at one key. A built-in needs no declaration; a
+// bare custom tag reads the live module's effect declarations (E1304); a
+// qualified tag reads the import's target through chapter 15's pub gate
+// (the qualifier that is no import is E1304's own shape, the non-pub
+// target E1303's). The anchor is the segment's first tag.
+func (c *checker) resolveEffectTag(tag string, line, col int) string {
+	if builtInTag(tag) {
+		return tag
+	}
+	if qual, name, ok := strings.Cut(tag, "."); ok {
+		mod, is := c.importQualifier(qual)
+		if !is {
+			c.fail(line, col, "E1304", fmt.Sprintf(
+				"unresolved name — no import introduces %q, so the effect tag %q resolves nowhere; import the module or declare the effect locally",
+				qual, tag))
+		}
+		sym := c.importSym(mod, name, line, col)
+		if sym.kind != symEffect {
+			c.fail(line, col, "E1304", fmt.Sprintf(
+				"unresolved name — the module %q declares no %q; qualify through a declared pub item of the import",
+				mod, name))
+		}
+		return mod + "." + name
+	}
+	if sym, ok := c.syms[tag]; ok && sym.kind == symEffect {
+		return c.modKey + "." + tag
+	}
+	c.fail(line, col, "E1304", fmt.Sprintf(
+		"unresolved name — no effect named %q is declared in this module; declare it, fix the spelling, or import the module that declares it",
+		tag))
+	panic("unreachable effect tag")
+}
+
+// resolveEffectTags resolves one segment's tags in source order and keeps
+// each distinct key's first occurrence (design D3) — the set a declaration
+// or a fn type carries from here on.
+func (c *checker) resolveEffectTags(tags []string, line, col int) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	var keys []string
+	seen := map[string]bool{}
+	for _, t := range tags {
+		k := c.resolveEffectTag(t, line, col)
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// checkCallEffect is chapter 16's call judgment (design D4): the callee's
+// set must be a subset of the enclosing declaration's. Inside a closure
+// body the judgment is suspended — the callee's set joins the closure's
+// own inferred set instead (design D6); a defer body keeps the enclosing
+// context (chapter 3 shifts timing, not ownership). Outside any body walk
+// the caller is a top-level initializer — chapter 16's one ratified
+// evaluation position outside a signature, and it must stay pure (E1405,
+// design D8; a closure literal in the initializer exempted itself above:
+// constructing it is not performing it). The E1401 message names the
+// difference set's display tags, the callee, and the enclosing
+// declaration.
+func (c *checker) checkCallEffect(calleeTags []string, callee string, line, col int) {
+	if len(calleeTags) == 0 {
+		return // the empty set (the panic family) fits every context
+	}
+	if c.inClosure {
+		// The judgment is suspended — the callee's set joins the
+		// innermost closure's own inferred set instead (design D6): a
+		// nested closure's body is its own inference, never the outer's,
+		// and a closure's construction contributes nothing to the
+		// enclosing declaration.
+		if len(c.closureTags) > 0 {
+			top := &c.closureTags[len(c.closureTags)-1]
+			for _, t := range calleeTags {
+				if !tagIn(t, *top) {
+					*top = append(*top, t)
+				}
+			}
+		}
+		return
+	}
+	if !c.inBody {
+		ds := make([]string, len(calleeTags))
+		for i, t := range calleeTags {
+			ds[i] = displayTag(t)
+		}
+		c.fail(line, col, "E1405", fmt.Sprintf(
+			"effectful call in a top-level initializer — the initializer of %q calls %q, which performs effect %s; move the work into main, or initialize from a pure computation over constants",
+			c.topLetName, callee, quoteTags(ds)))
+	}
+	var missing []string
+	for _, t := range calleeTags {
+		if !tagIn(t, c.bodyTags) {
+			missing = append(missing, t)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	ds := make([]string, len(missing))
+	for i, m := range missing {
+		ds[i] = displayTag(m)
+	}
+	c.fail(line, col, "E1401", fmt.Sprintf(
+		"undeclared effect at a call — %q performs effect %s which %q does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead",
+		callee, quoteTags(ds), c.bodyName))
+}
+
+// tagIn reports whether the canonical key is in the declared set.
+func tagIn(key string, set []string) bool {
+	for _, s := range set {
+		if s == key {
+			return true
+		}
+	}
+	return false
+}
+
+// tagSetEq is the canonical set equality both ways (chapter 16 R5's exact
+// agreement — membership is what matters; the segments resolve
+// duplicate-free, so equal length plus one-way containment is equality).
+func tagSetEq(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, x := range a {
+		if !tagIn(x, b) {
+			return false
+		}
+	}
+	return true
+}
+
+// quoteTags renders a difference set for an effect message: one tag
+// quoted, several quoted and comma-joined.
+func quoteTags(ds []string) string {
+	if len(ds) == 1 {
+		return fmt.Sprintf("%q", ds[0])
+	}
+	q := make([]string, len(ds))
+	for i, d := range ds {
+		q[i] = fmt.Sprintf("%q", d)
+	}
+	return strings.Join(q, ", ")
+}
+
+// calleeSite reports a fn-typed call head's display name and anchor for
+// E1401's message: the head's own name (an identifier's or a member's),
+// anchored at the head's first token — the callee name itself at a bare
+// head, the receiver's first token at a member head (design D4; the same
+// rule methodCall's own hook applies).
+func calleeSite(e ast.Expr) (string, int, int) {
+	name := ""
+	switch h := e.(type) {
+	case *ast.Ident:
+		name = h.Name
+	case *ast.Member:
+		name = h.Name
+	}
+	line, col := exprPos(e)
+	return name, line, col
+}
+
+// checkFnSlot is chapter 16's woven judgment at one type-agreement
+// position holding a fn value (design D5), called where the site's plain
+// agreement has already failed: with the structure agreeing (parameters,
+// return, nested fn types — the nested comparison exact, no variance),
+// the top-level segment compares as a subset — a value performing a
+// subset of the slot's effects fits (a purer function serves an
+// effect-expecting slot, the Q3 flip) and reports green; a value
+// performing more is E1402's own face at the site's anchor, naming the
+// extra tags. fit false with no report marks a structural mismatch — the
+// caller's E0501 stands, message unchanged.
+func (c *checker) checkFnSlot(value, slot Type, line, col int) bool {
+	v, vok := value.(fnType)
+	s, sok := slot.(fnType)
+	if !vok || !sok {
+		return false
+	}
+	vv, ss := v, s
+	vv.tags, ss.tags = nil, nil
+	if !agree(vv, ss) {
+		return false
+	}
+	var extra []string
+	for _, t := range v.tags {
+		if !tagIn(t, s.tags) {
+			extra = append(extra, t)
+		}
+	}
+	if len(extra) == 0 {
+		return true
+	}
+	ds := make([]string, len(extra))
+	for i, t := range extra {
+		ds[i] = displayTag(t)
+	}
+	c.fail(line, col, "E1402", fmt.Sprintf(
+		"function value effect set does not match the expected type's — the value performs effect %s and the expected type's effect segment does not include it; widen the expected type's effect segment to cover the value's set, or supply a value that performs less",
+		quoteTags(ds)))
+	panic("unreachable fn slot")
 }
 
 // checkMain enforces the main convention (design D12's chain): the root
@@ -1955,6 +2248,9 @@ func (c *checker) checkInterface(x *ast.InterfaceDecl) {
 		for _, p := range ms.Params {
 			im.params = append(im.params, c.resolveTypeRef(p.Type, slotAnn))
 		}
+		// The segment sits between the parameters and the arrow in the
+		// source, so it resolves between them here too.
+		im.tags = c.resolveEffectTags(ms.EffectTags, ms.EffectLine, ms.EffectCol)
 		if ms.HasRet {
 			im.ret = c.resolveTypeRef(ms.Ret, slotRet)
 		}
@@ -1977,7 +2273,7 @@ func (c *checker) checkIfaceBodies(x *ast.InterfaceDecl) {
 		self := ifaceType{decl: inf, args: clauseArgs(inf.params)}
 		c.pushTypes(ifaceScope(inf))
 		c.pushTypes(paramScopeOffset(x.Methods[i].TypeParams, len(inf.params)))
-		c.checkMethodBody(im.name, x.Methods[i].Params, im.params, im.body, im.ret, self, im.recvMut)
+		c.checkMethodBody(im.name, x.Methods[i].Params, im.params, im.body, im.ret, self, im.recvMut, im.tags)
 		c.popTypes()
 		c.popTypes()
 	}
@@ -1987,8 +2283,13 @@ func (c *checker) checkIfaceBodies(x *ast.InterfaceDecl) {
 // with no self): the parameters scope their names, self joins them, and
 // recvMut marks the receiver form — the one legal field-write context
 // (E0813).
-func (c *checker) checkMethodBody(name string, params []ast.Param, types []Type, body *ast.Block, ret Type, self Type, mutRecv bool) {
+func (c *checker) checkMethodBody(name string, params []ast.Param, types []Type, body *ast.Block, ret Type, self Type, mutRecv bool, tags []string) {
 	savedRet, savedLocals, savedRecv, savedProp := c.fnRet, c.locals, c.recvMut, c.prop
+	savedTags, savedName, savedInBody, savedInClosure := c.bodyTags, c.bodyName, c.inBody, c.inClosure
+	// The body context as a plain fn's (chapter 16), over the method's own
+	// declared segment — an impl method's declaration, or the interface
+	// method's own set at a default body (design D7).
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure = tags, name, true, false
 	c.fnRet, c.recvMut = ret, mutRecv
 	// The method's own propagation context (chapter 14), as a fn's.
 	c.prop = &propCtx{fnName: name, ret: ret}
@@ -2011,6 +2312,7 @@ func (c *checker) checkMethodBody(name string, params []ast.Param, types []Type,
 	// not an owned handle).
 	c.resCheck(body.Items, params, types)
 	c.fnRet, c.locals, c.recvMut, c.prop = savedRet, savedLocals, savedRecv, savedProp
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure = savedTags, savedName, savedInBody, savedInClosure
 }
 
 // resolvedMethod carries one impl method's resolved signature (the body
@@ -2217,6 +2519,7 @@ func (c *checker) checkImplDecl(x *ast.ImplDecl) {
 		}
 		c.popTypes()
 		c.fnParams[fd] = m.params
+		c.fnTags[fd] = c.resolveEffectTags(fd.EffectTags, fd.EffectLine, fd.EffectCol)
 		if m.ret != nil {
 			c.fnRets[fd] = m.ret
 		}
@@ -2250,7 +2553,7 @@ func (c *checker) checkImplDecl(x *ast.ImplDecl) {
 		if inf != nil {
 			from = inf.name
 		}
-		view := fnType{params: m.params, ret: retOrUnit(m.ret)}
+		view := fnType{params: m.params, tags: c.fnTags[m.fd], ret: retOrUnit(m.ret)}
 		c.addMethod(headName, headMethods, hasField,
 			memberMethod{name: m.fd.Name, fn: view, from: from, mutRecv: m.mut, line: m.fd.NameLine, col: m.fd.NameCol},
 			m.fd.NameLine, m.fd.NameCol, x.Line, x.Col)
@@ -2263,6 +2566,7 @@ func (c *checker) checkImplDecl(x *ast.ImplDecl) {
 			}
 			view := fnType{
 				params: substArgs(im.params, ifaceArgs, assocs),
+				tags:   im.tags,
 				ret:    retOrUnit(subst(im.ret, ifaceArgs, assocs)),
 			}
 			c.addMethod(headName, headMethods, hasField,
@@ -2391,6 +2695,27 @@ func (c *checker) checkImplMethodSig(m *resolvedMethod, im *ifaceMethod, inf *if
 			"impl method signature mismatches the interface method — the return of %q is %s in the impl and %s in %q; signatures match exactly",
 			m.fd.Name, m.ret.String(), iRet.String(), inf.name))
 	}
+	// Chapter 16's exact segment equality (design D7, R5), after the
+	// signature's own judgments: an impl method's declared set must equal
+	// the interface method's in both directions — a caller sees the
+	// interface's set, whichever implementation runs. An omitted segment
+	// is the empty set (pure) and compares like any other; an override of
+	// a default body walks this same judgment.
+	if !tagSetEq(c.fnTags[m.fd], im.tags) {
+		side := func(ts []string) string {
+			if len(ts) == 0 {
+				return "declares no effect segment"
+			}
+			ds := make([]string, len(ts))
+			for i, t := range ts {
+				ds[i] = displayTag(t)
+			}
+			return fmt.Sprintf("declares %s", quoteTags(ds))
+		}
+		c.fail(nl, nc, "E1404", fmt.Sprintf(
+			"impl method effect set disagrees with the interface — the impl method %s and the interface method %s; copy the interface method's effect segment into the impl method's signature exactly, in both directions",
+			side(c.fnTags[m.fd]), side(im.tags)))
+	}
 }
 
 // nameSeqEq compares two name slices element-wise.
@@ -2479,7 +2804,7 @@ func (c *checker) checkImplBodies(x *ast.ImplDecl) {
 	c.fnBounds = c.implWheres[x]
 	for _, fd := range x.Methods {
 		c.pushTypes(paramScopeOffset(fd.TypeParams, len(params)))
-		c.checkMethodBody(fd.Name, fd.Params, c.fnParams[fd], &fd.Body, c.fnRets[fd], info.head, fd.Recv == ast.RecvMutSelf)
+		c.checkMethodBody(fd.Name, fd.Params, c.fnParams[fd], &fd.Body, c.fnRets[fd], info.head, fd.Recv == ast.RecvMutSelf, c.fnTags[fd])
 		c.popTypes()
 	}
 	c.fnBounds = savedBounds
@@ -2789,7 +3114,10 @@ func (c *checker) resolveTypeRef(tr ast.TypeRef, slot slotKind) Type {
 		for i, p := range x.Params {
 			params[i] = c.resolveTypeRef(p, slotAnn)
 		}
-		return fnType{params: params, tags: x.EffectTags, ret: c.resolveTypeRef(x.Ret, slotRet)}
+		// The type slot's segment resolves like a declaration's (design
+		// D3): canonical keys in, so the agreement and subset faces later
+		// compare one spelling of one effect.
+		return fnType{params: params, tags: c.resolveEffectTags(x.EffectTags, x.TagLine, x.TagCol), ret: c.resolveTypeRef(x.Ret, slotRet)}
 	case *ast.NamedType:
 		return c.resolveNamed(x, slot)
 	}
@@ -2970,7 +3298,7 @@ func (c *checker) checkBinding(b *ast.Binding) Type {
 		ann = c.resolveTypeRef(b.Typ, slotAnn)
 	}
 	it := c.typeOf(b.Init, ann)
-	if ann != nil && !agree(it, ann) {
+	if ann != nil && !agree(it, ann) && !c.checkFnSlot(it, ann, b.NameLine, b.NameCol) {
 		c.fail(b.NameLine, b.NameCol, "E0501", fmt.Sprintf(
 			"mixed types — the expression is %s, the annotation is %s; no coercion is ever inserted",
 			it.String(), ann.String()))
@@ -2996,9 +3324,11 @@ func (c *checker) checkLetPattern(b *ast.Binding) {
 	if ann != nil {
 		if !agree(it, ann) {
 			line, col := patAnchor(b.Pat)
-			c.fail(line, col, "E0501", fmt.Sprintf(
-				"mixed types — the expression is %s, the annotation is %s; no coercion is ever inserted",
-				it.String(), ann.String()))
+			if !c.checkFnSlot(it, ann, line, col) {
+				c.fail(line, col, "E0501", fmt.Sprintf(
+					"mixed types — the expression is %s, the annotation is %s; no coercion is ever inserted",
+					it.String(), ann.String()))
+			}
 		}
 		it = ann
 	}
@@ -3138,9 +3468,11 @@ func (c *checker) checkReturn(r *ast.Return) {
 	vt := c.typeOf(r.Value, c.fnRet)
 	if !agree(vt, c.fnRet) {
 		line, col := exprPos(r.Value)
-		c.fail(line, col, "E0501", fmt.Sprintf(
-			"mixed types — the return expression is %s, the declared return is %s; no coercion is ever inserted",
-			vt.String(), c.fnRet.String()))
+		if !c.checkFnSlot(vt, c.fnRet, line, col) {
+			c.fail(line, col, "E0501", fmt.Sprintf(
+				"mixed types — the return expression is %s, the declared return is %s; no coercion is ever inserted",
+				vt.String(), c.fnRet.String()))
+		}
 	}
 }
 
@@ -3149,6 +3481,11 @@ func (c *checker) checkReturn(r *ast.Return) {
 // value reports at the declaration itself.
 func (c *checker) checkFnDecl(fd *ast.FnDecl) {
 	savedRet, savedLocals, savedRecv, savedBounds, savedProp := c.fnRet, c.locals, c.recvMut, c.fnBounds, c.prop
+	savedTags, savedName, savedInBody, savedInClosure := c.bodyTags, c.bodyName, c.inBody, c.inClosure
+	// The body context (chapter 16): every call in this body judges its
+	// callee's set against the fn's own declared segment, named by the fn
+	// in E1401's message.
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure = c.fnTags[fd], fd.Name, true, false
 	c.fnRet, c.recvMut, c.fnBounds = c.fnRets[fd], false, c.fnWheres[fd]
 	// The fn's own propagation context (chapter 14): its `?`s face its
 	// declared return, named by the fn itself (E1202's message).
@@ -3168,6 +3505,7 @@ func (c *checker) checkFnDecl(fd *ast.FnDecl) {
 	// last judgment this body faces).
 	c.resCheck(fd.Body.Items, fd.Params, c.fnParams[fd])
 	c.fnRet, c.locals, c.recvMut, c.fnBounds, c.prop = savedRet, savedLocals, savedRecv, savedBounds, savedProp
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure = savedTags, savedName, savedInBody, savedInClosure
 }
 
 // tailProduces reports whether the body's final item can carry the fn's
@@ -3888,6 +4226,12 @@ func exprPos(e ast.Expr) (int, int) {
 		return x.Line, x.Col
 	case *ast.ListLit:
 		return x.Line, x.Col
+	case *ast.Closure:
+		return x.Line, x.Col
+	case *ast.If:
+		return x.Line, x.Col
+	case *ast.Match:
+		return x.Line, x.Col
 	}
 	return 1, 1
 }
@@ -4077,9 +4421,11 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 	}
 	c.closures = append(c.closures, map[string]captureInfo{})
 	c.closureBounds = append(c.closureBounds, len(c.locals))
+	c.closureTags = append(c.closureTags, nil)
 	defer func() {
 		c.closures = c.closures[:len(c.closures)-1]
 		c.closureBounds = c.closureBounds[:len(c.closureBounds)-1]
+		c.closureTags = c.closureTags[:len(c.closureTags)-1]
 	}()
 	savedRet, savedLocals, savedProp := c.fnRet, c.locals, c.prop
 	c.locals = append(c.locals, map[string]Type{})
@@ -4088,6 +4434,12 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 			c.locals[len(c.locals)-1][p.Name] = params[i]
 		}
 	}
+	// The closure body suspends chapter 16's call judgment (design D6):
+	// constructing the closure is not performing it, and the body's calls
+	// join the closure's own inferred set — the judgment returns when the
+	// closure value is called through its fn type.
+	savedInClosure := c.inClosure
+	c.inClosure = true
 	ret := Type(unitType{})
 	switch {
 	case x.Ret != nil:
@@ -4129,7 +4481,12 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 	// callee side).
 	c.resCheck(x.Body.Items, x.Params, params)
 	c.fnRet, c.locals, c.prop = savedRet, savedLocals, savedProp
-	return fnType{params: params, ret: ret}
+	c.inClosure = savedInClosure
+	// The inference's settled set is the closure value's own segment
+	// (chapter 16 R4): every face of the value from here — the woven
+	// agreement at a slot, the call judgment when it is called — weighs
+	// it like a declared segment.
+	return fnType{params: params, tags: c.closureTags[len(c.closureTags)-1], ret: ret}
 }
 
 // constructType types a record construction or update (design D6): the
@@ -4234,7 +4591,7 @@ func (c *checker) constructType(x *ast.Construct) Type {
 		}
 		seen[f.Name] = true
 		vt := c.typeOf(f.Value, dt)
-		if !agree(vt, dt) {
+		if !agree(vt, dt) && !c.checkFnSlot(vt, dt, f.Line, f.Col) {
 			c.fail(f.Line, f.Col, "E0501", fmt.Sprintf(
 				"mixed types — the field %q is %s, the declared field is %s; no coercion is ever inserted",
 				f.Name, vt.String(), dt.String()))
@@ -4789,7 +5146,7 @@ func (c *checker) identType(x *ast.Ident, expected Type) Type {
 			if r, has := c.fnRets[sym.fn]; has {
 				ret = r
 			}
-			return fnType{params: c.fnParams[sym.fn], ret: ret}
+			return fnType{params: c.fnParams[sym.fn], tags: c.fnTags[sym.fn], ret: ret}
 		default:
 			// type and import names carry no value
 			c.fail(x.Line, x.Col, "E1304", bareUnresolved(x.Name))
@@ -4950,7 +5307,7 @@ func (c *checker) memberOfType(t Type, x *ast.Member, asCall bool) Type {
 				continue
 			}
 			c.methodUse(x, asCall)
-			return substFn(fnType{params: im.params, ret: retOrUnit(im.ret)}, t.args, nil)
+			return substFn(fnType{params: im.params, tags: im.tags, ret: retOrUnit(im.ret)}, t.args, nil)
 		}
 		c.fail(x.NameLine, x.NameCol, "E0815", fmt.Sprintf(
 			"method call outside the receiver's method set — %q is outside the method set of %q; an interface position reaches its own interface's methods only",
@@ -4962,7 +5319,7 @@ func (c *checker) memberOfType(t Type, x *ast.Member, asCall bool) Type {
 				continue
 			}
 			c.methodUse(x, asCall)
-			return substFn(fnType{params: im.params, ret: retOrUnit(im.ret)}, t.args, nil)
+			return substFn(fnType{params: im.params, tags: im.tags, ret: retOrUnit(im.ret)}, t.args, nil)
 		}
 		c.fail(x.NameLine, x.NameCol, "E0815", fmt.Sprintf(
 			"method call outside the receiver's method set — %q is outside the method set of %q; a Dyn value reaches its own interface's methods only",
@@ -4996,7 +5353,7 @@ func (c *checker) memberOfType(t Type, x *ast.Member, asCall bool) Type {
 						continue
 					}
 					c.methodUse(x, asCall)
-					return substFn(fnType{params: im.params, ret: retOrUnit(im.ret)}, b.face.args, nil)
+					return substFn(fnType{params: im.params, tags: im.tags, ret: retOrUnit(im.ret)}, b.face.args, nil)
 				}
 			}
 			if bounded {
@@ -5532,6 +5889,12 @@ func typeArgsOf(t Type) []Type {
 // — an open position after every argument is E0827 at the member name,
 // and each argument agrees with its determined parameter (E0501).
 func (c *checker) methodCall(ft fnType, m *ast.Member, x *ast.Call) Type {
+	// Chapter 16 as at a plain call (design D4), through the method view
+	// the registry hands the receiver — an impl method's segment, or the
+	// interface method's own at a bound, boxed, or generic receiver. The
+	// anchor is the receiver's first token, the call's head.
+	line, col := exprPos(m.Recv)
+	c.checkCallEffect(ft.tags, m.Name, line, col)
 	if len(x.Args) != len(ft.params) {
 		c.bnd(bndArityGap)
 	}
@@ -5621,6 +5984,12 @@ func (c *checker) implementsFace(at Type, face ifaceType) bool {
 // mismatch is the arity spec-gap boundary, and the fn type's return is
 // the call's.
 func (c *checker) fnValueCall(ft fnType, x *ast.Call) Type {
+	// Chapter 16 through the fn type's own segment (design D4): a
+	// fn-typed parameter, let, or field — the callee's name is the head's
+	// own. The panic family rides here with the empty set: no subset of
+	// it can fail, so the judgment is a no-op there by construction.
+	name, line, col := calleeSite(x.Fn)
+	c.checkCallEffect(ft.tags, name, line, col)
 	if len(x.Args) != len(ft.params) {
 		c.bnd(bndArityGap)
 	}
@@ -5634,6 +6003,12 @@ func (c *checker) fnValueCall(ft fnType, x *ast.Call) Type {
 // call's arguments (design D6's single-direction unification); the where
 // clause holds at every application (E0830, at the call head).
 func (c *checker) fnCall(fd *ast.FnDecl, x *ast.Call) Type {
+	// Chapter 16's call judgment leads (design D4): the callee's declared
+	// set faces the enclosing body's before any application machinery —
+	// an effect segment is never generic, so no determination can change
+	// it.
+	line, col := exprPos(x.Fn)
+	c.checkCallEffect(c.fnTags[fd], fd.Name, line, col)
 	params := c.fnParams[fd]
 	var args []Type
 	if len(fd.TypeParams) > 0 {
@@ -5817,9 +6192,11 @@ func (c *checker) checkArgs(args []ast.Expr, params []Type) {
 		at := c.typeOf(a, params[i])
 		if !agree(at, params[i]) {
 			line, col := exprPos(a)
-			c.fail(line, col, "E0501", fmt.Sprintf(
-				"mixed types — the argument is %s, the parameter is %s; no coercion is ever inserted",
-				at.String(), params[i].String()))
+			if !c.checkFnSlot(at, params[i], line, col) {
+				c.fail(line, col, "E0501", fmt.Sprintf(
+					"mixed types — the argument is %s, the parameter is %s; no coercion is ever inserted",
+					at.String(), params[i].String()))
+			}
 		}
 	}
 }

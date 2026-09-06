@@ -55,6 +55,9 @@ type FnDecl struct {
 	Params     []Param      // excludes the receiver
 	Ret        TypeRef
 	Where      []*WhereBound // chapter 10 where clause trailing the signature
+	EffectTags []string      // chapter 16 segment between the parameters and -> / body; nil = pure
+	EffectLine int           // at the segment's first tag (the discipline anchor)
+	EffectCol  int
 	Body       Block
 	Line, Col  int // at fn (or pub)
 	NameLine   int
@@ -195,6 +198,9 @@ type MethodSig struct {
 	Params     []Param
 	Ret        TypeRef
 	HasRet     bool
+	EffectTags []string // chapter 16 segment; nil = pure
+	EffectLine int      // at the segment's first tag
+	EffectCol  int
 	Body       *Block // nil on a bare signature
 	NameLine   int
 	NameCol    int
@@ -580,11 +586,25 @@ type UnitType struct {
 	Line, Col int
 }
 
+// EffectDecl is `effect name` (chapter 16): a top-level declaration that
+// names one effect tag. It carries no body and no semantics beyond the
+// name — the declaration makes the tag resolvable in segments within the
+// module (and, with pub, through a qualified tag in an importing module).
+type EffectDecl struct {
+	Pub       bool
+	Name      string
+	Line, Col int // at effect (or pub)
+	NameLine  int // at the name — the discipline anchor (E0012/E0404/E1403)
+	NameCol   int
+}
+
 // FnType is `fn(T1, ..., Tn) [tags] -> T` (chapter 7's function type
 // reference; EffectTags holds the bare segment when present).
 type FnType struct {
 	Params     []TypeRef
-	EffectTags []string
+	EffectTags []string // chapter 16 segment; nil = pure
+	TagLine    int      // at the segment's first tag
+	TagCol     int
 	Ret        TypeRef
 	Line, Col  int
 }
@@ -597,6 +617,7 @@ func (r *RecordDecl) item()     {}
 func (n *NewtypeDecl) item()    {}
 func (i *InterfaceDecl) item()  {}
 func (m *ImplDecl) item()       {}
+func (e *EffectDecl) item()     {}
 func (b *Binding) stmt()        {}
 func (a *Assign) stmt()         {}
 func (r *Return) stmt()         {}

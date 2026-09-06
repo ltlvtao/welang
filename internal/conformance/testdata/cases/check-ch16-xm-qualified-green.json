@@ -1,0 +1,22 @@
+{
+  "name": "check-ch16-xm-qualified-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import b\n\n\npub type AppError = Failed(String)\n\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect b.db {\n    b.save(\"x\")\n    return\n}\n",
+      "src/b.we": "pub effect db\n\npub fn save(s: String) effect db {\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import b\n\n\npub type AppError = Failed(String)\n\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect b.db {\n    b.save(\"x\")\n    return\n}\n",
+    "src/b.we": "pub effect db\n\npub fn save(s: String) effect db {\n    return\n}\n"
+  }
+}

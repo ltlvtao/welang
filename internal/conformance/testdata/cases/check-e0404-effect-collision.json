@@ -1,0 +1,18 @@
+{
+  "name": "check-e0404-effect-collision",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn db() {\n    return\n}\n\neffect db\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:8: error[E0404]: duplicate name in one module — \"db\" is already declared at line 1; one module has one name space\n",
+  "files": {
+    "demo/main.we": "fn db() {\n    return\n}\n\neffect db\n"
+  }
+}

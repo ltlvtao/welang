@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-closure-effect-keyword",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn work() {\n    let f = fn(s: String) effect io {\n        return\n    }\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:27: error[E0105]: unexpected token — \"effect\" where a closure's body block opens\n",
+  "files": {
+    "demo/main.we": "fn work() {\n    let f = fn(s: String) effect io {\n        return\n    }\n    return\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-ch16-impl-method-call-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record FileClient { fd: Int64 }\n\ninterface Client {\n    fn send(self, s: String) effect net\n}\n\nimpl Client for FileClient {\n    fn send(self, s: String) effect net {\n        return\n    }\n}\n\nfn work(c: FileClient) effect net {\n    c.send(\"x\")\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "record FileClient { fd: Int64 }\n\ninterface Client {\n    fn send(self, s: String) effect net\n}\n\nimpl Client for FileClient {\n    fn send(self, s: String) effect net {\n        return\n    }\n}\n\nfn work(c: FileClient) effect net {\n    c.send(\"x\")\n    return\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e1404-extra",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect db\n\ninterface Store {\n    fn put(self, s: String)\n}\n\nrecord Rec { fd: Int64 }\n\nimpl Store for Rec {\n    fn put(self, s: String) effect db {\n        return\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:10:8: error[E1404]: impl method effect set disagrees with the interface — the impl method declares \"db\" and the interface method declares no effect segment; copy the interface method's effect segment into the impl method's signature exactly, in both directions\n",
+  "files": {
+    "demo/main.we": "effect db\n\ninterface Store {\n    fn put(self, s: String)\n}\n\nrecord Rec { fd: Int64 }\n\nimpl Store for Rec {\n    fn put(self, s: String) effect db {\n        return\n    }\n}\n"
+  }
+}

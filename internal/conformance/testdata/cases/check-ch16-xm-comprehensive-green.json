@@ -1,0 +1,24 @@
+{
+  "name": "check-ch16-xm-comprehensive-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import b\nimport c\n\n\npub type AppError = Failed(String)\n\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect net c.db {\n    b.send(\"y\")\n    c.save(\"z\")\n    return\n}\n",
+      "src/b.we": "import c\n\npub fn send(s: String) effect net c.db {\n    c.save(\"x\")\n    return\n}\n",
+      "src/c.we": "pub effect db\n\npub fn save(s: String) effect db {\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import b\nimport c\n\n\npub type AppError = Failed(String)\n\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect net c.db {\n    b.send(\"y\")\n    c.save(\"z\")\n    return\n}\n",
+    "src/b.we": "import c\n\npub fn send(s: String) effect net c.db {\n    c.save(\"x\")\n    return\n}\n",
+    "src/c.we": "pub effect db\n\npub fn save(s: String) effect db {\n    return\n}\n"
+  }
+}

@@ -34,7 +34,6 @@ import (
 // milestone deletes its rows; the list shrinks to zero with the roadmap.
 const (
 	bndConcScope = "chapter 18 (scope) forms"
-	bndEffect    = "chapter 16 (effects) forms"
 	bndConc      = "chapter 18 (concurrency) forms"
 	bndFFI       = "chapter 19 (ffi) forms"
 	bndTest      = "chapter 20 (testing) forms"
@@ -58,6 +57,7 @@ var helps = map[string]string{
 	"E0012": "Rename the binding to camelCase (for example userId) and update references; constants also use camelCase.",
 	"E0013": "Rename the module to lowercase with dot separation (for example net.http.client) and update imports.",
 	"E0011": "Rename the type to PascalCase (for example UserRecord) and update references; conventions are enforced at the declaration.",
+	"E1403": "Choose a camelCase name that is not one of the built-in tags.",
 	"E0701": "Declare the variant with one record payload, which names its fields: `Moved(Point)`.",
 	"E0201": "Remove the stray break/continue, or move it inside a loop body; to exit a block or function use the value/return forms instead of loop-control words.",
 	"E0202": "Supply a value: add an else arm producing a value, or restructure so the valueless form is a statement item and the value comes from an expression, for example an accumulator binding.",
@@ -331,6 +331,9 @@ func (p *parser) parseItem() ast.Item {
 			if isKw(p.cur(), "record") {
 				return p.parseRecordDecl(true, "gc", t.Line, t.Col)
 			}
+			if isKw(p.cur(), "effect") {
+				return p.parseEffectDecl(true, t.Line, t.Col)
+			}
 			if isKw(p.cur(), "byres") {
 				p.next()
 				if isKw(p.cur(), "record") {
@@ -402,7 +405,7 @@ func (p *parser) parseItem() ast.Item {
 		case "impl":
 			return p.parseImplDecl(t.Line, t.Col)
 		case "effect":
-			p.bnd(bndEffect)
+			return p.parseEffectDecl(false, t.Line, t.Col)
 		case "foreign":
 			p.bnd(bndFFI)
 		case "test":
@@ -412,6 +415,85 @@ func (p *parser) parseItem() ast.Item {
 	p.failTok(t, "E0105",
 		fmt.Sprintf("unexpected token — %q fits no top-level item production: top-level items are import, fn, and let declarations (optionally pub); statements exist only inside blocks", t.Text))
 	panic("unreachable")
+}
+
+// parseEffectDecl parses chapter 16's `effect name` (the pub bit already
+// consumed by the caller). The name joins the module's single name space
+// (E0404), refuses the built-in tags io/net/time (E1403 — language-level
+// names, not module items), and obeys camelCase (E0012); a collision
+// outranks the built-in conflict, which outranks the naming convention.
+func (p *parser) parseEffectDecl(pub bool, line, col int) *ast.EffectDecl {
+	p.next() // effect
+	nt := p.cur()
+	if nt.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(nt, "E0105", "unexpected end of file — an effect declaration is effect name")
+		}
+		p.failTok(nt, "E0105",
+			fmt.Sprintf("unexpected token — %q where an effect declaration names its name", nt.Text))
+	}
+	p.dupCheck(nt)
+	if nt.Text == "io" || nt.Text == "net" || nt.Text == "time" {
+		p.failTok(nt, "E1403",
+			fmt.Sprintf("effect name conflicts with a built-in effect — %q is one of the built-in tags (io, net, time), language-level names no module item may take; choose a camelCase name that is not one of the built-in tags", nt.Text))
+	}
+	if !isCamel(nt.Text) {
+		p.failTok(nt, "E0012",
+			fmt.Sprintf("effect names must be camelCase — %q is not camelCase", nt.Text))
+	}
+	p.names[nt.Text] = nt.Line
+	p.next()
+	return &ast.EffectDecl{Pub: pub, Name: nt.Text, Line: line, Col: col, NameLine: nt.Line, NameCol: nt.Col}
+}
+
+// parseEffectSegment parses chapter 16's declaration segment — the
+// `effect` keyword (already verified by the caller) followed by one or
+// more effect tags. The tags reach the checker verbatim (resolution is
+// the type stage's own face, E1304); the first tag's position is the
+// anchor for those diagnostics.
+func (p *parser) parseEffectSegment() ([]string, int, int) {
+	p.next() // effect
+	t := p.cur()
+	if t.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(t, "E0105", "unexpected end of file — an effect segment names at least one effect")
+		}
+		p.failTok(t, "E0105",
+			fmt.Sprintf("unexpected token — %q where an effect segment names at least one effect", t.Text))
+	}
+	line, col := t.Line, t.Col
+	return p.effectTagList(), line, col
+}
+
+// effectTagList parses the tags of an effect segment: one or more of
+// them, each the bare name or the qualified module.name (chapter 15's
+// cross-module reach — the importing module spells a pub effect of
+// another module qualified). The joined spelling reaches the checker
+// verbatim. The dot continuation holds only within one line (chapter 2's
+// joining rule). The caller has verified the first identifier is next.
+func (p *parser) effectTagList() []string {
+	var tags []string
+	for p.cur().Kind == lex.KindIdent {
+		t := p.cur()
+		p.next()
+		name := t.Text
+		if p.cur().Kind == "." && p.cur().Line == t.Line {
+			dot := p.cur()
+			p.next()
+			nt := p.cur()
+			if nt.Kind != lex.KindIdent || nt.Line != dot.Line {
+				if p.atEnd() {
+					p.failTok(nt, "E0105", "unexpected end of file — a qualified effect tag is module.name")
+				}
+				p.failTok(nt, "E0105",
+					fmt.Sprintf("unexpected token — %q where a qualified effect tag names its effect: a tag is name or module.name", nt.Text))
+			}
+			name += "." + nt.Text
+			p.next()
+		}
+		tags = append(tags, name)
+	}
+	return tags
 }
 
 // parseImport parses `import path [as alias]`; each path segment and the
@@ -497,7 +579,7 @@ func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 	}
 	d.Params = p.parseParamList()
 	if isKw(p.cur(), "effect") {
-		p.bnd(bndEffect)
+		d.EffectTags, d.EffectLine, d.EffectCol = p.parseEffectSegment()
 	}
 	if p.cur().Kind == "->" {
 		p.next()
@@ -642,14 +724,14 @@ func (p *parser) recvParamList(method string) (ast.RecvKind, []ast.Param) {
 // parseFullClosure parses chapter 12's full closure form in expression
 // position: `fn(params) [-> type] block`. Parameters share the fn
 // declaration's shape, and the body is a function body block (defer at its
-// top level, the loop-depth reset).
+// top level, the loop-depth reset). A closure carries no effect segment
+// (chapter 16 R4: its set is inferred from the body, not declared) — the
+// `effect` keyword in the body position falls to the block check and is
+// refused as E0105 like any other stray token.
 func (p *parser) parseFullClosure(t lex.Token) ast.Expr {
 	p.next() // fn
 	c := &ast.Closure{Line: t.Line, Col: t.Col}
 	c.Params = p.parseParamList()
-	if isKw(p.cur(), "effect") {
-		p.bnd(bndEffect)
-	}
 	if p.cur().Kind == "->" {
 		p.next()
 		c.Ret = p.parseTypeRef()
@@ -1274,7 +1356,7 @@ func (p *parser) parseMethodSig(memberNames map[string]int) ast.MethodSig {
 	}
 	m.Recv, m.Params = p.recvParamList(m.Name)
 	if isKw(p.cur(), "effect") {
-		p.bnd(bndEffect)
+		m.EffectTags, m.EffectLine, m.EffectCol = p.parseEffectSegment()
 	}
 	if p.cur().Kind == "->" {
 		p.next()
@@ -1436,7 +1518,7 @@ func (p *parser) parseImplMethod() *ast.FnDecl {
 	}
 	d.Recv, d.Params = p.recvParamList(d.Name)
 	if isKw(p.cur(), "effect") {
-		p.bnd(bndEffect)
+		d.EffectTags, d.EffectLine, d.EffectCol = p.parseEffectSegment()
 	}
 	if p.cur().Kind == "->" {
 		p.next()
@@ -3055,9 +3137,9 @@ func (p *parser) closeAngle() bool {
 	return false
 }
 
-// parseFnType parses `fn(params) [tags] -> T`; the effect tags are bare
-// identifiers between the parameter list and the arrow, and the arrow
-// itself is part of the form.
+// parseFnType parses `fn(params) [tags] -> T`; the effect tags — bare or
+// qualified — sit between the parameter list and the arrow, and the
+// arrow itself is part of the form.
 func (p *parser) parseFnType() ast.TypeRef {
 	t := p.cur()
 	p.next() // fn
@@ -3089,10 +3171,10 @@ func (p *parser) parseFnType() ast.TypeRef {
 		p.failTok(p.cur(), "E0105",
 			fmt.Sprintf("unexpected token — %q in a function type reference: fn(T1, …, Tn) [tags] -> T", p.cur().Text))
 	}
-	for p.cur().Kind == lex.KindIdent {
-		ft.EffectTags = append(ft.EffectTags, p.cur().Text)
-		p.next()
+	if p.cur().Kind == lex.KindIdent {
+		ft.TagLine, ft.TagCol = p.cur().Line, p.cur().Col
 	}
+	ft.EffectTags = p.effectTagList()
 	if p.cur().Kind != "->" {
 		if p.atEnd() {
 			p.failTok(p.cur(), "E0105", "unexpected end of file — a fn type declares its result with ->")

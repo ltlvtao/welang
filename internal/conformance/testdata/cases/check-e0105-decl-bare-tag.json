@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-decl-bare-tag",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() io {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:8: error[E0105]: unexpected token — \"io\" where a fn body block opens\n",
+  "files": {
+    "demo/main.we": "fn f() io {\n    return\n}\n"
+  }
+}

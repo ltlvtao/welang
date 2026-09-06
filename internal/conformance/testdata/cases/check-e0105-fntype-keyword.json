@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-fntype-keyword",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn id(x: Int64) -> Int64 {\n    return x\n}\nlet f: fn(Int64) effect io -> Int64 = id\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:18: error[E0105]: unexpected token — \"effect\" in a function type reference: fn(T1, …, Tn) [tags] -> T\n",
+  "files": {
+    "demo/main.we": "fn id(x: Int64) -> Int64 {\n    return x\n}\nlet f: fn(Int64) effect io -> Int64 = id\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e1401-bound",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Client {\n    fn send(self, s: String) effect net\n}\n\nfn work<T>(c: T) where T: Client {\n    c.send(\"x\")\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:5: error[E1401]: undeclared effect at a call — \"send\" performs effect \"net\" which \"work\" does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead\n",
+  "files": {
+    "demo/main.we": "interface Client {\n    fn send(self, s: String) effect net\n}\n\nfn work<T>(c: T) where T: Client {\n    c.send(\"x\")\n    return\n}\n"
+  }
+}
