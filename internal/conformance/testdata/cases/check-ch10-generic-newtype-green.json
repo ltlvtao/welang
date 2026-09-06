@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-generic-newtype-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "newtype Tagged<T>(T)\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let t = Tagged<Int64>(1)\n    let v = t.value\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "newtype Tagged<T>(T)\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let t = Tagged<Int64>(1)\n    let v = t.value\n    return Ok(())\n}\n"
+  }
+}

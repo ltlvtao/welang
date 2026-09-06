@@ -1,0 +1,18 @@
+{
+  "name": "check-e0831-nonconcrete",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface It {\n    type Iter\n}\nfn f<T, U>(x: T, y: U) -> Int64 where T: It, T.Iter == U {\n    0\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:56: error[E0831]: associated-type equality right side is not concrete — the right side \"U\" is a generic parameter; the equality binds the associated type to a base type, a nominal type, or a generic application of them\n",
+  "files": {
+    "demo/main.we": "interface It {\n    type Iter\n}\nfn f<T, U>(x: T, y: U) -> Int64 where T: It, T.Iter == U {\n    0\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0901-non-iterable",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    for x in 5 {\n        let _ = x\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:14: error[E0901]: for-in expression does not implement Iterable — \"Int64\" implements no \"Iterable\"; the iterable expression of a for implements Iterable\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    for x in 5 {\n        let _ = x\n    }\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-generic-impl-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Holder {\n    fn held(self) -> Int64\n}\nrecord Wrap<T> { value: T }\nimpl<T> Holder for Wrap<T> {\n    fn held(self) -> Int64 {\n        0\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let w = Wrap { value: 1 }\n    let n = w.held()\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "interface Holder {\n    fn held(self) -> Int64\n}\nrecord Wrap<T> { value: T }\nimpl<T> Holder for Wrap<T> {\n    fn held(self) -> Int64 {\n        0\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let w = Wrap { value: 1 }\n    let n = w.held()\n    return Ok(())\n}\n"
+  }
+}

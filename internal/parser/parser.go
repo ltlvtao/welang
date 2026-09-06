@@ -1,15 +1,20 @@
-// Package parser implements the parsing stage of chapters 2–4, 6–8, and 12
-// (docs/spec/0200-grammar.md, docs/spec/0300-control-flow.md,
-// docs/spec/0400-match.md, docs/spec/0600-declarations.md,
-// docs/spec/0800-composites.md, docs/spec/1200-fn-types.md) over chapter
+// Package parser implements the parsing stage of chapters 2–5, 6–8, 10, 12,
+// and 17 (docs/spec/0200-grammar.md, docs/spec/0300-control-flow.md,
+// docs/spec/0400-match.md, docs/spec/0500-iteration.md,
+// docs/spec/0600-declarations.md, docs/spec/0800-composites.md,
+// docs/spec/1000-interfaces.md, docs/spec/1100-iterables.md,
+// docs/spec/1200-fn-types.md, docs/spec/1700-collections.md) over chapter
 // 1's token stream: the line-joining rule with its two decision points,
 // blocks as expressions, the statement families, the expression skeleton
 // with the closed 12-level precedence table, the module's top-level
 // items with their naming, name-space, and documentation rules, chapter
 // 3's control statements, chapter 4's match arms and pattern grammar,
-// chapter 8's composite declarations, construction, update, and tuples,
-// and chapter 12's two closure forms. Chapter 7's type references fill
-// the annotation slots (syntax only — no checking).
+// chapter 5's for statement with its irrefutable head, chapter
+// 8's composite declarations, construction, update, and tuples,
+// chapter 10's interface and impl declarations with their generic, where,
+// and derives clauses, chapter 12's two closure forms, and chapter 17's
+// list literals. Chapter 7's
+// type references fill the annotation slots (syntax only — no checking).
 // Parsing is deterministic recursive descent — exactly one tree or
 // rejected — and stops at the first diagnostic (chapter 21: an E-severity
 // diagnostic stops the pipeline). A NotImplemented result is not a
@@ -28,12 +33,9 @@ import (
 // The boundary form groups (design D6's closed table). Each later
 // milestone deletes its rows; the list shrinks to zero with the roadmap.
 const (
-	bndIter   = "chapter 5 (iteration) forms"
-	bndGener  = "chapter 10 (interfaces and generics) forms"
 	bndScope  = "chapter 13 and 18 (scope) forms"
 	bndErr    = "chapter 14 (errors) forms"
 	bndEffect = "chapter 16 (effects) forms"
-	bndColl   = "chapter 17 (collections) forms"
 	bndConc   = "chapter 18 (concurrency) forms"
 	bndFFI    = "chapter 19 (ffi) forms"
 	bndTest   = "chapter 20 (testing) forms"
@@ -344,11 +346,14 @@ func (p *parser) parseItem() ast.Item {
 			if isKw(p.cur(), "newtype") {
 				return p.parseNewtypeDecl(true, t.Line, t.Col)
 			}
+			if isKw(p.cur(), "interface") {
+				return p.parseInterfaceDecl(true, t.Line, t.Col)
+			}
 			if p.atEnd() {
-				p.fail(t.Line, t.Col, "E0105", "unexpected end of file — pub prefixes a fn, let, type, or chapter 8 declaration")
+				p.fail(t.Line, t.Col, "E0105", "unexpected end of file — pub prefixes a fn, let, type, chapter 8 declaration, or interface")
 			}
 			p.failTok(p.cur(), "E0105",
-				fmt.Sprintf("unexpected token — %q after pub: pub prefixes fn, let, type, and the chapter 8 declarations", p.cur().Text))
+				fmt.Sprintf("unexpected token — %q after pub: pub prefixes fn, let, type, the chapter 8 declarations, and interface (an impl block carries no pub)", p.cur().Text))
 		case "fn":
 			return p.parseFnDecl(false, t.Line, t.Col)
 		case "let":
@@ -393,8 +398,10 @@ func (p *parser) parseItem() ast.Item {
 				fmt.Sprintf("unexpected token — %q after byval: byval prefixes type or record; the prefix order is pub, then byval", p.peek().Text))
 		case "type":
 			return p.parseSumDecl(false, false, t.Line, t.Col)
-		case "interface", "impl":
-			p.bnd(bndGener)
+		case "interface":
+			return p.parseInterfaceDecl(false, t.Line, t.Col)
+		case "impl":
+			return p.parseImplDecl(t.Line, t.Col)
 		case "effect":
 			p.bnd(bndEffect)
 		case "foreign":
@@ -462,9 +469,11 @@ func (p *parser) parseTopLet(pub bool, line, col int) *ast.TopLet {
 	return &ast.TopLet{Pub: pub, Binding: *b, Line: line, Col: col}
 }
 
-// parseFnDecl parses `[pub] fn name(params) [-> type] block`. Later-
-// chapter clauses (generics, effect segments, mut parameters) stop at
-// their boundaries before any of their own grammar runs.
+// parseFnDecl parses `[pub] fn name<T…>(params) [-> type] [where …] block`:
+// the chapter 10 generic clause sits between the name and the parameter
+// list, the where clause between the return annotation and the body.
+// Later-chapter clauses (effect segments, mut parameters) stop at their
+// boundaries before any of their own grammar runs.
 func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 	p.next() // fn
 	d := &ast.FnDecl{Pub: pub, Line: line, Col: col}
@@ -478,7 +487,7 @@ func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 	d.Name, d.NameLine, d.NameCol = t.Text, t.Line, t.Col
 	p.next()
 	if p.cur().Kind == "<" {
-		p.bnd(bndGener)
+		d.TypeParams = p.parseTypeParams()
 	}
 	if p.cur().Kind != "(" {
 		if p.atEnd() {
@@ -494,6 +503,9 @@ func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 	if p.cur().Kind == "->" {
 		p.next()
 		d.Ret = p.parseTypeRef()
+	}
+	if isKw(p.cur(), "where") && !p.brokeLine() {
+		d.Where = p.parseWhereClause()
 	}
 	if p.cur().Kind != "{" {
 		if p.atEnd() {
@@ -513,6 +525,13 @@ func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 // caller has verified the ( is next; this consumes it.
 func (p *parser) parseParamList() []ast.Param {
 	p.next() // (
+	return p.annotatedParams()
+}
+
+// annotatedParams parses the annotated parameter entries of an open
+// parameter list — everything after its leading ( (or a receiver's
+// separating comma) through the closing ).
+func (p *parser) annotatedParams() []ast.Param {
 	var params []ast.Param
 	for {
 		if p.cur().Kind == ")" {
@@ -553,6 +572,72 @@ func (p *parser) parseParamList() []ast.Param {
 		p.failTok(p.cur(), "E0105",
 			fmt.Sprintf("unexpected token — %q in a parameter list: parameters are name: type pairs", p.cur().Text))
 	}
+}
+
+// recvParamList parses a method's parameter list — the caller has verified
+// the ( is next and passed the method's name for E0801's message. The first
+// entry is the receiver: the bare `self` or `mut self` (chapter 10). Zero
+// parameters anchor the ( (E0801), an annotated first parameter anchors the
+// parameter name (E0801), and any other bare name anchors that name
+// (E0802). The receiver lands in the returned RecvKind — Params carries
+// only the annotated remainder.
+func (p *parser) recvParamList(method string) (ast.RecvKind, []ast.Param) {
+	open := p.cur()
+	p.next() // (
+	if p.cur().Kind == ")" {
+		p.failTok(open, "E0801",
+			fmt.Sprintf("method declares no receiver — %q declares no parameters; the receiver is the bare parameter \"self\" or \"mut self\"", method))
+	}
+	var recv ast.RecvKind
+	if isKw(p.cur(), "mut") {
+		p.next()
+		st := p.cur()
+		if st.Kind != lex.KindIdent {
+			if p.atEnd() {
+				p.failTok(st, "E0105", "unexpected end of file — a receiver is the bare parameter self or mut self")
+			}
+			p.failTok(st, "E0105",
+				fmt.Sprintf("unexpected token — %q where the receiver goes: a receiver is the bare parameter self or mut self", st.Text))
+		}
+		if st.Text != "self" {
+			p.failTok(st, "E0802",
+				fmt.Sprintf("method receiver must be named self — the receiver is spelled %q; a receiver is \"self\" or \"mut self\"", st.Text))
+		}
+		recv = ast.RecvMutSelf
+		p.next()
+	} else {
+		st := p.cur()
+		if st.Kind != lex.KindIdent {
+			if p.atEnd() {
+				p.failTok(st, "E0105", "unexpected end of file — a method's parameter list opens with the receiver self or mut self")
+			}
+			p.failTok(st, "E0105",
+				fmt.Sprintf("unexpected token — %q where a method's receiver goes: the first parameter is the bare receiver self or mut self", st.Text))
+		}
+		if p.peek().Kind == ":" {
+			p.failTok(st, "E0801",
+				fmt.Sprintf("method declares no receiver — the first parameter of %q carries an annotation; the receiver is the bare parameter \"self\" or \"mut self\"", method))
+		}
+		if st.Text != "self" {
+			p.failTok(st, "E0802",
+				fmt.Sprintf("method receiver must be named self — the receiver is spelled %q; a receiver is \"self\" or \"mut self\"", st.Text))
+		}
+		recv = ast.RecvSelf
+		p.next()
+	}
+	if p.cur().Kind == "," {
+		p.next()
+		return recv, p.annotatedParams()
+	}
+	if p.cur().Kind != ")" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a parameter list closes with )")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q in a parameter list: parameters are name: type pairs", p.cur().Text))
+	}
+	p.next() // )
+	return recv, nil
 }
 
 // parseFullClosure parses chapter 12's full closure form in expression
@@ -652,10 +737,11 @@ func operandSlot(kind string) bool {
 }
 
 // parseSumDecl parses chapter 9's sum declaration: `[pub] [byval] type
-// Name = V1 | … | Vn`, each variant bare (a unit variant) or carrying
-// 1..8 payload type references. The generic parameter clause and the
-// derives clause stay at chapter 10's parse boundary. The prefixes are
-// consumed by the caller; line/col anchor at the outermost one.
+// Name<T…> = V1 | … | Vn [derives …]`, each variant bare (a unit variant) or
+// carrying 1..8 payload type references. The chapter 10 clauses attach: the
+// generic clause after the name, derives after the last variant on the
+// declaration's last line. The prefixes are consumed by the caller; line/col
+// anchor at the outermost one.
 func (p *parser) parseSumDecl(pub, byval bool, line, col int) *ast.SumDecl {
 	p.next() // type
 	d := &ast.SumDecl{Pub: pub, Byval: byval, Line: line, Col: col}
@@ -673,7 +759,7 @@ func (p *parser) parseSumDecl(pub, byval bool, line, col int) *ast.SumDecl {
 	p.names[d.Name] = d.NameLine
 	p.next()
 	if p.cur().Kind == "<" {
-		p.bnd(bndGener)
+		d.TypeParams = p.parseTypeParams()
 	}
 	if p.cur().Kind != "=" {
 		if p.atEnd() {
@@ -738,19 +824,18 @@ func (p *parser) parseSumDecl(pub, byval bool, line, col int) *ast.SumDecl {
 			p.next()
 			continue
 		}
-		if isKw(p.cur(), "derives") {
-			p.bnd(bndGener)
-		}
+		d.Derives = p.maybeDerives()
 		return d
 	}
 }
 
 // parseRecordDecl parses chapter 8's record declaration: `[pub] [byval |
-// byres] record Name { fields }`. The prefixes are consumed by the caller;
-// line/col anchor at the outermost one. The field list is comma- or
-// newline-separated with a uniform trailing comma — braces are brackets, so
-// line breaks inside fold. The generic parameter clause stays at chapter
-// 10's parse boundary.
+// byres] record Name<T…> { fields } [derives …]`. The prefixes are consumed
+// by the caller; line/col anchor at the outermost one. The field list is
+// comma- or newline-separated with a uniform trailing comma — braces are
+// brackets, so line breaks inside fold. The chapter 10 clauses attach: the
+// generic clause after the name, derives after the closing brace on the
+// declaration's last line.
 func (p *parser) parseRecordDecl(pub bool, cat string, line, col int) *ast.RecordDecl {
 	p.next() // record
 	d := &ast.RecordDecl{Pub: pub, Cat: cat, Line: line, Col: col}
@@ -768,7 +853,7 @@ func (p *parser) parseRecordDecl(pub bool, cat string, line, col int) *ast.Recor
 	p.names[d.Name] = d.NameLine
 	p.next()
 	if p.cur().Kind == "<" {
-		p.bnd(bndGener)
+		d.TypeParams = p.parseTypeParams()
 	}
 	if p.cur().Kind != "{" {
 		if p.atEnd() {
@@ -783,6 +868,7 @@ func (p *parser) parseRecordDecl(pub bool, cat string, line, col int) *ast.Recor
 	for {
 		if p.cur().Kind == "}" {
 			p.next()
+			d.Derives = p.maybeDerives()
 			return d
 		}
 		if p.atEnd() {
@@ -807,6 +893,7 @@ func (p *parser) parseRecordDecl(pub bool, cat string, line, col int) *ast.Recor
 		}
 		if p.cur().Kind == "}" {
 			p.next()
+			d.Derives = p.maybeDerives()
 			return d
 		}
 		// a newline before the next field name continues the list
@@ -821,9 +908,11 @@ func (p *parser) parseRecordDecl(pub bool, cat string, line, col int) *ast.Recor
 	}
 }
 
-// parseNewtypeDecl parses `newtype Name(Underlying)` (chapter 8): a
-// zero-cost wrapper over exactly one type. The prefix is consumed by the
-// caller; line/col anchor at the outermost prefix token.
+// parseNewtypeDecl parses `newtype Name<T…>(Underlying) [derives …]`
+// (chapter 8): a zero-cost wrapper over exactly one type. The chapter 10
+// clauses attach: the generic clause after the name, derives after the
+// closing paren on the declaration's last line. The prefix is consumed by
+// the caller; line/col anchor at the outermost prefix token.
 func (p *parser) parseNewtypeDecl(pub bool, line, col int) *ast.NewtypeDecl {
 	p.next() // newtype
 	d := &ast.NewtypeDecl{Pub: pub, Line: line, Col: col}
@@ -840,6 +929,9 @@ func (p *parser) parseNewtypeDecl(pub bool, line, col int) *ast.NewtypeDecl {
 	d.Name, d.NameLine, d.NameCol = t.Text, t.Line, t.Col
 	p.names[d.Name] = d.NameLine
 	p.next()
+	if p.cur().Kind == "<" {
+		d.TypeParams = p.parseTypeParams()
+	}
 	if p.cur().Kind != "(" {
 		if p.atEnd() {
 			p.failTok(p.cur(), "E0105", "unexpected end of file — a newtype wraps its underlying type in (…)")
@@ -856,6 +948,513 @@ func (p *parser) parseNewtypeDecl(pub bool, line, col int) *ast.NewtypeDecl {
 		p.failTok(p.cur(), "E0105", "a newtype wraps exactly one underlying type — the wrapped list takes no comma and closes with )")
 	}
 	p.next() // )
+	d.Derives = p.maybeDerives()
+	return d
+}
+
+// --- chapter 10: interfaces, impls, and their clauses -------------------------
+
+// parseTypeParams parses a declaration's generic parameter clause
+// `<T1, …, Tk>` (chapter 10), k one to eight, each parameter a PascalCase
+// name (E0011 — the clause is the one place a lowercase type name never
+// reaches). The caller has verified the < is next; this consumes it. Above
+// eight parameters the clause's own < anchors E0825 — checked after the
+// parse so the count can be named.
+func (p *parser) parseTypeParams() []*ast.TypeParam {
+	open := p.cur() // <
+	p.next()
+	if p.cur().Kind == ">" {
+		p.failTok(p.cur(), "E0105",
+			`unexpected token — ">" opens an empty generic parameter clause: a clause holds one to eight names`)
+	}
+	var tps []*ast.TypeParam
+	for {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a generic parameter clause closes with >")
+		}
+		nt := p.cur()
+		if nt.Kind != lex.KindIdent {
+			p.failTok(nt, "E0105",
+				fmt.Sprintf("unexpected token — %q in a generic parameter clause: the parameters are PascalCase names", nt.Text))
+		}
+		p.checkPascal(nt)
+		tps = append(tps, &ast.TypeParam{Name: nt.Text, Line: nt.Line, Col: nt.Col})
+		p.next()
+		if p.cur().Kind == "," {
+			p.next()
+			continue
+		}
+		if p.closeAngle() {
+			break
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a generic parameter clause closes with >")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q in a generic parameter clause: the clause closes with >", p.cur().Text))
+	}
+	if len(tps) > 8 {
+		p.failTok(open, "E0825",
+			fmt.Sprintf("generic parameter count above eight — the clause declares %d parameters; a clause carries at most eight", len(tps)))
+	}
+	return tps
+}
+
+// parseWhereClause parses `where b1, b2, …` (chapter 10): comma-separated
+// constraints, one WhereBound each — either the bound form `T: Iface [+ …]`
+// or the equality form `T.Assoc == Type`. The caller has verified the where
+// keyword trails its declaration on the same line; this consumes it.
+func (p *parser) parseWhereClause() []*ast.WhereBound {
+	p.next() // where
+	var wbs []*ast.WhereBound
+	for {
+		wbs = append(wbs, p.parseBoundRef())
+		if p.cur().Kind == "," {
+			p.next()
+			continue
+		}
+		return wbs
+	}
+}
+
+// parseBoundRef parses one where constraint: `Subject: Iface [+ Iface2 …]`
+// or `Subject.Assoc == TypeRef`. One WhereBound holds one form — the bound
+// list or the equality, never both.
+func (p *parser) parseBoundRef() *ast.WhereBound {
+	st := p.cur()
+	if st.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(st, "E0105", "unexpected end of file — a where constraint is T: Iface or T.Assoc == Type")
+		}
+		p.failTok(st, "E0105",
+			fmt.Sprintf("unexpected token — %q where a where subject goes: a constraint is T: Iface or T.Assoc == Type", st.Text))
+	}
+	p.next()
+	wb := &ast.WhereBound{Subject: st.Text, Line: st.Line, Col: st.Col}
+	if p.cur().Kind == "." {
+		p.next() // .
+		at := p.cur()
+		if at.Kind != lex.KindIdent {
+			if p.atEnd() {
+				p.failTok(at, "E0105", "unexpected end of file — an equality constraint is T.Assoc == Type")
+			}
+			p.failTok(at, "E0105",
+				fmt.Sprintf("unexpected token — %q where the associated type goes: an equality constraint is T.Assoc == Type", at.Text))
+		}
+		p.next()
+		if p.cur().Kind != "==" {
+			if p.atEnd() {
+				p.failTok(p.cur(), "E0105", "unexpected end of file — an equality constraint is T.Assoc == Type")
+			}
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q where == goes: an equality constraint is T.Assoc == Type", p.cur().Text))
+		}
+		eq := p.cur()
+		p.next() // ==
+		wb.Eq = append(wb.Eq, &ast.TypeEq{Assoc: at.Text, RHS: p.parseTypeRef(), Line: eq.Line, Col: eq.Col})
+		return wb
+	}
+	if p.cur().Kind != ":" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a where constraint is T: Iface or T.Assoc == Type")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a constraint's : or == goes: a constraint is T: Iface or T.Assoc == Type", p.cur().Text))
+	}
+	p.next() // :
+	for {
+		it := p.cur()
+		if it.Kind != lex.KindIdent || !isPascal(it.Text) {
+			if p.atEnd() {
+				p.failTok(it, "E0105", "unexpected end of file — a bound names an interface: T: Iface [+ Iface2 …]")
+			}
+			p.failTok(it, "E0105",
+				fmt.Sprintf("unexpected token — %q where a bound goes: a bound names an interface, T: Iface [+ Iface2 …]", it.Text))
+		}
+		p.next()
+		nt := &ast.NamedType{Name: it.Text, Line: it.Line, Col: it.Col}
+		nt.Args = p.genericArgs()
+		wb.Ifaces = append(wb.Ifaces, nt)
+		if p.cur().Kind == "+" {
+			p.next()
+			continue
+		}
+		return wb
+	}
+}
+
+// maybeDerives consumes a derives clause when one trails a declaration's
+// last line: `derives Eq[, Hash][, Show]` — the closed target set,
+// comma-separated, duplicate-free (chapter 10). A line-starting derives
+// after a complete declaration is no clause; the keyword stays for the next
+// item position (E0105 there). Each violation anchors its target name.
+func (p *parser) maybeDerives() *ast.DerivesClause {
+	if !isKw(p.cur(), "derives") || p.brokeLine() {
+		return nil
+	}
+	t := p.cur()
+	p.next() // derives
+	dc := &ast.DerivesClause{Line: t.Line, Col: t.Col}
+	seen := map[string]bool{}
+	for {
+		nt := p.cur()
+		if nt.Kind != lex.KindIdent {
+			if p.atEnd() {
+				p.failTok(nt, "E0105", "unexpected end of file — a derives clause is derives Eq, Hash, Show")
+			}
+			p.failTok(nt, "E0105",
+				fmt.Sprintf("unexpected token — %q in a derives clause: the clause is derives followed by the bare names Eq, Hash, Show", nt.Text))
+		}
+		p.next()
+		switch {
+		case nt.Text == "Eq" || nt.Text == "Hash" || nt.Text == "Show":
+			if seen[nt.Text] {
+				p.failTok(nt, "E0824",
+					fmt.Sprintf("unknown or duplicate derive target — %q appears twice in the clause; each target appears at most once", nt.Text))
+			}
+			seen[nt.Text] = true
+		case nt.Text == "Shareable":
+			// the one named non-target: a where bound the clause shape
+			// invites but the chapter does not take
+			p.failTok(nt, "E0824",
+				`unknown or duplicate derive target — "Shareable" is not a derive target; it is a where bound, not a clause target`)
+		default:
+			p.failTok(nt, "E0824",
+				fmt.Sprintf("unknown or duplicate derive target — %q is not a derive target; the clause takes \"Eq\", \"Hash\", and \"Show\"", nt.Text))
+		}
+		dc.Targets = append(dc.Targets, nt.Text)
+		if p.cur().Kind == "," {
+			p.next()
+			continue
+		}
+		return dc
+	}
+}
+
+// parseInterfaceDecl parses `[pub] interface Name<T…> { items }` (chapter
+// 10). Items stand one per line with no separator token: associated-type
+// holes and method signatures, the latter optionally with a default body.
+// Interface members carry no pub of their own, and a where clause trails no
+// interface declaration — only a fn declaration's signature and an impl
+// head. The prefixes are consumed by the caller; line/col anchor at the
+// outermost one.
+func (p *parser) parseInterfaceDecl(pub bool, line, col int) *ast.InterfaceDecl {
+	p.next() // interface
+	d := &ast.InterfaceDecl{Pub: pub, Line: line, Col: col}
+	t := p.cur()
+	if t.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(t, "E0105", "unexpected end of file — an interface declaration is interface Name { items }")
+		}
+		p.failTok(t, "E0105",
+			fmt.Sprintf("unexpected token — %q where the interface name goes: an interface declaration is interface Name { items }", t.Text))
+	}
+	p.dupCheck(t)
+	p.checkPascal(t)
+	d.Name, d.NameLine, d.NameCol = t.Text, t.Line, t.Col
+	p.names[d.Name] = d.NameLine
+	p.next()
+	if p.cur().Kind == "<" {
+		d.TypeParams = p.parseTypeParams()
+	}
+	if isKw(p.cur(), "where") {
+		p.failTok(p.cur(), "E0105",
+			`unexpected token — "where" fits no production here: a where clause trails a fn signature or an impl head, not an interface declaration`)
+	}
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — an interface wants its item block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where an interface's item block opens", p.cur().Text))
+	}
+	p.next() // {
+	p.depth++
+	defer func() { p.depth-- }()
+	// An interface's method names share the interface's own member space,
+	// not the module's (chapter 10: only the interface's name joins the
+	// module's one name space) — two interfaces may declare one method
+	// name (their collision is E0814's, at the impl); a second declaration
+	// inside one interface is E0404.
+	memberNames := map[string]int{}
+	for {
+		if p.cur().Kind == "}" {
+			p.next()
+			return d
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — an interface's item block closes with }")
+		}
+		switch {
+		case isKw(p.cur(), "type"):
+			kw := p.cur()
+			a := p.parseAssocDecl()
+			// E0803 after the parse so the count and the name can both be
+			// named; the anchor stays the hole's own type keyword.
+			if len(d.Assocs) >= 4 {
+				p.failTok(kw, "E0803",
+					fmt.Sprintf("associated type count above four — %q declares a fifth associated type %q; an interface declares at most four", d.Name, a.Name))
+			}
+			d.Assocs = append(d.Assocs, a)
+		case isKw(p.cur(), "fn"):
+			d.Methods = append(d.Methods, p.parseMethodSig(memberNames))
+		default:
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q fits no interface item production: an interface declares associated types and methods only", p.cur().Text))
+		}
+		if p.cur().Kind == "}" {
+			p.next()
+			return d
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — an interface's item block closes with }")
+		}
+		if !p.brokeLine() {
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q fits no production: interface items are separated by newlines and carry no separator token", p.cur().Text))
+		}
+	}
+}
+
+// parseAssocDecl parses one associated-type hole of an interface: `type
+// Name` (chapter 10). A hole carries no bound on its declaration — bounds
+// live in where clauses (E0804, at the bound's first token).
+func (p *parser) parseAssocDecl() *ast.AssocDecl {
+	p.next() // type
+	nt := p.cur()
+	if nt.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(nt, "E0105", "unexpected end of file — an associated type is type Name")
+		}
+		p.failTok(nt, "E0105",
+			fmt.Sprintf("unexpected token — %q where the associated type's name goes: a hole is type Name", nt.Text))
+	}
+	p.checkPascal(nt)
+	p.next()
+	if p.cur().Kind == ":" {
+		p.next() // :
+		p.failTok(p.cur(), "E0804",
+			fmt.Sprintf("associated type declares an upper bound — the associated type %q carries an upper bound; bounds belong in where clauses, not on the hole's declaration", nt.Text))
+	}
+	return &ast.AssocDecl{Name: nt.Text, Line: nt.Line, Col: nt.Col}
+}
+
+// parseMethodSig parses one interface method item: `fn name<T…>(recv,
+// params…) [-> type]` or the same with a default body block (chapter 10).
+// Signature names share the enclosing interface's member space (E0404 at
+// the second of two in one interface); a where clause trails no method
+// signature — only a fn declaration's signature and an impl head.
+func (p *parser) parseMethodSig(memberNames map[string]int) ast.MethodSig {
+	p.next() // fn
+	var m ast.MethodSig
+	t := p.cur()
+	if t.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(t, "E0105", "unexpected end of file — a method signature is fn name(self, params…) [-> type]")
+		}
+		p.failTok(t, "E0105",
+			fmt.Sprintf("unexpected token — %q where the method name goes: a method signature is fn name(self, params…) [-> type]", t.Text))
+	}
+	if line, dup := memberNames[t.Text]; dup {
+		p.failTok(t, "E0404",
+			fmt.Sprintf("duplicate name in one module — %q is already declared at line %d; one module has one name space", t.Text, line))
+	}
+	memberNames[t.Text] = t.Line
+	p.checkCamel(t)
+	m.Name, m.NameLine, m.NameCol = t.Text, t.Line, t.Col
+	p.next()
+	if p.cur().Kind == "<" {
+		m.TypeParams = p.parseTypeParams()
+	}
+	if p.cur().Kind != "(" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a method's parameter list opens with the receiver")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a method's parameter list opens: the first parameter is the receiver self or mut self", p.cur().Text))
+	}
+	m.Recv, m.Params = p.recvParamList(m.Name)
+	if isKw(p.cur(), "effect") {
+		p.bnd(bndEffect)
+	}
+	if p.cur().Kind == "->" {
+		p.next()
+		m.Ret = p.parseTypeRef()
+		m.HasRet = true
+	}
+	if isKw(p.cur(), "where") {
+		p.failTok(p.cur(), "E0105",
+			`unexpected token — "where" fits no production here: a where clause trails a fn declaration's signature or an impl head, not a method signature`)
+	}
+	if p.cur().Kind == "{" {
+		b := p.parseFnBlock(&fnCtx{name: m.Name, hasRet: m.Ret != nil})
+		m.Body = &b
+	}
+	return m
+}
+
+// parseImplDecl parses `impl<T…> [Iface for] Head [where …] { items }`
+// (chapter 10): the for-form implements an interface for a head type, the
+// bare form is an inherent impl (Iface nil). Iface and Head are full type
+// references — a tuple head and a bare generic-parameter head parse here;
+// head nominality is the checker's E0811. Items are associated-type
+// bindings (all before any method — E0806) and method definitions, one per
+// line; an impl block itself carries no pub (the pub dispatch rejects it).
+func (p *parser) parseImplDecl(line, col int) *ast.ImplDecl {
+	p.next() // impl
+	d := &ast.ImplDecl{Line: line, Col: col}
+	if p.cur().Kind == "<" {
+		d.TypeParams = p.parseTypeParams()
+	}
+	d.Head = p.parseTypeRef()
+	if isKw(p.cur(), "for") {
+		d.Iface = d.Head
+		p.next() // for
+		d.Head = p.parseTypeRef()
+	}
+	if isKw(p.cur(), "where") && !p.brokeLine() {
+		d.Where = p.parseWhereClause()
+	}
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — an impl wants its item block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where an impl's item block opens", p.cur().Text))
+	}
+	p.next() // {
+	p.depth++
+	defer func() { p.depth-- }()
+	for {
+		if p.cur().Kind == "}" {
+			p.next()
+			return d
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — an impl's item block closes with }")
+		}
+		switch {
+		case isKw(p.cur(), "type"):
+			kw := p.cur()
+			b := p.parseAssocBinding()
+			// E0806 after the parse so the binding's name can be named; the
+			// anchor stays the binding's own type keyword, and the message
+			// names the method the binding follows (the last one).
+			if len(d.Methods) > 0 {
+				p.failTok(kw, "E0806",
+					fmt.Sprintf("associated type binding after a method definition — the binding of %q follows the method %q; associated-type bindings precede methods in an impl", b.Name, d.Methods[len(d.Methods)-1].Name))
+			}
+			d.Assocs = append(d.Assocs, b)
+		case isKw(p.cur(), "fn"), isKw(p.cur(), "pub"):
+			d.Methods = append(d.Methods, p.parseImplMethod())
+		default:
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q fits no impl item production: an impl defines associated-type bindings and methods", p.cur().Text))
+		}
+		if p.cur().Kind == "}" {
+			p.next()
+			return d
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — an impl's item block closes with }")
+		}
+		if !p.brokeLine() {
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q fits no production: impl items are separated by newlines and carry no separator token", p.cur().Text))
+		}
+	}
+}
+
+// parseAssocBinding parses one `type Name = TypeRef` of an impl: its
+// binding of an interface associated type (chapter 10). Bindings precede
+// every method definition (E0806 is parseImplDecl's, at the keyword).
+func (p *parser) parseAssocBinding() *ast.AssocBinding {
+	p.next() // type
+	nt := p.cur()
+	if nt.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(nt, "E0105", "unexpected end of file — an associated-type binding is type Name = Type")
+		}
+		p.failTok(nt, "E0105",
+			fmt.Sprintf("unexpected token — %q where the binding's name goes: a binding is type Name = Type", nt.Text))
+	}
+	p.checkPascal(nt)
+	p.next()
+	if p.cur().Kind != "=" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — an associated-type binding is type Name = Type")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a binding's = goes: a binding is type Name = Type", p.cur().Text))
+	}
+	p.next() // =
+	return &ast.AssocBinding{Name: nt.Text, Type: p.parseTypeRef(), Line: nt.Line, Col: nt.Col}
+}
+
+// parseImplMethod parses one method definition of an impl body: `[pub] fn
+// name<T…>(recv, params…) [-> type] block` (chapter 10) — the node is the
+// fn declaration's, with the receiver carried by Recv. The optional pub is
+// the method's own visibility (an impl block carries no pub; its methods
+// may). Method names stay out of the module's one name space — they live in
+// the impl's member set — and a where clause trails no method definition.
+func (p *parser) parseImplMethod() *ast.FnDecl {
+	t := p.cur()
+	pub := false
+	if isKw(t, "pub") {
+		pub = true
+		p.next()
+		if !isKw(p.cur(), "fn") {
+			if p.atEnd() {
+				p.failTok(p.cur(), "E0105", "unexpected end of file — an impl method definition is [pub] fn name(self, params…) block")
+			}
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q after pub: an impl method definition is [pub] fn name(self, params…) block", p.cur().Text))
+		}
+	}
+	line, col := t.Line, t.Col
+	p.next() // fn
+	d := &ast.FnDecl{Pub: pub, Line: line, Col: col}
+	nt := p.cur()
+	if nt.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(nt, "E0105", "unexpected end of file — an impl method definition is [pub] fn name(self, params…) block")
+		}
+		p.failTok(nt, "E0105",
+			fmt.Sprintf("unexpected token — %q where the method name goes: an impl method definition is [pub] fn name(self, params…) block", nt.Text))
+	}
+	p.checkCamel(nt)
+	d.Name, d.NameLine, d.NameCol = nt.Text, nt.Line, nt.Col
+	p.next()
+	if p.cur().Kind == "<" {
+		d.TypeParams = p.parseTypeParams()
+	}
+	if p.cur().Kind != "(" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a method's parameter list opens with the receiver")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a method's parameter list opens: the first parameter is the receiver self or mut self", p.cur().Text))
+	}
+	d.Recv, d.Params = p.recvParamList(d.Name)
+	if isKw(p.cur(), "effect") {
+		p.bnd(bndEffect)
+	}
+	if p.cur().Kind == "->" {
+		p.next()
+		d.Ret = p.parseTypeRef()
+	}
+	if isKw(p.cur(), "where") {
+		p.failTok(p.cur(), "E0105",
+			`unexpected token — "where" fits no production here: a where clause trails a fn declaration's signature or an impl head, not a method definition`)
+	}
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a method definition wants its body block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a method definition's body block opens", p.cur().Text))
+	}
+	d.Body = p.parseFnBlock(&fnCtx{name: d.Name, hasRet: d.Ret != nil})
 	return d
 }
 
@@ -964,7 +1563,7 @@ func (p *parser) parseStmt() ast.Stmt {
 			// keyword-led expression forms; in statement position they
 			// wrap in an expression statement (chapter 2)
 		case "for":
-			p.bnd(bndIter)
+			return p.parseFor()
 		case "scope":
 			p.bnd(bndScope)
 		case "task", "select":
@@ -978,6 +1577,22 @@ func (p *parser) parseStmt() ast.Stmt {
 			p.failTok(t, "E0105",
 				fmt.Sprintf("unexpected token — %q fits no statement production: statements are let|var bindings, name assignments, return, chapter 3's control statements, and expression statements", t.Text))
 		}
+	}
+	// `self.field = expr` — chapter 10's one field-write form. The receiver
+	// self is an ordinary binding (no keyword), so the shape is probed at the
+	// token level ahead of the plain-name assignment below: a member target
+	// is otherwise not an assignment head at all. The probe bounds-checks
+	// because the token slice ends at its single eof token.
+	if t.Kind == lex.KindIdent && t.Text == "self" && p.pos+3 < len(p.toks) &&
+		p.toks[p.pos+1].Kind == "." && p.toks[p.pos+2].Kind == lex.KindIdent &&
+		p.toks[p.pos+3].Kind == "=" && p.toks[p.pos+3].Line == t.Line {
+		p.next() // self
+		p.next() // .
+		ft := p.cur()
+		p.next() // field
+		p.next() // =
+		v := p.parseExpr(valueCtx)
+		return &ast.Assign{Name: "self", Field: ft.Text, Value: v, Line: t.Line, Col: t.Col}
 	}
 	if t.Kind == lex.KindIdent && p.peek().Kind == "=" && p.peek().Line == t.Line {
 		p.next() // name
@@ -1169,6 +1784,64 @@ func (p *parser) parseLoop() *ast.Loop {
 	body := p.parseBlock(nil)
 	p.loopDepth--
 	return &ast.Loop{Body: body, Line: t.Line, Col: t.Col}
+}
+
+// --- chapter 5: the for statement (over chapter 11's iterables) ----------------
+
+// parseFor parses `for pat in expr block` (chapter 5): the head pattern is
+// irrefutable — a binding, the wildcard, or a tuple of them, the same
+// grammar a let head takes — and the iterated expression is chapter 11's
+// Iterable value (a control-flow head: the postfix `{` opens the body).
+// The body is a loop body for the break/continue depth.
+func (p *parser) parseFor() *ast.ForStmt {
+	t := p.cur()
+	p.next() // for
+	pat := p.forHead()
+	if !isKw(p.cur(), "in") {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a for head is pat in iterable")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a for head's in goes: a for head is pat in iterable", p.cur().Text))
+	}
+	p.next() // in
+	iter := p.headExpr()
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a for wants its body block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a for body block opens", p.cur().Text))
+	}
+	p.loopDepth++
+	body := p.parseBlock(nil)
+	p.loopDepth--
+	return &ast.ForStmt{Pat: pat, Iter: iter, Body: body, Line: t.Line, Col: t.Col}
+}
+
+// forHead parses a for head's irrefutable pattern: a binding name, the
+// wildcard, or a tuple of them — chapter 8's let-head grammar is the one
+// authority for irrefutable patterns, so tuple heads reuse it. A refutable
+// shape anchors its own first token.
+func (p *parser) forHead() ast.Pattern {
+	t := p.cur()
+	switch {
+	case t.Kind == "_":
+		p.next()
+		return &ast.PatWildcard{Line: t.Line, Col: t.Col}
+	case t.Kind == lex.KindIdent && !isPascal(t.Text):
+		p.checkCamel(t)
+		p.next()
+		return &ast.PatBinding{Name: t.Text, Line: t.Line, Col: t.Col}
+	case t.Kind == "(":
+		return p.parseLetTuple(t)
+	}
+	if t.Kind == lex.KindEOF {
+		p.failTok(t, "E0105", "unexpected end of file — the \"for\" head takes an irrefutable pattern: a binding, the wildcard, or a tuple of them")
+	}
+	p.failTok(t, "E0105",
+		fmt.Sprintf("unexpected token — %q fits no production here: the \"for\" head takes an irrefutable pattern, a binding, the wildcard, or a tuple of them; refutable patterns are match-only", t.Text))
+	panic("unreachable")
 }
 
 // parseBreakCont parses bare break/continue; outside any loop body they are
@@ -1633,7 +2306,7 @@ func (p *parser) parseBinary(level int, ctx exprCtx) ast.Expr {
 		}
 		if p.cur().Kind == "=" {
 			if ctx == stmtCtx {
-				p.assignAfterExpr(lhs)
+				p.assignAfterExpr()
 			}
 			p.failTok(p.cur(), "E0103",
 				`assignment is not an expression — "=" cannot appear in an expression position: assignment is a statement, not an expression`)
@@ -1678,14 +2351,9 @@ func (p *parser) failNonAssoc(op lex.Token) {
 }
 
 // assignAfterExpr handles `=` after a complete expression statement: the
-// one ratified field form self.field is chapter 10's boundary; any other
-// non-name target is E0105.
-func (p *parser) assignAfterExpr(lhs ast.Expr) {
-	if m, ok := lhs.(*ast.Member); ok {
-		if id, ok := m.Recv.(*ast.Ident); ok && id.Name == "self" {
-			p.bnd(bndGener)
-		}
-	}
+// one ratified field form self.field is parsed by parseStmt's probe, so any
+// member target reaching here is a plain non-name target — E0105.
+func (p *parser) assignAfterExpr() {
 	p.failTok(p.cur(), "E0105",
 		`unexpected token — "=" after a complete expression statement: assignment targets are bare names (the one field form, self.field, belongs to a method receiver)`)
 }
@@ -1730,6 +2398,21 @@ func (p *parser) parsePostfix(ctx exprCtx) ast.Expr {
 			node = &ast.Call{Fn: node, Args: p.parseCallArgs(), Line: t.Line, Col: t.Col}
 		case "?":
 			p.bnd(bndErr)
+		case "<":
+			// Explicit type arguments (chapter 10) reach a bare-name head
+			// only — obj.m<T>() keeps the comparison reading (the method
+			// rule: no explicit form). The attempt is speculative: a shape
+			// that does not commit restores the stream, and the comparison
+			// levels take the tokens (`if a < b {` stays a comparison).
+			id, bare := node.(*ast.Ident)
+			if !bare {
+				return node
+			}
+			if next := p.tryTypeArgs(id); next != nil {
+				node = next
+			} else {
+				return node
+			}
 		case "[":
 			p.failTok(t, "E0105",
 				`unexpected token — "[" fits no postfix production: postfix is .name or (args); indexing is by named methods (the collections chapter)`)
@@ -1747,11 +2430,72 @@ func (p *parser) parsePostfix(ctx exprCtx) ast.Expr {
 				p.failTok(t, "E0105",
 					`unexpected token — "{" after a complete expression: construction heads are PascalCase type references (chapter 8)`)
 			}
-			node = p.parseConstruct(t, path)
+			node = p.parseConstruct(t, path, nil, p.last.Line, p.last.Col)
 		default:
 			return node
 		}
 	}
+}
+
+// tryTypeArgs speculatively parses an explicit generic clause on a
+// bare-name postfix head (chapter 10): `name<T…>(args)` — a call — or
+// `Name<T…> { … }` — a construction. The attempt commits only when the
+// clause's closer is followed by ( or { under the postfix continuation
+// rule (a construction brace never inside a control-flow head — the
+// noBrace suspension), and an empty clause is no explicit form at all.
+// Anything else — a non-committed shape, or a diagnostic raised inside
+// the attempt — restores the stream and reports nil, leaving the tokens
+// to the comparison levels: `if a < b {` stays a comparison, and a
+// a < b > c shape keeps its non-associative diagnostic. Diagnostics a
+// committed shape raises are real and stand.
+func (p *parser) tryTypeArgs(id *ast.Ident) (node ast.Expr) {
+	savedPos, savedLast := p.pos, p.last
+	committed := false
+	defer func() {
+		if r := recover(); r != nil {
+			if _, ok := r.(stop); ok && !committed {
+				p.pos, p.last = savedPos, savedLast
+				node = nil
+				return
+			}
+			panic(r)
+		}
+	}()
+	args := p.genericArgs()
+	if len(args) == 0 {
+		p.pos, p.last = savedPos, savedLast
+		return nil
+	}
+	// The postfix continuation rule holds after the clause too: at depth
+	// zero a token on a new line ends the expression (the caller's loop
+	// head enforced it for the <; this enforces it for what follows).
+	if p.depth == 0 && p.brokeLine() {
+		p.pos, p.last = savedPos, savedLast
+		return nil
+	}
+	cl := p.last // the clause's closing `>` — the explicit application's anchor
+	switch p.cur().Kind {
+	case "(":
+		committed = true
+		op := p.cur()
+		return &ast.Call{Fn: id, Args: p.parseCallArgs(), TypeArgs: args,
+			Line: op.Line, Col: op.Col, ArgLine: cl.Line, ArgCol: cl.Col}
+	case "{":
+		if p.noBrace > 0 && p.depth == 0 {
+			p.pos, p.last = savedPos, savedLast
+			return nil
+		}
+		committed = true
+		if !isPascal(id.Name) {
+			p.failTok(p.cur(), "E0105",
+				`unexpected token — "{" after a complete expression: construction heads are PascalCase type references (chapter 8)`)
+		}
+		node := p.parseConstruct(p.cur(), []string{id.Name}, args, id.Line, id.Col).(*ast.Construct)
+		node.ArgLine, node.ArgCol = cl.Line, cl.Col
+		return node
+	}
+	p.pos, p.last = savedPos, savedLast
+	return nil
 }
 
 // chainPath reports whether e is a bare identifier or member chain (no
@@ -1770,14 +2514,18 @@ func chainPath(e ast.Expr) ([]string, bool) {
 }
 
 // parseConstruct parses chapter 8's construction and update braces: `Path {
-// field: value, … [,] [with & base] }`. open is the `{`; path is the dotted
-// head with the type name last; the node anchors at the head's own name
-// token (the last consumed token). Construction braces are brackets — line
+// field: value, … [,] [with & base] }`, or with an explicit generic clause
+// `Path<T…> { … }` (chapter 10's postfix angle-bracket lookahead hands the
+// shape over). open is the `{`; path is the dotted head with the type name
+// last; typeArgs is the explicit clause (nil without one); hl/hc anchor the
+// node at the head's own name token — the last consumed token on the plain
+// path, the head identifier on the lookahead path (the closer `>` sits in
+// p.last there). Construction braces are brackets — line
 // breaks inside fold — and the field list is comma- or newline-separated
 // with a uniform trailing comma. The update base is one postfix expression
 // after `with &`.
-func (p *parser) parseConstruct(open lex.Token, path []string) ast.Expr {
-	node := &ast.Construct{Name: path[len(path)-1], Line: p.last.Line, Col: p.last.Col}
+func (p *parser) parseConstruct(open lex.Token, path []string, typeArgs []ast.TypeRef, hl, hc int) ast.Expr {
+	node := &ast.Construct{Name: path[len(path)-1], TypeArgs: typeArgs, Line: hl, Col: hc}
 	if len(path) > 1 {
 		node.Qual = joinDot(path[:len(path)-1])
 	}
@@ -1841,6 +2589,41 @@ func (p *parser) parseConstruct(open lex.Token, path []string) ast.Expr {
 		}
 		p.failTok(p.cur(), "E0105",
 			fmt.Sprintf("unexpected token — %q in a field initializer list: fields are name: value pairs separated by commas or line breaks", p.cur().Text))
+	}
+}
+
+// --- chapter 17: list literals -------------------------------------------------
+
+// parseListLit parses `[e1, …, en]` (chapter 17), n zero or more, with the
+// uniform trailing comma. The brackets are a paren region — line breaks
+// inside fold. The caller passes the opening `[`; this consumes it.
+func (p *parser) parseListLit(open lex.Token) ast.Expr {
+	l := &ast.ListLit{Line: open.Line, Col: open.Col}
+	p.next() // [
+	p.depth++
+	defer func() { p.depth-- }()
+	for {
+		if p.cur().Kind == "]" {
+			p.next()
+			return l
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a list literal closes with ]")
+		}
+		l.Elems = append(l.Elems, p.parseExpr(valueCtx))
+		if p.cur().Kind == "," {
+			p.next()
+			continue
+		}
+		if p.cur().Kind == "]" {
+			p.next()
+			return l
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a list literal closes with ]")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q in a list literal: elements are comma-separated expressions and the literal closes with ]", p.cur().Text))
 	}
 }
 
@@ -1947,7 +2730,7 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 			return p.parseIf(ctx)
 		case "match":
 			return p.parseMatch()
-		case "while", "loop", "break", "continue", "defer":
+		case "while", "loop", "break", "continue", "defer", "for":
 			// ratified valueless statement forms — in any expression
 			// position they produce no value (E0202). Inside a short
 			// closure's maximal body break/continue hit the closure-body
@@ -2007,7 +2790,7 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 		}
 		return &ast.BlockExpr{Block: p.parseBlock(nil), Line: t.Line, Col: t.Col}
 	case "[":
-		p.bnd(bndColl)
+		return p.parseListLit(t)
 	case "|":
 		// a short closure in an operator's operand slot is unreachable —
 		// the parenthesized spelling is the ratified one

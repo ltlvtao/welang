@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-inherent-mut-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Counter { n: Int64 }\nimpl Counter {\n    fn bump(mut self) -> Int64 {\n        self.n = self.n + 1\n        self.n\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let c = Counter { n: 0 }\n    let n = c.bump()\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "record Counter { n: Int64 }\nimpl Counter {\n    fn bump(mut self) -> Int64 {\n        self.n = self.n + 1\n        self.n\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let c = Counter { n: 0 }\n    let n = c.bump()\n    return Ok(())\n}\n"
+  }
+}

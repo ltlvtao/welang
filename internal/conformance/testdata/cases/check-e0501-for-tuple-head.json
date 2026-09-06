@@ -1,0 +1,18 @@
+{
+  "name": "check-e0501-for-tuple-head",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(s: String) {\n    for (a, b) in s {\n        let _ = a\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:9: error[E0501]: mixed types — the loop head pattern is a 2-tuple, the element type is \"Rune\"; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "fn f(s: String) {\n    for (a, b) in s {\n        let _ = a\n    }\n}\n"
+  }
+}

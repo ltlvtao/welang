@@ -198,7 +198,6 @@ const (
 	topStmtPart = "fits no top-level item production"
 	stmtPart    = "fits no statement production"
 	exprPart    = "cannot begin an expression"
-	generic10   = "chapter 10 (interfaces and generics) forms"
 	scopeForms  = "chapter 13 and 18 (scope) forms"
 	effectForms = "chapter 16 (effects) forms"
 	concurForms = "chapter 18 (concurrency) forms"
@@ -226,7 +225,7 @@ var dispatchTable = []struct {
 	{"else", "", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"return", "", dg("E0401", "return outside a function body"), okRes(), dg("E0105", exprPart)},
 	{"match", "x { _ => 1 }", dg("E0105", topStmtPart), okRes(), okRes()},
-	{"for", "x in y {}", dg("E0105", topStmtPart), bd("chapter 5 (iteration) forms"), dg("E0105", exprPart)},
+	{"for", "x in y {}", dg("E0105", topStmtPart), okRes(), dg("E0202", `"for" produces no value`)},
 	{"in", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"while", "true {}", dg("E0105", topStmtPart), okRes(), dg("E0202", `"while" produces no value`)},
 	{"loop", "{}", dg("E0105", topStmtPart), okRes(), dg("E0202", `"loop" produces no value`)},
@@ -242,8 +241,8 @@ var dispatchTable = []struct {
 	{"newtype", "N(Int64)", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"with", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"type", "T = Int64", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"interface", "I {}", bd(generic10), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"impl", "I {}", bd(generic10), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"interface", "I {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"impl", "I {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"where", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"derives", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"scope", "x {}", dg("E0105", topStmtPart), bd(scopeForms), bd(scopeForms)},
@@ -346,7 +345,11 @@ func TestLineJoining(t *testing.T) {
 	// literal is a primary expression, reached in expression position).
 	wantDiag(t, "fn f() {\n    [1, 2]\n}\n",
 		"E0102", "continuation token", 2, 5)
-	wantBnd(t, "fn f() {\n    let xs = [1, 2]\n}\n", "chapter 17 (collections) forms")
+	// In expression position the brackets are chapter 17's list literal.
+	lf := wantClean(t, "fn f() {\n    let xs = [1, 2]\n}\n")
+	if ll, ok := lf.Items[0].(*ast.FnDecl).Body.Items[0].(*ast.Binding).Init.(*ast.ListLit); !ok || len(ll.Elems) != 2 {
+		t.Fatalf("two-element list literal wanted, got %#v", lf.Items[0].(*ast.FnDecl).Body.Items[0].(*ast.Binding).Init)
+	}
 	// Continuation token with no preceding statement anywhere in the file.
 	wantDiag(t, "+ 1\n", "E0102", "no statement precedes it", 1, 1)
 }
@@ -410,7 +413,12 @@ func TestStatements(t *testing.T) {
 	wantDiag(t, "fn f() {\n    let x = y = 1\n}\n", "E0103", "assignment is not an expression", 2, 15)
 	wantDiag(t, "fn g() {\n    work(a = 1)\n}\n", "E0103", "assignment is not an expression", 2, 12)
 	wantDiag(t, "fn set(u: Int64) {\n    u.name = \"bob\"\n}\n", "E0105", "assignment targets are bare names", 2, 12)
-	wantBnd(t, "fn set() {\n    self.name = \"bob\"\n}\n", generic10)
+	// The one field-write form self.field = expr parses (chapter 10); the
+	// receiver placement (mut self) is the checker's E0813.
+	sa := stmtsOf(t, "    self.name = \"bob\"\n")[0].(*ast.Assign)
+	if sa.Name != "self" || sa.Field != "name" || exprStr(sa.Value) != `"bob"` {
+		t.Fatalf("self field write: %+v", sa)
+	}
 	// return forms and their two diagnostics.
 	r := stmtsOf(t, "    return\n")[0].(*ast.Return)
 	if r.HasValue {
@@ -510,7 +518,7 @@ func TestDeclarations(t *testing.T) {
 	}
 	// Signature violations and later-chapter clauses.
 	wantDiag(t, "fn bad(x) { }\n", "E0105", `parameter "x" carries no annotation`, 1, 8)
-	wantBnd(t, "fn f<T>(x: T) { }\n", generic10)
+	wantClean(t, "fn f<T>(x: T) { }\n")
 	wantBnd(t, "fn f(mut x: Int64) { }\n", "mut parameters")
 	wantBnd(t, "fn read(p: String) effect io -> String { return p }\n", effectForms)
 	wantDiag(t, "fn f()\n", "E0105", "a fn wants its body block", 2, 1)
@@ -611,10 +619,12 @@ func TestSumDecls(t *testing.T) {
 	// Payload arity above eight is E0701 at the variant name.
 	wantDiag(t, "type Big = V(Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64)\n",
 		"E0701", "variant payload arity above eight", 1, 12)
-	// Generic parameter clauses and derives clauses stop at chapter 10's
-	// parse boundary.
-	wantBnd(t, "type Pair<A, B> = P(A, B)\n", generic10)
-	wantBnd(t, "type Shape = Dot derives(Eq)\n", generic10)
+	// The chapter 10 clauses parse: the generic clause after the name,
+	// derives after the last variant on the declaration's last line — and
+	// derives takes bare names, so the call-shaped form is E0105 at its (.
+	wantClean(t, "type Pair<A, B> = P(A, B)\n")
+	wantClean(t, "type Shape = Dot derives Eq\n")
+	wantDiag(t, "type Shape = Dot derives(Eq)\n", "E0105", "in a derives clause", 1, 25)
 	// The prefix order is fixed: pub outside byval, byval outside type.
 	wantDiag(t, "byval pub type B = V\n", "E0105", "after byval", 1, 7)
 	// The declaration closes at its line break; a stray token after the
@@ -669,11 +679,22 @@ func TestTypeRefs(t *testing.T) {
 	wantDiag(t, "let x: Mod.Name = 1\n", "E0105", "fits no type reference production", 1, 11)
 	wantDiag(t, "let x: Name.T = 1\n", "E0105", "fits no type reference production", 1, 12)
 	wantDiag(t, "let x: fn(Int64) = 1\n", "E0105", "in a function type reference", 1, 18)
-	// The generic construction head is a disclosed M2 gap (F1): `<` and
-	// `>` parse as one non-associative comparison level, so `Box<Int64> {`
-	// is E0104 at the `>`, not a ch8 boundary. Chapter 8's milestone
-	// (M5) absorbs the shape when construction lands.
-	wantDiag(t, "fn f() {\n    let b = Box<Int64> { v: 1 }\n}\n", "E0104", "non-associative", 2, 22)
+	// The generic construction head was a disclosed M2 gap (F1): `<` and
+	// `>` parsed as one non-associative comparison level, so `Box<Int64> {`
+	// was E0104 at the `>`. M6a's postfix angle-bracket lookahead (design
+	// D2) consumes the shape as a construction with explicit type
+	// arguments; the pin flips with the feature, red until T3/T4 land.
+	{
+		f := wantClean(t, "fn f() {\n    let b = Box<Int64> { v: 1 }\n}\n")
+		b := f.Items[0].(*ast.FnDecl).Body.Items[0].(*ast.Binding)
+		ct, ok := b.Init.(*ast.Construct)
+		if !ok {
+			t.Fatalf("Construct wanted, got %T", b.Init)
+		}
+		if len(ct.TypeArgs) != 1 || ct.TypeArgs[0].(*ast.NamedType).Name != "Int64" {
+			t.Fatalf("Box<Int64> type arguments wanted, got %+v", ct.TypeArgs)
+		}
+	}
 }
 
 // --- D6: the boundary form groups, one probe each -----------------------------
@@ -683,16 +704,10 @@ func TestBoundaryForms(t *testing.T) {
 		src  string
 		what string
 	}{
-		{"fn f() {\n    for x in y {}\n}\n", "chapter 5 (iteration) forms"},
-		{"interface I {}\n", generic10},
-		{"impl I for X {}\n", generic10},
-		{"fn f<T>(x: T) {}\n", generic10},
-		{"fn f() {\n    self.x = 1\n}\n", generic10},
 		{"fn f() {\n    scope x {}\n}\n", scopeForms},
 		{"fn f() {\n    let y = x?\n}\n", "chapter 14 (errors) forms"},
 		{"effect io {}\n", effectForms},
 		{"fn f(x: Int64) effect io -> Int64 {\n    return x\n}\n", effectForms},
-		{"fn f() {\n    let xs = [1, 2]\n}\n", "chapter 17 (collections) forms"},
 		{"fn f() {\n    task g() {}\n}\n", concurForms},
 		{"fn f() {\n    select {}\n}\n", concurForms},
 		{"foreign fn f() {}\n", ffiForms},

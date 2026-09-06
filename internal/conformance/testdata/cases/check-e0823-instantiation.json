@@ -1,0 +1,18 @@
+{
+  "name": "check-e0823-instantiation",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Inner { n: Int64 }\nrecord Wrap<T> { value: T } derives Eq\nfn f(i: Inner) {\n    let w = Wrap<Inner> { value: i }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:18: error[E0823]: derive field requirement unmet — \"Wrap<Inner>\" instantiates \"T\" with \"Inner\", which carries no \"Eq\"; the clause is checked at each instantiation\n",
+  "files": {
+    "demo/main.we": "record Inner { n: Int64 }\nrecord Wrap<T> { value: T } derives Eq\nfn f(i: Inner) {\n    let w = Wrap<Inner> { value: i }\n}\n"
+  }
+}

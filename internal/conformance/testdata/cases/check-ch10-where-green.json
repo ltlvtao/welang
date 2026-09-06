@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-where-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"a user\"\n    }\n}\nfn show<T>(x: T) -> String where T: Describable {\n    x.describe()\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    let text = show(u)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"a user\"\n    }\n}\nfn show<T>(x: T) -> String where T: Describable {\n    x.describe()\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    let text = show(u)\n    return Ok(())\n}\n"
+  }
+}

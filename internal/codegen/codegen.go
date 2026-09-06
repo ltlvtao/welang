@@ -61,6 +61,13 @@ func Emit(f *ast.File, module string) (string, *NotImplemented) {
 			// the call form) never reach this stage within the accepted
 			// main-body shapes — the M4 body boundary holds them.
 			continue
+		case *ast.InterfaceDecl, *ast.ImplDecl:
+			// Interfaces and impls erase too (design D11 of the generics
+			// change): a declaration-level fact only — the member sets live
+			// in the type stage — so neither emits IR. An explicit case, not
+			// a silent fall-through: a future form arriving here must decide,
+			// never vanish.
+			continue
 		case *ast.Import:
 			// Unreachable: typecheck stops std/multi-module forms at its own
 			// boundary before code generation runs. Row 3 is the nearest

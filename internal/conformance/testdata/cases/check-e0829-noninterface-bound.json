@@ -1,0 +1,18 @@
+{
+  "name": "check-e0829-noninterface-bound",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f<T>(x: T) -> Int64 where T: Int64 {\n    0\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:33: error[E0829]: where bound is not a declared interface — the bound \"Int64\" names no interface; bounds grant interface method sets, and only interfaces have them\n",
+  "files": {
+    "demo/main.we": "fn f<T>(x: T) -> Int64 where T: Int64 {\n    0\n}\n"
+  }
+}

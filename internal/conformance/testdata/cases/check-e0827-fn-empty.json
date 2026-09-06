@@ -1,0 +1,18 @@
+{
+  "name": "check-e0827-fn-empty",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn empty<T>() -> Option<T> {\n    None\n}\nfn f() {\n    let x = empty()\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:13: error[E0827]: generic call does not determine its type arguments — \"empty\" determines no type argument; a call with no determining argument takes the explicit form empty<Int64>()\n",
+  "files": {
+    "demo/main.we": "fn empty<T>() -> Option<T> {\n    None\n}\nfn f() {\n    let x = empty()\n}\n"
+  }
+}

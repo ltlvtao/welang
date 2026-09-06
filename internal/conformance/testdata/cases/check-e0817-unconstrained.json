@@ -1,0 +1,18 @@
+{
+  "name": "check-e0817-unconstrained",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn len<T>(x: T) -> Int64 {\n    let n = x.size()\n    0\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:15: error[E0817]: method call on an unconstrained generic parameter — the parameter \"T\" carries no where bound, and an unconstrained parameter is opaque; name a where bound granting the method set\n",
+  "files": {
+    "demo/main.we": "fn len<T>(x: T) -> Int64 {\n    let n = x.size()\n    0\n}\n"
+  }
+}

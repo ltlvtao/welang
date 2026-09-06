@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-if-comparison-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let a = 1\n    let b = 2\n    if a < b {\n        return Ok(())\n    }\n    return Err(Failed(\"unreachable\"))\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let a = 1\n    let b = 2\n    if a < b {\n        return Ok(())\n    }\n    return Err(Failed(\"unreachable\"))\n}\n"
+  }
+}

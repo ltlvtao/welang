@@ -1,0 +1,18 @@
+{
+  "name": "check-e0501-method-argument",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self, prefix: Int64) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self, prefix: Int64) -> String {\n        \"u\"\n    }\n}\nfn f(u: User) {\n    let text = u.describe(\"p\")\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:11:27: error[E0501]: mixed types — the argument is String, the parameter is Int64; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self, prefix: Int64) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self, prefix: Int64) -> String {\n        \"u\"\n    }\n}\nfn f(u: User) {\n    let text = u.describe(\"p\")\n}\n"
+  }
+}

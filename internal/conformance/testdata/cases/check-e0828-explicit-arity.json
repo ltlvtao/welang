@@ -1,0 +1,18 @@
+{
+  "name": "check-e0828-explicit-arity",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn identity<T>(x: T) -> T {\n    x\n}\nfn f(n: Int64) -> Int64 {\n    identity<Int64, String>(n)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:27: error[E0828]: type argument arity mismatch — \"identity\" wants 1 type argument, got 2; match the declaration's arity\n",
+  "files": {
+    "demo/main.we": "fn identity<T>(x: T) -> T {\n    x\n}\nfn f(n: Int64) -> Int64 {\n    identity<Int64, String>(n)\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0827-method-undetermined",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Maker {\n    fn make<T>(self) -> Option<T>\n}\nrecord M { n: Int64 }\nimpl Maker for M {\n    fn make<T>(self) -> Option<T> {\n        None\n    }\n}\nfn f(m: M) {\n    let xs = m.make()\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:11:16: error[E0827]: generic call does not determine its type arguments — the call of \"make\" determines no \"T\"; a method call carries no explicit type-argument form: restructure the call so its arguments determine it\n",
+  "files": {
+    "demo/main.we": "interface Maker {\n    fn make<T>(self) -> Option<T>\n}\nrecord M { n: Int64 }\nimpl Maker for M {\n    fn make<T>(self) -> Option<T> {\n        None\n    }\n}\nfn f(m: M) {\n    let xs = m.make()\n}\n"
+  }
+}

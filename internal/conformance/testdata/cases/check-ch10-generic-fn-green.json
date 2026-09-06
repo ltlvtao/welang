@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-generic-fn-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn identity<T>(x: T) -> T {\n    x\n}\nfn pair2<A, B>(a: A, b: B) -> (A, B) {\n    (a, b)\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let a = identity(3)\n    let b = identity<Float64>(1.0)\n    let c = pair2(1, \"x\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn identity<T>(x: T) -> T {\n    x\n}\nfn pair2<A, B>(a: A, b: B) -> (A, B) {\n    (a, b)\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let a = identity(3)\n    let b = identity<Float64>(1.0)\n    let c = pair2(1, \"x\")\n    return Ok(())\n}\n"
+  }
+}

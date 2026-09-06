@@ -1,0 +1,18 @@
+{
+  "name": "check-e0902-float-range",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    let r = 0..1.5\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:16: error[E0902]: range operand is not an integer type — the operand \"1.5\" is \"Float64\"; a range's operands are the eight integer types\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    let r = 0..1.5\n}\n"
+  }
+}

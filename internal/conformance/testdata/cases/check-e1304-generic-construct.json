@@ -1,0 +1,18 @@
+{
+  "name": "check-e1304-generic-construct",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    let b = Box<Int64> { v: 1 }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:13: error[E1304]: unresolved name — \"Box\" is held by no scope: no block-local binding, module declaration, or prelude name carries it; fix the spelling, declare the name, or import its module\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    let b = Box<Int64> { v: 1 }\n}\n"
+  }
+}

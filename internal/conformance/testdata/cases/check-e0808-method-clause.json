@@ -1,0 +1,18 @@
+{
+  "name": "check-e0808-method-clause",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Maker {\n    fn pick<T>(self) -> T\n}\nrecord M { n: Int64 }\nimpl Maker for M {\n    fn pick(self) -> T {\n        panic(\"unimplemented\")\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:8: error[E0808]: impl method signature mismatches the interface method — the method clause of \"pick\" is <T> in \"Maker\" and absent in the impl; the method clause repeats exactly\n",
+  "files": {
+    "demo/main.we": "interface Maker {\n    fn pick<T>(self) -> T\n}\nrecord M { n: Int64 }\nimpl Maker for M {\n    fn pick(self) -> T {\n        panic(\"unimplemented\")\n    }\n}\n"
+  }
+}

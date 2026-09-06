@@ -1,0 +1,18 @@
+{
+  "name": "check-e0808-param-type",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self, prefix: String) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self, prefix: Int64) -> String {\n        \"u\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:8: error[E0808]: impl method signature mismatches the interface method — the parameter \"prefix\" of \"describe\" is Int64 in the impl and String in \"Describable\"; signatures match exactly\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self, prefix: String) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self, prefix: Int64) -> String {\n        \"u\"\n    }\n}\n"
+  }
+}

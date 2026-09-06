@@ -1,0 +1,18 @@
+{
+  "name": "check-e0901-bare-iterator",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(s: String) {\n    for r in s.iterator() {\n        let _ = r\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:14: error[E0901]: for-in expression does not implement Iterable — a bare iterator is consumed by explicit next calls; a for iterates an \"Iterable\" and this expression yields an \"Iterator\" alone\n",
+  "files": {
+    "demo/main.we": "fn f(s: String) {\n    for r in s.iterator() {\n        let _ = r\n    }\n}\n"
+  }
+}

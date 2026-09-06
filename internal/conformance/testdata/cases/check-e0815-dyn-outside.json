@@ -1,0 +1,18 @@
+{
+  "name": "check-e0815-dyn-outside",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Greeter {\n    fn greet(self) -> String\n}\ninterface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Greeter for User {\n    fn greet(self) -> String {\n        \"hi\"\n    }\n}\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\nfn f(d: Dyn<Greeter>) -> String {\n    d.describe()\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:19:7: error[E0815]: method call outside the receiver's method set — \"describe\" is outside the method set of \"Dyn<Greeter>\"; a Dyn value reaches its own interface's methods only\n",
+  "files": {
+    "demo/main.we": "interface Greeter {\n    fn greet(self) -> String\n}\ninterface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Greeter for User {\n    fn greet(self) -> String {\n        \"hi\"\n    }\n}\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\nfn f(d: Dyn<Greeter>) -> String {\n    d.describe()\n}\n"
+  }
+}

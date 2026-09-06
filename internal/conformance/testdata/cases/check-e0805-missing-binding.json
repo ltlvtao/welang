@@ -1,0 +1,18 @@
+{
+  "name": "check-e0805-missing-binding",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface HasIter {\n    type Iter\n}\nrecord Cfg { n: Int64 }\nimpl HasIter for Cfg {\n    fn it(self) -> Int64 {\n        0\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:1: error[E0805]: impl misses an associated type binding — the impl of \"HasIter\" for \"Cfg\" binds no \"Iter\"; an impl binds every associated type of the interface\n",
+  "files": {
+    "demo/main.we": "interface HasIter {\n    type Iter\n}\nrecord Cfg { n: Int64 }\nimpl HasIter for Cfg {\n    fn it(self) -> Int64 {\n        0\n    }\n}\n"
+  }
+}

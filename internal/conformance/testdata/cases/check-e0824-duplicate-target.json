@@ -1,0 +1,18 @@
+{
+  "name": "check-e0824-duplicate-target",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Point { x: Int64 } derives Eq, Eq\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:39: error[E0824]: unknown or duplicate derive target — \"Eq\" appears twice in the clause; each target appears at most once\n",
+  "files": {
+    "demo/main.we": "record Point { x: Int64 } derives Eq, Eq\n"
+  }
+}

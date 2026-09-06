@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-generic-record-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Pair<A, B> { first: A, second: B }\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let p1 = Pair { first: 1, second: \"a\" }\n    let p2 = Pair<Int64, String> { first: 2, second: \"b\" }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "record Pair<A, B> { first: A, second: B }\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let p1 = Pair { first: 1, second: \"a\" }\n    let p2 = Pair<Int64, String> { first: 2, second: \"b\" }\n    return Ok(())\n}\n"
+  }
+}

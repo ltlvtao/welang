@@ -1,0 +1,16 @@
+{
+  "name": "build-ch10-erasure",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord Point { x: Int64, y: Int64 } derives Eq, Hash, Show\nrecord Wrap<T> { value: T }\nimpl Describable for Point {\n    fn describe(self) -> String {\n        \"p\"\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    return Err(Failed(\"declarations erased\"))\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

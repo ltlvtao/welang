@@ -1,0 +1,18 @@
+{
+  "name": "check-e0824-unknown-target",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Point { x: Int64 } derives Ord\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:35: error[E0824]: unknown or duplicate derive target — \"Ord\" is not a derive target; the clause takes \"Eq\", \"Hash\", and \"Show\"\n",
+  "files": {
+    "demo/main.we": "record Point { x: Int64 } derives Ord\n"
+  }
+}

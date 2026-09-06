@@ -1,0 +1,18 @@
+{
+  "name": "check-e0814-inherent-interface",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Named {\n    fn name(self) -> String\n}\nrecord U2 { n: Int64 }\nimpl U2 {\n    fn name(self) -> String {\n        \"i\"\n    }\n}\nimpl Named for U2 {\n    fn name(self) -> String {\n        \"n\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:11:8: error[E0814]: member name collision on one type — \"U2\" already has the inherent method \"name\"; one type gives one name one meaning\n",
+  "files": {
+    "demo/main.we": "interface Named {\n    fn name(self) -> String\n}\nrecord U2 { n: Int64 }\nimpl U2 {\n    fn name(self) -> String {\n        \"i\"\n    }\n}\nimpl Named for U2 {\n    fn name(self) -> String {\n        \"n\"\n    }\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-where-on-interface",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Boxed<T> where T: Eq {\n    fn unwrap(self) -> T\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:20: error[E0105]: unexpected token — \"where\" fits no production here: a where clause trails a fn signature or an impl head, not an interface declaration\n",
+  "files": {
+    "demo/main.we": "interface Boxed<T> where T: Eq {\n    fn unwrap(self) -> T\n}\n"
+  }
+}

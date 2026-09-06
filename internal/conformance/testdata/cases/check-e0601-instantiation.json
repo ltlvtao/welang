@@ -1,0 +1,18 @@
+{
+  "name": "check-e0601-instantiation",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byval record Box<T> { value: T }\nrecord User { name: String }\nfn f(u: User) {\n    let b = Box<User> { value: u }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:17: error[E0601]: value record field is not of the value category or a base type — \"Box<User>\" instantiates the field \"value\" with \"User\", a gc record; a copy is only honest when everything in it is copyable by value\n",
+  "files": {
+    "demo/main.we": "byval record Box<T> { value: T }\nrecord User { name: String }\nfn f(u: User) {\n    let b = Box<User> { value: u }\n}\n"
+  }
+}

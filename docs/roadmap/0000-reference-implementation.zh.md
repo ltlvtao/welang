@@ -18,7 +18,8 @@
 | M3 | `types-and-main` | 第 7 章类型子集、第 15 章根模块与 main 形状、第 14 章 `Result`；`we check .` 对 `we new` 骨架跑绿 | done 2026-09-05 |
 | M4 | `native-vertical` | 最小 LLVM IR 发射、最小 C 运行时（启动、分配器）、骨架程序端到端 `we build` 与 `we run` | done 2026-09-05 |
 | M5 | `control-and-composites` | 第 3 章控制流、第 4 章 match、第 8 章复合类型与所有权、第 9 章和类型、第 12 章函数类型与闭包 | done 2026-09-05 |
-| M6 | `modules-generics-errors` | 第 10 章接口与泛型、第 11 章可迭代、第 13 章 resource、第 14 章全量、第 15 章模块解析全量、第 17 章集合 | pending |
+| M6a | `generics-iterables-collections` | 第 10 章接口与泛型、第 11 章可迭代、第 5 章 for 语句、第 17 章集合 | done 2026-09-06 |
+| M6b | `modules-errors` | 第 13 章 resource、第 14 章全量、第 15 章模块解析全量 | pending |
 | M7 | `effects` | 第 16 章效果声明与效果检查 | pending |
 | M8 | `stdlib-and-gc` | `std.io` 核心；运行时精确 GC 设计落地 | pending |
 | M9 | `concurrency` | 第 18 章 task、channel、调度器、虚拟钟 | pending |

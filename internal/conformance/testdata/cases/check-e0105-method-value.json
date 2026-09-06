@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-method-value",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record User { name: String }\nimpl User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\nfn f(u: User) {\n    let d = u.describe\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:8:15: error[E0105]: unexpected token — \"describe\" resolves to a method; a method name fits no ratified value production: call it or wrap it: |u| u.describe()\n",
+  "files": {
+    "demo/main.we": "record User { name: String }\nimpl User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\nfn f(u: User) {\n    let d = u.describe\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-pub-interface-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub interface Describable {\n    fn describe(self) -> String\n}\npub record User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"a user\"\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    let text = u.describe()\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "pub interface Describable {\n    fn describe(self) -> String\n}\npub record User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"a user\"\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    let text = u.describe()\n    return Ok(())\n}\n"
+  }
+}

@@ -1,4 +1,4 @@
-// Package ast holds the syntax tree of chapters 2–4, 6, 8, and 12: one file
+// Package ast holds the syntax tree of chapters 2–6, 8, 10–12, and 17: one file
 // is one module of top-level items (chapter 6), each fn body a block of
 // statements (chapter 2) with chapter 3's control-flow statements, each
 // expression built from the skeleton's primary, postfix, unary, and binary
@@ -41,17 +41,24 @@ type Import struct {
 	PathCol  int
 }
 
-// FnDecl is a fn declaration: `[pub] fn name(params) [-> type] block`. Ret
-// nil means no declared return type — the function produces no value.
+// FnDecl is a fn declaration: `[pub] fn name<T…>(params) [-> type] [where …]
+// block`. Ret nil means no declared return type — the function produces no
+// value. The chapter 10 clauses attach here: TypeParams between the name and
+// the parameter list, Where between the return annotation and the body. An
+// impl-block method definition reuses this node — Recv then carries its
+// receiver (RecvNone on a plain fn).
 type FnDecl struct {
-	Pub       bool
-	Name      string
-	Params    []Param
-	Ret       TypeRef
-	Body      Block
-	Line, Col int // at fn (or pub)
-	NameLine  int
-	NameCol   int
+	Pub        bool
+	Name       string
+	TypeParams []*TypeParam // chapter 10 generic clause; empty without
+	Recv       RecvKind     // chapter 10 method receiver; RecvNone on a plain fn
+	Params     []Param      // excludes the receiver
+	Ret        TypeRef
+	Where      []*WhereBound // chapter 10 where clause trailing the signature
+	Body       Block
+	Line, Col  int // at fn (or pub)
+	NameLine   int
+	NameCol    int
 }
 
 // Param is one `name: type` pair of a parameter list.
@@ -69,19 +76,21 @@ type TopLet struct {
 	Line, Col int // at let (or pub)
 }
 
-// SumDecl is a sum type declaration (chapter 9): `[pub] [byval] type Name =
-// V1 | ... | Vn`, n at least one, each variant bare (a unit variant) or
-// carrying 1..8 payload type references. The generic parameter clause and
-// derives clause are chapter 10's and stop at their parse boundary, so this
-// node holds no fields for them.
+// SumDecl is a sum type declaration (chapter 9): `[pub] [byval] type
+// Name<T…> = V1 | ... | Vn [derives …]`, n at least one, each variant bare
+// (a unit variant) or carrying 1..8 payload type references. The chapter 10
+// clauses attach after the name (TypeParams) and after the last variant on
+// the declaration's last line (Derives).
 type SumDecl struct {
-	Pub       bool
-	Byval     bool
-	Name      string
-	Variants  []Variant
-	Line, Col int // at type (or byval/pub)
-	NameLine  int
-	NameCol   int
+	Pub        bool
+	Byval      bool
+	Name       string
+	TypeParams []*TypeParam // chapter 10 generic clause; empty without
+	Variants   []Variant
+	Derives    *DerivesClause // chapter 10 derives clause; nil without
+	Line, Col  int            // at type (or byval/pub)
+	NameLine   int
+	NameCol    int
 }
 
 // Variant is one variant of a sum declaration: the bare name alone, or the
@@ -93,17 +102,20 @@ type Variant struct {
 }
 
 // RecordDecl is a record declaration (chapter 8): `[pub] [gc|byval|byres]
-// record Name { fields }`. Cat is "gc" (the default category), "value"
-// (byval), or "resource" (byres). Zero fields are legal. The generic and
-// derives clauses are chapter 10's and stop at their parse boundary.
+// record Name<T…> { fields } [derives …]`. Cat is "gc" (the default
+// category), "value" (byval), or "resource" (byres). Zero fields are legal.
+// The chapter 10 clauses attach after the name (TypeParams) and after the
+// closing brace on the declaration's last line (Derives).
 type RecordDecl struct {
-	Pub       bool
-	Cat       string // "gc" | "value" | "resource"
-	Name      string
-	Fields    []FieldDecl
-	Line, Col int // at record (or the outermost prefix)
-	NameLine  int
-	NameCol   int
+	Pub        bool
+	Cat        string // "gc" | "value" | "resource"
+	Name       string
+	TypeParams []*TypeParam // chapter 10 generic clause; empty without
+	Fields     []FieldDecl
+	Derives    *DerivesClause // chapter 10 derives clause; nil without
+	Line, Col  int            // at record (or the outermost prefix)
+	NameLine   int
+	NameCol    int
 }
 
 // FieldDecl is one `name: type` field of a record declaration.
@@ -113,15 +125,130 @@ type FieldDecl struct {
 	Line, Col int // at the field name
 }
 
-// NewtypeDecl is `newtype Name(Underlying)` (chapter 8): a zero-cost
-// wrapper whose layout is erased.
+// NewtypeDecl is `newtype Name<T…>(Underlying) [derives …]` (chapter 8): a
+// zero-cost wrapper whose layout is erased. The chapter 10 clauses attach
+// after the name (TypeParams) and after the closing paren on the
+// declaration's last line (Derives).
 type NewtypeDecl struct {
 	Pub        bool
 	Name       string
+	TypeParams []*TypeParam // chapter 10 generic clause; empty without
 	Underlying TypeRef
-	Line, Col  int // at newtype (or pub)
+	Derives    *DerivesClause // chapter 10 derives clause; nil without
+	Line, Col  int            // at newtype (or pub)
 	NameLine   int
 	NameCol    int
+}
+
+// --- chapter 10: interfaces, impls, generics ---------------------------------
+
+// RecvKind is the receiver form of a method's parameter list: absent (a
+// plain fn), `self`, or `mut self`. The zero value is RecvNone, so plain fn
+// declarations carry it unset.
+type RecvKind string
+
+const (
+	RecvNone    RecvKind = ""         // no receiver
+	RecvSelf    RecvKind = "self"     // self
+	RecvMutSelf RecvKind = "mut self" // mut self
+)
+
+// TypeParam is one PascalCase name of a generic parameter clause
+// `<T1, …, Tk>` (chapter 10), k at most eight — at fn, record, newtype, sum,
+// interface, and impl declarations and at method heads.
+type TypeParam struct {
+	Name      string
+	Line, Col int // at the name
+}
+
+// InterfaceDecl is `[pub] interface Name<T…> { items }` (chapter 10). Items
+// stand one per line, separated by inferred boundaries with no separator
+// token: associated-type holes and method signatures, the latter optionally
+// with a default body. Interface members carry no pub of their own.
+type InterfaceDecl struct {
+	Pub        bool
+	Name       string
+	TypeParams []*TypeParam
+	Assocs     []*AssocDecl
+	Methods    []MethodSig
+	Line, Col  int // at interface (or pub)
+	NameLine   int
+	NameCol    int
+}
+
+// AssocDecl is one associated-type hole of an interface: `type Item`
+// (chapter 10). A hole carries no bound on its declaration — bounds live in
+// where clauses (E0804).
+type AssocDecl struct {
+	Name      string
+	Line, Col int // at the name
+}
+
+// MethodSig is one method of an interface: a signature `fn name<T…>(recv,
+// params…) [-> type]`, or the same with a default body (chapter 10). Params
+// excludes the receiver — Recv carries it alone. Signature names join the
+// module's one name space.
+type MethodSig struct {
+	Name       string
+	TypeParams []*TypeParam
+	Recv       RecvKind
+	Params     []Param
+	Ret        TypeRef
+	HasRet     bool
+	Body       *Block // nil on a bare signature
+	NameLine   int
+	NameCol    int
+}
+
+// ImplDecl is `impl<T…> [Iface for] Head [where …] { items }` (chapter 10)
+// — the for-form, or the inherent form with Iface nil. Iface and Head are
+// full type references (a tuple head parses; its rejection is the checker's
+// E0811). Items are associated-type bindings (all before any method) and
+// method definitions, one per line; an impl block carries no pub.
+type ImplDecl struct {
+	TypeParams []*TypeParam
+	Iface      TypeRef // nil on the inherent form
+	Head       TypeRef
+	Where      []*WhereBound
+	Assocs     []*AssocBinding
+	Methods    []*FnDecl
+	Line, Col  int // at impl
+}
+
+// AssocBinding is one `type Name = TypeRef` of an impl: its binding of an
+// interface associated type (chapter 10). Bindings precede every method
+// definition (E0806).
+type AssocBinding struct {
+	Name      string
+	Type      TypeRef
+	Line, Col int // at the name
+}
+
+// WhereBound is one constraint of a where clause (chapter 10): the bound
+// form `Subject: Iface[ + Iface2 …]` or the equality form `Subject.Assoc ==
+// TypeRef`. One WhereBound holds one form — the bound list or the equality
+// list, never both.
+type WhereBound struct {
+	Subject   string
+	Ifaces    []*NamedType // the bound form; empty on the equality form
+	Eq        []*TypeEq    // the equality form; empty on the bound form
+	Line, Col int          // at the subject name
+}
+
+// TypeEq is one `Subject.Assoc == TypeRef` equality of a where clause; the
+// right side is a concrete type (a generic parameter there is E0831).
+type TypeEq struct {
+	Assoc     string
+	RHS       TypeRef
+	Line, Col int // at ==
+}
+
+// DerivesClause is `derives Eq, Hash, Show` — the tail of a record, newtype,
+// or sum declaration's last line (chapter 10). The target set is closed and
+// duplicate-free (E0824).
+type DerivesClause struct {
+	Targets   []string
+	Line, Col int // at derives
 }
 
 // Block is `{ items }` — itself an expression whose value is its final
@@ -149,11 +276,14 @@ type Binding struct {
 	NameCol   int
 }
 
-// Assign is `name = expr` — the statement, never an expression.
+// Assign is `name = expr` — the statement, never an expression. With Field
+// set it is `self.field = expr`, the receiver field write (chapter 10's one
+// field-write form, legal only inside a mut self method body).
 type Assign struct {
 	Name      string
+	Field     string // empty on a plain name; the field of a self write
 	Value     Expr
-	Line, Col int // at the name
+	Line, Col int // at the name (self on the field form)
 }
 
 // Return is `return` or `return expr` (chapter 6's function bodies).
@@ -195,6 +325,16 @@ type Defer struct {
 	Line, Col int // at defer
 }
 
+// ForStmt is `for pat in expr block` (chapters 5 and 11): the head pattern
+// is irrefutable (a binding, the wildcard, or a tuple of them) and the
+// iterated expression implements Iterable.
+type ForStmt struct {
+	Pat       Pattern
+	Iter      Expr
+	Body      Block
+	Line, Col int // at for
+}
+
 // Expr is one expression of the chapter 2 skeleton.
 type Expr interface{ expr() }
 
@@ -228,11 +368,19 @@ type Binary struct {
 	Line, Col int
 }
 
-// Call is `expr(args)`; position at the opening parenthesis.
+// Call is `expr(args)`; position at the opening parenthesis. TypeArgs holds
+// an explicit generic clause of the bare-name call form `name<T…>(args)`
+// (chapter 10) — the postfix angle-bracket lookahead, which never reaches a
+// method head.
 type Call struct {
 	Fn        Expr
 	Args      []Expr
+	TypeArgs  []TypeRef
 	Line, Col int
+	// ArgLine/ArgCol sit at the closing `>` when an explicit generic clause
+	// is present — the application's arity diagnostics (E0828) anchor there,
+	// not at the call's `(`.
+	ArgLine, ArgCol int
 }
 
 // Member is `receiver.name`; position at the dot.
@@ -285,13 +433,18 @@ type MatchArm struct {
 }
 
 // Construct is a record construction or update expression (chapter 8):
-// `Head { field: value, … [with &base] }`. Base non-nil marks an update.
+// `Head<T…> { field: value, … [with &base] }`. Base non-nil marks an update;
+// TypeArgs holds the head's explicit generic clause (chapter 10).
 type Construct struct {
 	Qual      string // module qualifier, empty for a bare head
 	Name      string
+	TypeArgs  []TypeRef
 	Fields    []FieldInit
 	Base      Expr // nil for a full construction
 	Line, Col int  // at the head's name token
+	// ArgLine/ArgCol sit at the closing `>` of the explicit generic clause —
+	// the application's arity diagnostics (E0828) anchor there.
+	ArgLine, ArgCol int
 }
 
 // FieldInit is one `name: value` of a construction or update.
@@ -317,6 +470,13 @@ type Closure struct {
 	Body      Block
 	Short     bool
 	Line, Col int // at fn or |
+}
+
+// ListLit is `[e1, …, en]` (chapter 17): n zero or more, trailing comma
+// uniform, the brackets a paren region — the literal folds across lines.
+type ListLit struct {
+	Elems     []Expr
+	Line, Col int // at [
 }
 
 // Pattern is one match pattern (chapter 4). The pattern grammar is a
@@ -407,6 +567,8 @@ func (t *TopLet) item()         {}
 func (s *SumDecl) item()        {}
 func (r *RecordDecl) item()     {}
 func (n *NewtypeDecl) item()    {}
+func (i *InterfaceDecl) item()  {}
+func (m *ImplDecl) item()       {}
 func (b *Binding) stmt()        {}
 func (a *Assign) stmt()         {}
 func (r *Return) stmt()         {}
@@ -416,6 +578,7 @@ func (l *Loop) stmt()           {}
 func (b *Break) stmt()          {}
 func (c *Continue) stmt()       {}
 func (d *Defer) stmt()          {}
+func (f *ForStmt) stmt()        {}
 func (i *Ident) expr()          {}
 func (l *Literal) expr()        {}
 func (u *Unary) expr()          {}
@@ -429,6 +592,7 @@ func (m *Match) expr()          {}
 func (c *Construct) expr()      {}
 func (t *Tuple) expr()          {}
 func (c *Closure) expr()        {}
+func (l *ListLit) expr()        {}
 func (l *PatLiteral) pattern()  {}
 func (w *PatWildcard) pattern() {}
 func (b *PatBinding) pattern()  {}

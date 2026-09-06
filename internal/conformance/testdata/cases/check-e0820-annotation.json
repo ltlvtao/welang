@@ -1,0 +1,18 @@
+{
+  "name": "check-e0820-annotation",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(d: Dyn<Int64>) -> Int64 {\n    0\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:13: error[E0820]: Dyn argument is not an interface type — \"Int64\" is not an interface; Dyn boxes an interface type\n",
+  "files": {
+    "demo/main.we": "fn f(d: Dyn<Int64>) -> Int64 {\n    0\n}\n"
+  }
+}

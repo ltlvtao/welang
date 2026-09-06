@@ -1,0 +1,18 @@
+{
+  "name": "check-ch17-collections-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn firstOf(xs: List<Int64>) -> Option<Int64> {\n    xs.get(0)\n}\nfn stats(mm: Map<String, Int64>, ss: Set<Int64>) -> Int64 {\n    let v = mm.get(\"a\")\n    let has = ss.has(1)\n    0\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let first = xs.get(0)\n    let text = \"hello\"\n    let n = text.byteLength()\n    let r = text.charAt(0)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn firstOf(xs: List<Int64>) -> Option<Int64> {\n    xs.get(0)\n}\nfn stats(mm: Map<String, Int64>, ss: Set<Int64>) -> Int64 {\n    let v = mm.get(\"a\")\n    let has = ss.has(1)\n    0\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let first = xs.get(0)\n    let text = \"hello\"\n    let n = text.byteLength()\n    let r = text.charAt(0)\n    return Ok(())\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0813-write-plain-self",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Cell { n: Int64 }\nimpl Cell {\n    fn read(self) -> Int64 {\n        self.n = 1\n        0\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:9: error[E0813]: field write outside a mut self method body — the write to \"self.n\" sits in a plain \"self\" method; the receiver field assignment lives only inside a mut self body\n",
+  "files": {
+    "demo/main.we": "record Cell { n: Int64 }\nimpl Cell {\n    fn read(self) -> Int64 {\n        self.n = 1\n        0\n    }\n}\n"
+  }
+}

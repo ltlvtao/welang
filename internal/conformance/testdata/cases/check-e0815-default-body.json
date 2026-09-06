@@ -1,0 +1,18 @@
+{
+  "name": "check-e0815-default-body",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Greeter {\n    fn greet(self) -> String {\n        self.missing()\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:14: error[E0815]: method call outside the receiver's method set — \"missing\" is outside the method set of \"Greeter\"; an interface position reaches its own interface's methods only\n",
+  "files": {
+    "demo/main.we": "interface Greeter {\n    fn greet(self) -> String {\n        self.missing()\n    }\n}\n"
+  }
+}

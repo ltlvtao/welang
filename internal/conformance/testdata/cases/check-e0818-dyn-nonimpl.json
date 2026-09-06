@@ -1,0 +1,18 @@
+{
+  "name": "check-e0818-dyn-nonimpl",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nfn f() {\n    let d = Dyn<Describable>(1)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:5:30: error[E0818]: Dyn construction from a non-implementing type — \"Int64\" implements no \"Describable\"; a Dyn box carries a value of an implementing type\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nfn f() {\n    let d = Dyn<Describable>(1)\n}\n"
+  }
+}

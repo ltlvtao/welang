@@ -9,9 +9,9 @@
       "demo/main.we": "fn f() {\n    let xs: List<Int64> = 1\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 1,
   "stdout": "",
-  "stderr": "we: std collection types (chapter 17) are not implemented in this reference build yet\n",
+  "stderr": "demo/main.we:2:9: error[E0501]: mixed types — the expression is Int64, the annotation is List<Int64>; no coercion is ever inserted\n",
   "files": {
     "demo/main.we": "fn f() {\n    let xs: List<Int64> = 1\n}\n"
   }

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0824-shareable",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Point { x: Int64 } derives Shareable\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:35: error[E0824]: unknown or duplicate derive target — \"Shareable\" is not a derive target; it is a where bound, not a clause target\n",
+  "files": {
+    "demo/main.we": "record Point { x: Int64 } derives Shareable\n"
+  }
+}

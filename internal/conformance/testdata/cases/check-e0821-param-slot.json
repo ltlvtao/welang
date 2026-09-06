@@ -1,0 +1,18 @@
+{
+  "name": "check-e0821-param-slot",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nfn f(d: Describable) -> Int64 {\n    0\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:9: error[E0821]: interface name used as a value type — \"Describable\" names an interface; the value type slot takes the box form \"Dyn<Describable>\"\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nfn f(d: Describable) -> Int64 {\n    0\n}\n"
+  }
+}

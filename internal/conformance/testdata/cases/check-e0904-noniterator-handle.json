@@ -1,0 +1,18 @@
+{
+  "name": "check-e0904-noniterator-handle",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record Count { n: Int64 }\nimpl Iterable<Int64> for Count {\n    type Iter = Int64\n    fn iterator(self) -> Int64 {\n        0\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:1: error[E0904]: impl binds Iter to a non-iterator type — the impl binds \"Iter\" to \"Int64\", which implements no \"Iterator<Int64>\"; the handle contract is part of the interface\n",
+  "files": {
+    "demo/main.we": "record Count { n: Int64 }\nimpl Iterable<Int64> for Count {\n    type Iter = Int64\n    fn iterator(self) -> Int64 {\n        0\n    }\n}\n"
+  }
+}

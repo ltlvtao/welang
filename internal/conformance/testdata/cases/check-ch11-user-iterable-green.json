@@ -1,0 +1,18 @@
+{
+  "name": "check-ch11-user-iterable-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record CountIter { n: Int64 }\nimpl Iterator<Int64> for CountIter {\n    fn next(mut self) -> Option<Int64> {\n        None\n    }\n}\nrecord Range2 { n: Int64 }\nimpl Iterable<Int64> for Range2 {\n    type Iter = CountIter\n    fn iterator(self) -> CountIter {\n        CountIter { n: 0 }\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let r = Range2 { n: 0 }\n    for x in r {\n        let _ = x\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "record CountIter { n: Int64 }\nimpl Iterator<Int64> for CountIter {\n    fn next(mut self) -> Option<Int64> {\n        None\n    }\n}\nrecord Range2 { n: Int64 }\nimpl Iterable<Int64> for Range2 {\n    type Iter = CountIter\n    fn iterator(self) -> CountIter {\n        CountIter { n: 0 }\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let r = Range2 { n: 0 }\n    for x in r {\n        let _ = x\n    }\n    return Ok(())\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0816-for-each",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(s: String) {\n    let it = s.iterator()\n    let _ = it.forEach(|r| r)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:16: error[E0816]: no such member on the receiver's type — the receiver's type has no member \"forEach\"; forEach does not exist: sequence effects belong to the for statement\n",
+  "files": {
+    "demo/main.we": "fn f(s: String) {\n    let it = s.iterator()\n    let _ = it.forEach(|r| r)\n}\n"
+  }
+}

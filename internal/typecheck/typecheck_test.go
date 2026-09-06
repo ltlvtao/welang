@@ -160,8 +160,9 @@ func TestOperators(t *testing.T) {
 	wantBnd(t, "let x = 1.0 & 2.0\n", bndDomainGap)
 	wantBnd(t, "let x = 1 && 2\n", bndDomainGap)
 	wantDiag(t, "let x = ~true\n", "E0501", `operand of "~" is Bool`, 1, 9)
-	// Ranges are chapter 11's.
-	wantBnd(t, "let x = 1..2\n", bndRange)
+	// Ranges are chapter 11's — the operator builds the builtin Range<T>
+	// (the collections pass's judgment; the M5 probe row retires).
+	wantOK(t, "let x = 1..2\n")
 }
 
 // --- D5: E0502 constant folding ----------------------------------------------
@@ -285,14 +286,24 @@ func TestNameResolution(t *testing.T) {
 		"E1304", `"Foo" is held by no scope`, 1, 9)
 	wantDiag(t, "fn f() {\n    let x = net.Read()\n}\n",
 		"E1304", `the qualifier "net" of "net.Read" is not an import name`, 2, 13)
-	// Prelude names without an M3 type are honest boundaries, never E1304.
-	wantBnd(t, "fn f() {\n    let xs: List<Int64> = 1\n}\n", bndCollections)
-	wantBnd(t, "fn f() {\n    let m: Map<String, Int64> = 1\n}\n", bndCollections)
+	// The std collection names carry their prelude type shape now (this
+	// milestone's generic application): the arity judgment E0828 holds and
+	// an annotation against them types, so a disagreement is E0501 — the
+	// methods stay behind the std-modules boundary (design D10).
+	wantDiag(t, "fn f() {\n    let xs: List<Int64> = 1\n}\n",
+		"E0501", "the expression is Int64, the annotation is List<Int64>", 2, 9)
+	wantDiag(t, "fn f() {\n    let m: Map<String, Int64> = 1\n}\n",
+		"E0501", "the expression is Int64, the annotation is Map<String, Int64>", 2, 9)
 	wantBnd(t, "fn f() {\n    panic(\"boom\")\n}\n", bndTermination)
 	wantBnd(t, "fn f() {\n    todo()\n}\n", bndTermination)
 	wantBnd(t, "fn f() {\n    assert(true)\n}\n", bndTermination)
-	wantBnd(t, "fn f(x: Dyn) {\n    return\n}\n", bndDyn)
-	wantBnd(t, "fn f(x: Dyn<Int64>) {\n    return\n}\n", bndDyn)
+	// The Dyn box reads its interface argument now (this milestone's
+	// member-resolution pass): a bare name misses the clause's arity
+	// judgment, and a non-interface argument is E0820.
+	wantDiag(t, "fn f(x: Dyn) {\n    return\n}\n",
+		"E0828", `"Dyn" wants 1 type argument, got 0`, 1, 9)
+	wantDiag(t, "fn f(x: Dyn<Int64>) {\n    return\n}\n",
+		"E0820", `"Int64" is not an interface`, 1, 13)
 	wantBnd(t, "fn f(x: Shareable) {\n    return\n}\n", bndShareable)
 	wantBnd(t, "fn f() {\n    let s = currentCancelSignal\n}\n", bndTaskTime)
 	wantBnd(t, "fn f() {\n    advanceTime(1)\n}\n", bndTaskTime)

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0801-annotated-param",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Greeter {\n    fn greet(name: String) -> String\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:14: error[E0801]: method declares no receiver — the first parameter of \"greet\" carries an annotation; the receiver is the bare parameter \"self\" or \"mut self\"\n",
+  "files": {
+    "demo/main.we": "interface Greeter {\n    fn greet(name: String) -> String\n}\n"
+  }
+}

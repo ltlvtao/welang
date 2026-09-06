@@ -1,0 +1,18 @@
+{
+  "name": "check-e0809-overlap",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord Wrap<T> { value: T }\nimpl<T> Describable for Wrap<T> {\n    fn describe(self) -> String {\n        \"w\"\n    }\n}\nimpl Describable for Wrap<Int64> {\n    fn describe(self) -> String {\n        \"c\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:10:1: error[E0809]: duplicate impl of one interface for one type — the impl for \"Wrap<Int64>\" overlaps the generic impl for \"Wrap<T>\"; an interface is implemented at most once for one head\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord Wrap<T> { value: T }\nimpl<T> Describable for Wrap<T> {\n    fn describe(self) -> String {\n        \"w\"\n    }\n}\nimpl Describable for Wrap<Int64> {\n    fn describe(self) -> String {\n        \"c\"\n    }\n}\n"
+  }
+}

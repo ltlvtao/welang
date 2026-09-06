@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-where-multi-bound-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface A1 {\n    fn a(self) -> Int64\n}\ninterface B1 {\n    fn b(self) -> String\n}\nrecord P { n: Int64 }\nimpl A1 for P {\n    fn a(self) -> Int64 {\n        self.n\n    }\n}\nimpl B1 for P {\n    fn b(self) -> String {\n        \"p\"\n    }\n}\nfn use2<T>(x: T) -> Int64 where T: A1 + B1 {\n    x.a()\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let p = P { n: 1 }\n    let n = use2(p)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "interface A1 {\n    fn a(self) -> Int64\n}\ninterface B1 {\n    fn b(self) -> String\n}\nrecord P { n: Int64 }\nimpl A1 for P {\n    fn a(self) -> Int64 {\n        self.n\n    }\n}\nimpl B1 for P {\n    fn b(self) -> String {\n        \"p\"\n    }\n}\nfn use2<T>(x: T) -> Int64 where T: A1 + B1 {\n    x.a()\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let p = P { n: 1 }\n    let n = use2(p)\n    return Ok(())\n}\n"
+  }
+}

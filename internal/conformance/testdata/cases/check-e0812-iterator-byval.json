@@ -1,0 +1,18 @@
+{
+  "name": "check-e0812-iterator-byval",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byval record CountIter { n: Int64 }\nimpl Iterator<Int64> for CountIter {\n    fn next(mut self) -> Option<Int64> {\n        None\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:8: error[E0812]: mut self receiver on a value-category type — \"next\" takes mut self on \"CountIter\", a value-category record; a value copy has nothing to mutate in place\n",
+  "files": {
+    "demo/main.we": "byval record CountIter { n: Int64 }\nimpl Iterator<Int64> for CountIter {\n    fn next(mut self) -> Option<Int64> {\n        None\n    }\n}\n"
+  }
+}

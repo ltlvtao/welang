@@ -1,0 +1,18 @@
+{
+  "name": "check-e0830-explicit-unsatisfied",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nfn show<T>(x: T) -> String where T: Describable {\n    x.describe()\n}\nrecord User { name: String }\nfn f(u: User) -> String {\n    show<User>(u)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:9:5: error[E0830]: type argument does not satisfy a where bound — \"User\" implements no \"Describable\"; the where bound of \"show\" holds at every call\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nfn show<T>(x: T) -> String where T: Describable {\n    x.describe()\n}\nrecord User { name: String }\nfn f(u: User) -> String {\n    show<User>(u)\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0903-resource-impl",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record CountIter { n: Int64 }\nimpl Iterator<Int64> for CountIter {\n    fn next(mut self) -> Option<Int64> {\n        None\n    }\n}\nbyres record FileHandle { fd: Int64 }\nimpl Iterable<Int64> for FileHandle {\n    type Iter = CountIter\n    fn iterator(self) -> CountIter {\n        CountIter { n: 0 }\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:8:1: error[E0903]: impl of Iterable for a resource-category type — \"FileHandle\" is resource-category; a resource implements no \"Iterable\": materialize a collection first\n",
+  "files": {
+    "demo/main.we": "record CountIter { n: Int64 }\nimpl Iterator<Int64> for CountIter {\n    fn next(mut self) -> Option<Int64> {\n        None\n    }\n}\nbyres record FileHandle { fd: Int64 }\nimpl Iterable<Int64> for FileHandle {\n    type Iter = CountIter\n    fn iterator(self) -> CountIter {\n        CountIter { n: 0 }\n    }\n}\n"
+  }
+}

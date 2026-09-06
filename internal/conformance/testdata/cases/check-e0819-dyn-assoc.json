@@ -1,0 +1,18 @@
+{
+  "name": "check-e0819-dyn-assoc",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(s: String) {\n    let d = Dyn<Iterable<Int64> >(s)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:17: error[E0819]: Dyn of an interface with associated types — \"Iterable\" declares the associated type \"Iter\"; the erased value could not honor the binding\n",
+  "files": {
+    "demo/main.we": "fn f(s: String) {\n    let d = Dyn<Iterable<Int64> >(s)\n}\n"
+  }
+}

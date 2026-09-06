@@ -1,0 +1,18 @@
+{
+  "name": "check-ch10-associated-type-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Container {\n    type Item\n    fn item(self) -> Item\n}\nrecord Box3 { value: Int64 }\nimpl Container for Box3 {\n    type Item = Int64\n    fn item(self) -> Item {\n        self.value\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let b = Box3 { value: 1 }\n    let n = b.item()\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "interface Container {\n    type Item\n    fn item(self) -> Item\n}\nrecord Box3 { value: Int64 }\nimpl Container for Box3 {\n    type Item = Int64\n    fn item(self) -> Item {\n        self.value\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let b = Box3 { value: 1 }\n    let n = b.item()\n    return Ok(())\n}\n"
+  }
+}

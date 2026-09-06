@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-iface-field-item",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Bad {\n    name: String\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:5: error[E0105]: unexpected token — \"name\" fits no interface item production: an interface declares associated types and methods only\n",
+  "files": {
+    "demo/main.we": "interface Bad {\n    name: String\n}\n"
+  }
+}

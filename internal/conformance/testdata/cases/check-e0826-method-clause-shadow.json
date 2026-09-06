@@ -1,0 +1,18 @@
+{
+  "name": "check-e0826-method-clause-shadow",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Boxed<T> {\n    fn unwrap<T>(self) -> T\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:15: error[E0826]: generic parameter shadows an enclosing parameter — the method clause of \"unwrap\" redeclares \"T\"; a clause name is fresh against the enclosing clause\n",
+  "files": {
+    "demo/main.we": "interface Boxed<T> {\n    fn unwrap<T>(self) -> T\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0814-two-interfaces",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Named1 {\n    fn name(self) -> String\n}\ninterface Named2 {\n    fn name(self) -> String\n}\nrecord User { n: Int64 }\nimpl Named1 for User {\n    fn name(self) -> String {\n        \"1\"\n    }\n}\nimpl Named2 for User {\n    fn name(self) -> String {\n        \"2\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:13:1: error[E0814]: member name collision on one type — \"User\" receives \"name\" from both \"Named1\" and \"Named2\"; one type gives one name one meaning\n",
+  "files": {
+    "demo/main.we": "interface Named1 {\n    fn name(self) -> String\n}\ninterface Named2 {\n    fn name(self) -> String\n}\nrecord User { n: Int64 }\nimpl Named1 for User {\n    fn name(self) -> String {\n        \"1\"\n    }\n}\nimpl Named2 for User {\n    fn name(self) -> String {\n        \"2\"\n    }\n}\n"
+  }
+}

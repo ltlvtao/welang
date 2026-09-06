@@ -1,0 +1,18 @@
+{
+  "name": "check-bnd-method-arity",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\nfn f(u: User) {\n    let text = u.describe(1)\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: calls with an argument count the callee does not declare (spec gap; roadmap follow-up) are not implemented in this reference build yet\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\nfn f(u: User) {\n    let text = u.describe(1)\n}\n"
+  }
+}

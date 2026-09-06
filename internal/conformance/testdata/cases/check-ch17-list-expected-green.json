@@ -1,0 +1,18 @@
+{
+  "name": "check-ch17-list-expected-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    let xs: List<Int64> = [1, 2, 3]\n    let ys: List<Int64> = []\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn f() {\n    let xs: List<Int64> = [1, 2, 3]\n    let ys: List<Int64> = []\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+  }
+}

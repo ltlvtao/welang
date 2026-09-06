@@ -1,0 +1,18 @@
+{
+  "name": "check-e0806-late-binding",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface HasIter {\n    type Iter\n}\nrecord Cfg { n: Int64 }\nimpl HasIter for Cfg {\n    fn it(self) -> Int64 {\n        0\n    }\n    type Iter = Int64\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:9:5: error[E0806]: associated type binding after a method definition — the binding of \"Iter\" follows the method \"it\"; associated-type bindings precede methods in an impl\n",
+  "files": {
+    "demo/main.we": "interface HasIter {\n    type Iter\n}\nrecord Cfg { n: Int64 }\nimpl HasIter for Cfg {\n    fn it(self) -> Int64 {\n        0\n    }\n    type Iter = Int64\n}\n"
+  }
+}

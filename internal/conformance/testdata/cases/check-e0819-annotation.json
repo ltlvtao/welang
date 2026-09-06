@@ -1,0 +1,18 @@
+{
+  "name": "check-e0819-annotation",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(d: Dyn<Iterable<Int64> >) -> Int64 {\n    0\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:13: error[E0819]: Dyn of an interface with associated types — \"Iterable\" declares the associated type \"Iter\"; the erased value could not honor the binding\n",
+  "files": {
+    "demo/main.we": "fn f(d: Dyn<Iterable<Int64> >) -> Int64 {\n    0\n}\n"
+  }
+}
