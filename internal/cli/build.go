@@ -179,13 +179,14 @@ func (e *env) buildProject(dir string) (string, int) {
 	for _, f := range []struct{ path, content string }{
 		{filepath.Join(buildDir, name+".ll"), ir},
 		{filepath.Join(buildDir, "rt-startup.c"), weruntime.StartupSource},
-		{filepath.Join(buildDir, "rt-alloc.c"), weruntime.AllocSource},
+		{filepath.Join(buildDir, "rt-gc.c"), weruntime.GCSource},
+		{filepath.Join(buildDir, "rt-io.c"), weruntime.IOSource},
 	} {
 		if err := os.WriteFile(f.path, []byte(f.content), 0o644); err != nil {
 			return "", e.fsError(err)
 		}
 	}
-	// The clang driver sequence of design D6: both runtime sources to
+	// The clang driver sequence of design D6: the runtime sources to
 	// objects, then one driver call that compiles the .ll and links.
 	// -Wno-override-module keeps the no-triple IR (D4) from warning on
 	// stderr — the success faces are silent, and a warning is output.
@@ -194,11 +195,13 @@ func (e *env) buildProject(dir string) (string, int) {
 		args []string
 	}{
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-startup.c"), "-o", filepath.Join(buildDir, "rt-startup.o")}},
-		{"clang", []string{"-c", filepath.Join(buildDir, "rt-alloc.c"), "-o", filepath.Join(buildDir, "rt-alloc.o")}},
+		{"clang", []string{"-c", filepath.Join(buildDir, "rt-gc.c"), "-o", filepath.Join(buildDir, "rt-gc.o")}},
+		{"clang", []string{"-c", filepath.Join(buildDir, "rt-io.c"), "-o", filepath.Join(buildDir, "rt-io.o")}},
 		{"clang", []string{"-Wno-override-module",
 			filepath.Join(buildDir, name+".ll"),
 			filepath.Join(buildDir, "rt-startup.o"),
-			filepath.Join(buildDir, "rt-alloc.o"),
+			filepath.Join(buildDir, "rt-gc.o"),
+			filepath.Join(buildDir, "rt-io.o"),
 			"-o", filepath.Join(buildDir, name)}},
 	} {
 		if code := e.runClang(c.name, c.args...); code != exitOK {

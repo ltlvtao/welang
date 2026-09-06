@@ -139,24 +139,26 @@ func TestBoundaryWhats(t *testing.T) {
 		what string
 	}{
 		{
+			// An Int64-literal initializer is outside M8's expression subset
+			// (int literals ride only construction-argument positions).
 			"binding in body",
 			replaceBody(okModule(), []ast.Stmt{
 				&ast.Binding{Kw: "let", Name: "x", Init: &ast.Literal{Kind: "int", Text: "1"}},
 				&ast.Return{HasValue: true, Value: &ast.Call{Fn: &ast.Ident{Name: "Ok"}, Args: []ast.Expr{&ast.Unit{}}}},
 			}),
-			"main bodies beyond a single Ok or Err return statement",
+			"main bodies beyond let bindings, io calls, and a single Ok or Err return statement",
 		},
 		{
 			"tail-expression form",
 			replaceBody(okModule(), []ast.Stmt{
 				&ast.ExprStmt{Expr: &ast.Call{Fn: &ast.Ident{Name: "Ok"}, Args: []ast.Expr{&ast.Unit{}}}},
 			}),
-			"main bodies beyond a single Ok or Err return statement",
+			"main bodies beyond let bindings, io calls, and a single Ok or Err return statement",
 		},
 		{
 			"bare return",
 			replaceBody(okModule(), []ast.Stmt{&ast.Return{}}),
-			"main bodies beyond a single Ok or Err return statement",
+			"main bodies beyond let bindings, io calls, and a single Ok or Err return statement",
 		},
 		{
 			"unit variant as Err argument",

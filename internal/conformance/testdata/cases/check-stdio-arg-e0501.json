@@ -1,0 +1,18 @@
+{
+  "name": "check-stdio-arg-e0501",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "import std.io\n\nfn work() effect io {\n    io.println(42)\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:4:16: error[E0501]: mixed types \u2014 the argument is Int64, the parameter is String; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "import std.io\n\nfn work() effect io {\n    io.println(42)\n    return\n}\n"
+  }
+}

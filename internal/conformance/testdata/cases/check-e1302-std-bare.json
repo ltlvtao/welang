@@ -1,0 +1,20 @@
+{
+  "name": "check-e1302-std-bare",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:1:8: error[E1302]: module not found \u2014 no standard-library module \"std\" exists in this build; the std segment is compiler-provided, so the name is misspelled or the module is not implemented yet\n",
+  "files": {
+    "src/main.we": "import std\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

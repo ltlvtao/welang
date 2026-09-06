@@ -1,0 +1,18 @@
+{
+  "name": "check-std-comb-effect-e1402",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "effect db\n\nfn save(s: Int64) effect db {\n    return\n}\n\nfn work(xs: List<Int64>) {\n    let ys = xs.iterator().map(|x| save(x))\n    let _ = ys\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:8:32: error[E1402]: function value effect set does not match the expected type's \u2014 the value performs effect \"db\" and the expected type's effect segment does not include it; widen the expected type's effect segment to cover the value's set, or supply a value that performs less\n",
+  "files": {
+    "demo/main.we": "effect db\n\nfn save(s: Int64) effect db {\n    return\n}\n\nfn work(xs: List<Int64>) {\n    let ys = xs.iterator().map(|x| save(x))\n    let _ = ys\n    return\n}\n"
+  }
+}

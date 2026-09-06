@@ -1,0 +1,18 @@
+{
+  "name": "check-std-comb-nested",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn work(xs: List<Int64>) {\n    let ys = xs.iterator().map(|x| x + 1).map(|x| x * 2).collect()\n    let _ = ys\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn work(xs: List<Int64>) {\n    let ys = xs.iterator().map(|x| x + 1).map(|x| x * 2).collect()\n    let _ = ys\n    return\n}\n"
+  }
+}

@@ -452,6 +452,10 @@ type ifaceMethod struct {
 	tags       []string
 	typeParams []string
 	body       *ast.Block
+	// paramNames names the parameters for a default body's walk (the
+	// user path reads the declaration node's own names; the builtin
+	// faces have no node, so the registration states them).
+	paramNames []string
 	line, col  int
 }
 
@@ -1075,10 +1079,11 @@ func init() {
 	// returning a derived Dyn<Iterator> handle — and seven eager. map and
 	// fold carry their own method clause <U>, fresh against the
 	// interface's <T> (so U sits at clause position 1); an override must
-	// repeat the clause exactly (E0808). The default bodies are the
-	// standard library's (M8): a non-nil body is the defaulted marker
-	// E0807 and the inherited registration (E0814) read, and the builtin
-	// interfaces have no declarations whose bodies pass would walk them.
+	// repeat the clause exactly (E0808). A non-nil body is the defaulted
+	// marker E0807 and the inherited registration (E0814) read; since M8
+	// the eager six carry real bodies the walk checks at every check's
+	// start (checkBuiltinCombinators), the lazy four and collect the
+	// compiler-intrinsic marker.
 	t0 := Type(paramRef{idx: 0, name: "T"})
 	u1 := Type(paramRef{idx: 1, name: "U"})
 	dynIter := func(elem Type) Type {
@@ -1087,6 +1092,110 @@ func init() {
 	fnOf := func(params []Type, ret Type) Type {
 		return fnType{params: params, ret: ret}
 	}
+	// The real default bodies (design D3) build as the same AST nodes a
+	// source body parses to — walked by the same machine at every check's
+	// start (checkBuiltinCombinators), never a privileged path. The six
+	// eager combinators state their algorithms in the approved surface
+	// (match on self.next(), the closure parameters, recursion); the lazy
+	// four and collect return values whose construction faces (a Dyn box,
+	// a List) the M8 subset does not carry (design D10), so their defaults
+	// stay the compiler-intrinsic marker — chapter 21 R9's
+	// implementation-by-compiler reads the empty block as the honest
+	// form, and the walk skips it as it does at a user interface.
+	lit := func(kind, text string) *ast.Literal {
+		return &ast.Literal{Kind: kind, Text: text, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	id := func(name string) *ast.Ident {
+		return &ast.Ident{Name: name, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	call := func(fn ast.Expr, args ...ast.Expr) *ast.Call {
+		return &ast.Call{Fn: fn, Args: args, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	selfCall := func(name string, args ...ast.Expr) *ast.Call {
+		return call(&ast.Member{Recv: id("self"), Name: name, Line: stdBodyLine, Col: stdBodyCol, NameLine: stdBodyLine, NameCol: stdBodyCol}, args...)
+	}
+	stmt := func(e ast.Expr) ast.Stmt {
+		return &ast.ExprStmt{Expr: e, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	block := func(items ...ast.Stmt) *ast.BlockExpr {
+		return &ast.BlockExpr{Block: ast.Block{Items: items, Line: stdBodyLine, Col: stdBodyCol}, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	body := func(items ...ast.Stmt) *ast.Block {
+		return &ast.Block{Items: items, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	closure := func(names []string, e ast.Expr) *ast.Closure {
+		ps := make([]ast.Param, len(names))
+		for i, n := range names {
+			ps[i] = ast.Param{Name: n, NameLine: stdBodyLine, NameCol: stdBodyCol}
+		}
+		return &ast.Closure{Short: true, Params: ps, Body: ast.Block{Items: []ast.Stmt{stmt(e)}, Line: stdBodyLine, Col: stdBodyCol}, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	// The Option<T> the eager bodies produce: a let annotation is the one
+	// green position for Some/None without a surrounding expected (match
+	// arms thread none — chapter 4's rule, not a gap), so the bodies name
+	// their results through typed bindings.
+	optionT := func() *ast.NamedType {
+		return &ast.NamedType{Name: "Option", Args: []ast.TypeRef{&ast.NamedType{Name: "T", Line: stdBodyLine, Col: stdBodyCol}}, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	letOption := func(name string, init ast.Expr) *ast.Binding {
+		return &ast.Binding{Kw: "let", Name: name, Typ: optionT(), Init: init, Line: stdBodyLine, Col: stdBodyCol, NameLine: stdBodyLine, NameCol: stdBodyCol}
+	}
+	armSome := func(bind string, e ast.Expr) ast.MatchArm {
+		return ast.MatchArm{
+			Pat:  &ast.PatVariant{Name: "Some", Args: []ast.Pattern{&ast.PatBinding{Name: bind, Line: stdBodyLine, Col: stdBodyCol}}, Line: stdBodyLine, Col: stdBodyCol},
+			Body: e, Line: stdBodyLine, Col: stdBodyCol,
+		}
+	}
+	armNone := func(e ast.Expr) ast.MatchArm {
+		return ast.MatchArm{Pat: &ast.PatVariant{Name: "None", Line: stdBodyLine, Col: stdBodyCol}, Body: e, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	nextMatch := func(bind string, some, none ast.Expr) *ast.Match {
+		return &ast.Match{Scrutinee: selfCall("next"), Arms: []ast.MatchArm{armSome(bind, some), armNone(none)}, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	ifExpr := func(cond, then, els ast.Expr) *ast.If {
+		return &ast.If{Cond: cond, Then: ast.Block{Items: []ast.Stmt{stmt(then)}, Line: stdBodyLine, Col: stdBodyCol}, Else: els, Line: stdBodyLine, Col: stdBodyCol}
+	}
+	// fold: match self.next() { Some(x) => self.fold(f(init, x), f), None => init }
+	foldBody := body(stmt(nextMatch("x",
+		selfCall("fold", call(id("f"), id("init"), id("x")), id("f")),
+		id("init"),
+	)))
+	// reduce: match self.next() {
+	//   Some(first) => { let folded: Option<T> = Some(self.fold(first, |acc, x| f(acc, x))); folded }
+	//   None => { let none: Option<T> = None; none }
+	// }
+	reduceBody := body(stmt(nextMatch("first",
+		block(letOption("folded", call(id("Some"), selfCall("fold", id("first"), closure([]string{"acc", "x"}, call(id("f"), id("acc"), id("x")))))), stmt(id("folded"))),
+		block(letOption("none", id("None")), stmt(id("none"))),
+	)))
+	// count: self.fold(0, |acc, _| acc + 1)
+	countBody := body(stmt(selfCall("fold",
+		lit("int", "0"),
+		closure([]string{"acc", "_"}, &ast.Binary{Op: "+", L: id("acc"), R: lit("int", "1"), Line: stdBodyLine, Col: stdBodyCol}),
+	)))
+	// any: match self.next() { Some(x) => if f(x) { true } else { self.any(f) }, None => false }
+	anyBody := body(stmt(nextMatch("x",
+		ifExpr(call(id("f"), id("x")), lit("bool", "true"), block(stmt(selfCall("any", id("f"))))),
+		lit("bool", "false"),
+	)))
+	// all: match self.next() { Some(x) => if f(x) { self.all(f) } else { false }, None => true }
+	allBody := body(stmt(nextMatch("x",
+		ifExpr(call(id("f"), id("x")), block(stmt(selfCall("all", id("f")))), lit("bool", "false")),
+		lit("bool", "true"),
+	)))
+	// find: match self.next() {
+	//   Some(x) => { let hit: Option<T> = Some(x); let out = if f(x) { hit } else { self.find(f) }; out }
+	//   None => { let none: Option<T> = None; none }
+	// }
+	// (the if binds through `out`: a plain block's final item carries its
+	// value, and an if there is a statement position — the block-value
+	// rule reads the binding, chapter 7's subset as it stands)
+	findBody := body(stmt(nextMatch("x",
+		block(letOption("hit", call(id("Some"), id("x"))),
+			&ast.Binding{Kw: "let", Name: "out", Init: ifExpr(call(id("f"), id("x")), id("hit"), block(stmt(selfCall("find", id("f"))))), Line: stdBodyLine, Col: stdBodyCol, NameLine: stdBodyLine, NameCol: stdBodyCol},
+			stmt(id("out"))),
+		block(letOption("none", id("None")), stmt(id("none"))),
+	)))
 	iteratorIface.methods = []ifaceMethod{
 		{
 			name:    "next",
@@ -1096,26 +1205,30 @@ func init() {
 		// fn map<U>(mut self, f: fn(T) -> U) -> Dyn<Iterator<U>>
 		{
 			name: "map", recvMut: true, typeParams: []string{"U"}, body: &ast.Block{},
-			params: []Type{fnOf([]Type{t0}, u1)},
-			ret:    dynIter(u1),
+			paramNames: []string{"f"},
+			params:     []Type{fnOf([]Type{t0}, u1)},
+			ret:        dynIter(u1),
 		},
 		// fn filter(mut self, f: fn(T) -> Bool) -> Dyn<Iterator<T>>
 		{
 			name: "filter", recvMut: true, body: &ast.Block{},
-			params: []Type{fnOf([]Type{t0}, baseType("Bool"))},
-			ret:    dynIter(t0),
+			paramNames: []string{"f"},
+			params:     []Type{fnOf([]Type{t0}, baseType("Bool"))},
+			ret:        dynIter(t0),
 		},
 		// fn take(mut self, n: Int64) -> Dyn<Iterator<T>>
 		{
 			name: "take", recvMut: true, body: &ast.Block{},
-			params: []Type{baseType("Int64")},
-			ret:    dynIter(t0),
+			paramNames: []string{"n"},
+			params:     []Type{baseType("Int64")},
+			ret:        dynIter(t0),
 		},
 		// fn skip(mut self, n: Int64) -> Dyn<Iterator<T>>
 		{
 			name: "skip", recvMut: true, body: &ast.Block{},
-			params: []Type{baseType("Int64")},
-			ret:    dynIter(t0),
+			paramNames: []string{"n"},
+			params:     []Type{baseType("Int64")},
+			ret:        dynIter(t0),
 		},
 		// fn collect(mut self) -> List<T>
 		{
@@ -1124,38 +1237,43 @@ func init() {
 		},
 		// fn fold<U>(mut self, init: U, f: fn(U, T) -> U) -> U
 		{
-			name: "fold", recvMut: true, typeParams: []string{"U"}, body: &ast.Block{},
-			params: []Type{u1, fnOf([]Type{u1, t0}, u1)},
-			ret:    u1,
+			name: "fold", recvMut: true, typeParams: []string{"U"}, body: foldBody,
+			paramNames: []string{"init", "f"},
+			params:     []Type{u1, fnOf([]Type{u1, t0}, u1)},
+			ret:        u1,
 		},
 		// fn reduce(mut self, f: fn(T, T) -> T) -> Option<T>
 		{
-			name: "reduce", recvMut: true, body: &ast.Block{},
-			params: []Type{fnOf([]Type{t0, t0}, t0)},
-			ret:    namedType{decl: optionSum, args: []Type{t0}},
+			name: "reduce", recvMut: true, body: reduceBody,
+			paramNames: []string{"f"},
+			params:     []Type{fnOf([]Type{t0, t0}, t0)},
+			ret:        namedType{decl: optionSum, args: []Type{t0}},
 		},
 		// fn count(mut self) -> Int64
 		{
-			name: "count", recvMut: true, body: &ast.Block{},
+			name: "count", recvMut: true, body: countBody,
 			ret: baseType("Int64"),
 		},
 		// fn any(mut self, f: fn(T) -> Bool) -> Bool
 		{
-			name: "any", recvMut: true, body: &ast.Block{},
-			params: []Type{fnOf([]Type{t0}, baseType("Bool"))},
-			ret:    baseType("Bool"),
+			name: "any", recvMut: true, body: anyBody,
+			paramNames: []string{"f"},
+			params:     []Type{fnOf([]Type{t0}, baseType("Bool"))},
+			ret:        baseType("Bool"),
 		},
 		// fn all(mut self, f: fn(T) -> Bool) -> Bool
 		{
-			name: "all", recvMut: true, body: &ast.Block{},
-			params: []Type{fnOf([]Type{t0}, baseType("Bool"))},
-			ret:    baseType("Bool"),
+			name: "all", recvMut: true, body: allBody,
+			paramNames: []string{"f"},
+			params:     []Type{fnOf([]Type{t0}, baseType("Bool"))},
+			ret:        baseType("Bool"),
 		},
 		// fn find(mut self, f: fn(T) -> Bool) -> Option<T>
 		{
-			name: "find", recvMut: true, body: &ast.Block{},
-			params: []Type{fnOf([]Type{t0}, baseType("Bool"))},
-			ret:    namedType{decl: optionSum, args: []Type{t0}},
+			name: "find", recvMut: true, body: findBody,
+			paramNames: []string{"f"},
+			params:     []Type{fnOf([]Type{t0}, baseType("Bool"))},
+			ret:        namedType{decl: optionSum, args: []Type{t0}},
 		},
 	}
 	// Iterable<T>: type Iter; fn iterator(self) -> Iter — Iter is the
@@ -1430,6 +1548,20 @@ type captureInfo struct {
 func Check(f *ast.File, file string, mode Mode) (d *diag.Diagnostic, ni *NotImplemented) {
 	c := newChecker(mode)
 	defer stopTo(&d, &ni)
+	// The stdlib's own faces check first, every time (design D3): the
+	// builtin combinators' real default bodies walk the same method-body
+	// machine a user interface's defaults do, over the empty module
+	// scope. ingest overwrites the file name after the walk.
+	c.file = stdBodyFile
+	c.checkBuiltinCombinators()
+	// Check takes one self-contained file: the compiler-provided std
+	// modules it imports ingest first — the same provided-before-importing
+	// order the project loader's graph produces for project checks.
+	for _, key := range stdImports(f) {
+		if sf, ok := StdModule(key); ok {
+			c.ingest(sf, key, key, false)
+		}
+	}
 	c.ingest(f, file, "main", true)
 	return nil, nil
 }
@@ -1452,6 +1584,9 @@ type Module struct {
 func CheckProject(root *ast.File, rootPath string, deps []Module) (d *diag.Diagnostic, ni *NotImplemented) {
 	c := newChecker(Project)
 	defer stopTo(&d, &ni)
+	// The same stdlib-first walk a single-file check runs (design D3).
+	c.file = stdBodyFile
+	c.checkBuiltinCombinators()
 	for _, m := range deps {
 		c.ingest(m.File, m.Path, m.Key, false)
 	}
@@ -1801,13 +1936,19 @@ func (c *checker) checkModule(f *ast.File) {
 	}
 }
 
-// checkImport applies the import dispositions: std is not provided (M8);
-// in project mode the loader walked the graph — E1301 and E1302 are its
-// faces, and every import's target sits in the module buckets already;
-// single-file mode has no source root at all.
+// checkImport applies the import dispositions: std paths answer from the
+// compiler-provided registry (project mode's loader already placed every
+// provided module in the graph; single-file mode pre-ingested them at
+// Check); in project mode the loader walked the graph — E1301 and E1302
+// are its faces, and every import's target sits in the module buckets
+// already; single-file mode has no source root for file-system paths.
 func (c *checker) checkImport(imp *ast.Import) {
 	if imp.Path[0] == "std" {
-		c.bnd(bndStdModules)
+		key := strings.Join(imp.Path, ".")
+		if _, ok := StdModule(key); !ok {
+			c.fail(imp.PathLine, imp.PathCol, "E1302", StdModuleNotFound(key))
+		}
+		return
 	}
 	if c.mode == SingleFile {
 		rel := filepath.Join(imp.Path...) + ".we"
@@ -1815,6 +1956,63 @@ func (c *checker) checkImport(imp *ast.Import) {
 			"module not found — %q cannot resolve in single-file mode: no source root exists (a project would expect it at src/%s); run we check against the project directory",
 			strings.Join(imp.Path, "."), rel))
 	}
+}
+
+// --- chapter 15 R1: the compiler-provided std segment -----------------------
+
+// StdModule is the registry of compiler-provided modules. The std segment
+// never resolves against the file system, so the project loader and the
+// single-file pre-ingest both ask here — one authority for which std
+// modules a build provides. Each module is synthetic We source: real
+// declarations the same checker machinery a user module rides walks (the
+// provision is compiler-built; the checking is not privileged). M8
+// provides std.io (design D2); the self-hosting route — real sources over
+// a foreign layer — is design D9's disclosed follow-up.
+func StdModule(key string) (*ast.File, bool) {
+	if key != "std.io" {
+		return nil, false
+	}
+	return &ast.File{Items: []ast.Item{
+		&ast.FnDecl{
+			Pub:        true,
+			Name:       "println",
+			Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
+			EffectTags: []string{"io"},
+		},
+		&ast.FnDecl{
+			Pub:        true,
+			Name:       "print",
+			Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
+			EffectTags: []string{"io"},
+		},
+	}}, true
+}
+
+// StdModuleNotFound renders E1302's std form — the one text the loader and
+// the import pass report for a std path no build provides.
+func StdModuleNotFound(key string) string {
+	return fmt.Sprintf(
+		"module not found — no standard-library module %q exists in this build; the std segment is compiler-provided, so the name is misspelled or the module is not implemented yet",
+		key)
+}
+
+// stdImports lists a file's std import keys in source order, deduplicated —
+// the pre-ingest order of single-file mode.
+func stdImports(f *ast.File) []string {
+	var keys []string
+	seen := map[string]bool{}
+	for _, it := range f.Items {
+		imp, ok := it.(*ast.Import)
+		if !ok || imp.Path[0] != "std" {
+			continue
+		}
+		key := strings.Join(imp.Path, ".")
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
 
 // --- chapter 15: cross-module resolution -----------------------------------
@@ -2274,6 +2472,48 @@ func (c *checker) checkIfaceBodies(x *ast.InterfaceDecl) {
 		c.pushTypes(ifaceScope(inf))
 		c.pushTypes(paramScopeOffset(x.Methods[i].TypeParams, len(inf.params)))
 		c.checkMethodBody(im.name, x.Methods[i].Params, im.params, im.body, im.ret, self, im.recvMut, im.tags)
+		c.popTypes()
+		c.popTypes()
+	}
+}
+
+// The builtin combinator bodies' synthetic position and file: every node
+// the registration builds carries line/column 1/1, and the walk runs
+// under this file name — a failure there names the stdlib's own body,
+// never a program's path.
+const (
+	stdBodyLine = 1
+	stdBodyCol  = 1
+	stdBodyFile = "(std combinators)"
+)
+
+// checkBuiltinCombinators walks the builtin interfaces' real default
+// bodies through the same frame and method-body machinery
+// checkIfaceBodies gives a user interface's defaults (design D3): the
+// interface's clause scope, the method's own clause, self as the
+// interface's own view — no privileged path. It runs at every check's
+// entry over the checker's empty module scope, so the prelude faces
+// alone answer (a program's shadowing never reaches the stdlib's
+// bodies); a marker body (the compiler-intrinsic combinators) walks
+// nothing, exactly as an empty user default does.
+func (c *checker) checkBuiltinCombinators() {
+	self := ifaceType{decl: iteratorIface, args: clauseArgs(iteratorIface.params)}
+	for i := range iteratorIface.methods {
+		im := &iteratorIface.methods[i]
+		if im.body == nil || len(im.body.Items) == 0 {
+			continue
+		}
+		params := make([]ast.Param, len(im.paramNames))
+		for j, name := range im.paramNames {
+			params[j] = ast.Param{Name: name, NameLine: stdBodyLine, NameCol: stdBodyCol}
+		}
+		tps := make([]*ast.TypeParam, len(im.typeParams))
+		for j, name := range im.typeParams {
+			tps[j] = &ast.TypeParam{Name: name, Line: stdBodyLine, Col: stdBodyCol}
+		}
+		c.pushTypes(ifaceScope(iteratorIface))
+		c.pushTypes(paramScopeOffset(tps, len(iteratorIface.params)))
+		c.checkMethodBody(im.name, params, im.params, im.body, im.ret, self, im.recvMut, im.tags)
 		c.popTypes()
 		c.popTypes()
 	}
@@ -5206,12 +5446,21 @@ func (c *checker) variantType(sum *sumInfo, vi int, line, col int, name string) 
 // for statement's (E0816). An unresolvable bare receiver identifier
 // reads as a failed qualifier (E1304 at the receiver).
 func (c *checker) memberType(x *ast.Member, asCall bool) Type {
+	t, _ := c.memberTypeRecv(x, asCall)
+	return t
+}
+
+// memberTypeRecv is memberType carrying the receiver's own type back:
+// the call path's determination reads the positions the receiver holds,
+// and the receiver types once — here, not twice (its side effects —
+// captures, effect sets — walk a single time either way).
+func (c *checker) memberTypeRecv(x *ast.Member, asCall bool) (Type, Type) {
 	if id, ok := x.Recv.(*ast.Ident); ok {
 		// An import name in the receiver is the qualified form's head
 		// (chapter 15): the item resolves through the target's bucket,
 		// never through the import name's own (valueless) type.
 		if mod, is := c.importQualifier(id.Name); is {
-			return c.importMember(mod, id, x)
+			return c.importMember(mod, id, x), nil
 		}
 		if !c.nameResolvable(id.Name) {
 			full := id.Name + "." + x.Name
@@ -5225,7 +5474,8 @@ func (c *checker) memberType(x *ast.Member, asCall bool) Type {
 			"no such member on the receiver's type — the receiver's type has no member %q; forEach does not exist: sequence effects belong to the for statement",
 			x.Name))
 	}
-	return c.memberOfType(c.typeOf(x.Recv, nil), x, asCall)
+	rt := c.typeOf(x.Recv, nil)
+	return c.memberOfType(rt, x, asCall), rt
 }
 
 // memberOfType resolves the member against one receiver type: the four
@@ -5639,9 +5889,13 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 	// method-value rule exempts the head here, never the arguments)
 	var t Type
 	var head *ast.Member
+	var recvT Type
 	if m, is := x.Fn.(*ast.Member); is {
 		head = m
-		t = c.memberType(m, true)
+		// the member head rides the full preamble (the qualified form,
+		// the forEach guard) and hands the receiver's type back with the
+		// view — the determination reads the positions it holds.
+		t, recvT = c.memberTypeRecv(m, true)
 	} else {
 		t = c.typeOf(x.Fn, nil)
 	}
@@ -5654,7 +5908,7 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 		// determine them (design D6's method generics). A fn-typed
 		// value's parameters are the enclosing scope's positions, never
 		// a callee's to determine — that path stays positional.
-		return c.methodCall(ft, head, x)
+		return c.methodCall(ft, head, x, recvT)
 	}
 	return c.fnValueCall(ft, x)
 }
@@ -5883,12 +6137,52 @@ func typeArgsOf(t Type) []Type {
 	return nil
 }
 
+// recvHeld collects the clause positions a receiver's own application
+// carries: a method view's interface positions arrive substituted from
+// the receiver, so the call's arguments never owe them (chapter 10's
+// two namespaces — the method's own clause alone is the arguments' to
+// determine). A default body's walk is the extreme case: self is the
+// interface's own view, every position symbolic and every one the
+// receiver's.
+func recvHeld(t Type) map[paramRef]bool {
+	var held map[paramRef]bool
+	var add func(t Type)
+	add = func(t Type) {
+		switch x := t.(type) {
+		case paramRef:
+			if held == nil {
+				held = map[paramRef]bool{}
+			}
+			held[x] = true
+		case tupleType:
+			for _, e := range x.elems {
+				add(e)
+			}
+		case fnType:
+			for _, p := range x.params {
+				add(p)
+			}
+			add(x.ret)
+		case namedType, recordType, newtypeType, ifaceType, dynType:
+			for _, a := range typeArgsOf(x) {
+				add(a)
+			}
+		}
+	}
+	add(t)
+	return held
+}
+
 // methodCall types one call through a method view still holding clause
 // positions (design D6's method generics): a method call carries no
 // explicit type-argument form, so the arguments determine the positions
 // — an open position after every argument is E0827 at the member name,
-// and each argument agrees with its determined parameter (E0501).
-func (c *checker) methodCall(ft fnType, m *ast.Member, x *ast.Call) Type {
+// and each argument agrees with its determined parameter (E0501). The
+// positions the receiver's own application carries are excluded from
+// the demand (recvHeld): they arrived substituted from the receiver, so
+// the arguments never owe them — the method's own clause alone is the
+// arguments' to determine.
+func (c *checker) methodCall(ft fnType, m *ast.Member, x *ast.Call, recv Type) Type {
 	// Chapter 16 as at a plain call (design D4), through the method view
 	// the registry hands the receiver — an impl method's segment, or the
 	// interface method's own at a bound, boxed, or generic receiver. The
@@ -5905,25 +6199,48 @@ func (c *checker) methodCall(ft fnType, m *ast.Member, x *ast.Call) Type {
 		// the method-generic clause positions stay symbolic inside it, so
 		// a bare-parameter closure takes its parameter types from the
 		// declaration while its return still determines the clause by
-		// unification (chapter 11: U comes from the call's own text).
-		argTypes[i] = c.typeOf(a, ft.params[i])
+		// unification (chapter 11: U comes from the call's own text). An
+		// earlier argument's determination substitutes in first: fold's
+		// init pins U before the closure's parameters read it (the
+		// threading the builtin bodies themselves rely on).
+		argTypes[i] = c.typeOf(a, substMap(ft.params[i], bindings))
 		c.inferUnify(ft.params[i], argTypes[i], bindings, a)
 	}
 	if missing := openRefs(ft, bindings); len(missing) > 0 {
-		c.fail(m.NameLine, m.NameCol, "E0827", fmt.Sprintf(
-			"generic call does not determine its type arguments — the call of %q determines no %q; a method call carries no explicit type-argument form: restructure the call so its arguments determine it",
-			m.Name, missing[0].name))
+		// A position the receiver itself holds stays open in the view
+		// (the default-body walk's self is the extreme case — every
+		// interface position symbolic, every one the receiver's).
+		held := recvHeld(recv)
+		if len(held) > 0 {
+			kept := missing[:0]
+			for _, pr := range missing {
+				if !held[pr] {
+					kept = append(kept, pr)
+				}
+			}
+			missing = kept
+		}
+		if len(missing) > 0 {
+			c.fail(m.NameLine, m.NameCol, "E0827", fmt.Sprintf(
+				"generic call does not determine its type arguments — the call of %q determines no %q; a method call carries no explicit type-argument form: restructure the call so its arguments determine it",
+				m.Name, missing[0].name))
+		}
 	}
 	for i, a := range x.Args {
 		// Both sides substitute before comparing: an argument typed under
 		// the threading may still hold the clause's own positions (a bare
 		// closure's view), and those positions are the determination's —
-		// the substituted sides compare like for like.
+		// the substituted sides compare like for like. The woven judgment
+		// gets its chance before E0501's plain face (design D5, the same
+		// weave the plain-call slot rides): a closure performing more
+		// than the slot's segment expects reports E1402 at the argument.
 		if want := substMap(ft.params[i], bindings); !agree(substMap(argTypes[i], bindings), want) {
 			line, col := exprPos(a)
-			c.fail(line, col, "E0501", fmt.Sprintf(
-				"mixed types — the argument is %s, the parameter is %s; no coercion is ever inserted",
-				argTypes[i].String(), want.String()))
+			if !c.checkFnSlot(substMap(argTypes[i], bindings), want, line, col) {
+				c.fail(line, col, "E0501", fmt.Sprintf(
+					"mixed types — the argument is %s, the parameter is %s; no coercion is ever inserted",
+					argTypes[i].String(), want.String()))
+			}
 		}
 	}
 	return substMap(ft.ret, bindings)

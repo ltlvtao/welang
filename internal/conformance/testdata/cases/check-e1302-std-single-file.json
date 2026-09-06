@@ -1,0 +1,18 @@
+{
+  "name": "check-e1302-std-single-file",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "import std.json\n\nfn work() {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:8: error[E1302]: module not found \u2014 no standard-library module \"std.json\" exists in this build; the std segment is compiler-provided, so the name is misspelled or the module is not implemented yet\n",
+  "files": {
+    "demo/main.we": "import std.json\n\nfn work() {\n    return\n}\n"
+  }
+}

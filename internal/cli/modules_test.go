@@ -161,9 +161,10 @@ func TestLoadGraphCycle(t *testing.T) {
 	}
 }
 
-// A std import stops at the std-modules boundary before any module
-// resolution runs (M8's honest line).
-func TestLoadGraphStdBoundary(t *testing.T) {
+// A std import rides the compiler-provided registry into the graph
+// (chapter 15 R1 — the std segment never touches the file system): std.io
+// loads as a dependency module, and an unused import checks clean.
+func TestLoadGraphStdLoading(t *testing.T) {
 	dir := t.TempDir()
 	writeTree(t, dir, map[string]string{
 		"we.toml":     manifest,
@@ -171,10 +172,28 @@ func TestLoadGraphStdBoundary(t *testing.T) {
 	})
 	var out, errb bytes.Buffer
 	chdir(t, dir)
-	if code := Run([]string{"check", "."}, &out, &errb); code != exitNotImplemented {
-		t.Fatalf("want exit 70, got %d (stderr %q)", code, errb.String())
+	if code := Run([]string{"check", "."}, &out, &errb); code != exitOK {
+		t.Fatalf("want exit 0, got %d (stderr %q)", code, errb.String())
 	}
-	want := "we: standard-library modules (chapter 15) are not implemented in this reference build yet\n"
+	if out.String() != "" || errb.String() != "" {
+		t.Fatalf("want a quiet pass, got stdout %q stderr %q", out.String(), errb.String())
+	}
+}
+
+// An unknown std path is E1302's std form from the loader itself — no
+// expected-path clause, the registry is the only mapping.
+func TestLoadGraphStdUnknown(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"we.toml":     manifest,
+		"src/main.we": "import std.json\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+	})
+	var out, errb bytes.Buffer
+	chdir(t, dir)
+	if code := Run([]string{"check", "."}, &out, &errb); code != exitDiagnostic {
+		t.Fatalf("want exit 1, got %d (stderr %q)", code, errb.String())
+	}
+	want := "src/main.we:1:8: error[E1302]: module not found — no standard-library module \"std.json\" exists in this build; the std segment is compiler-provided, so the name is misspelled or the module is not implemented yet\n"
 	if errb.String() != want {
 		t.Fatalf("stderr mismatch:\nwant %q\ngot  %q", want, errb.String())
 	}

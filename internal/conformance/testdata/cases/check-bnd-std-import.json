@@ -9,9 +9,9 @@
       "demo/main.we": "import std.io\n\nfn f() { return }\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: standard-library modules (chapter 15) are not implemented in this reference build yet\n",
+  "stderr": "",
   "files": {
     "demo/main.we": "import std.io\n\nfn f() { return }\n"
   }

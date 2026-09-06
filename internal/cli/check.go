@@ -180,10 +180,12 @@ const (
 
 // loadGraph walks the project's import graph depth-first from the root
 // (design D9): every import resolves by the path mapping (a.b.c to
-// src/a/b/c.we; the std segment stays the std-modules boundary, M8), a
-// missing file is E1302 (the message names the expected path), a back
-// edge is E1301 (three-color marking; the message renders the cycle),
-// and each first-visited module is read and parsed in discovery order.
+// src/a/b/c.we) or, for the std segment, from the compiler-provided
+// registry (never the file system — chapter 15 R1); a missing file or
+// unknown std path is E1302 (the message names the expected path, or the
+// std form when nothing maps), a back edge is E1301 (three-color marking;
+// the message renders the cycle), and each first-visited module is read
+// and parsed in discovery order.
 // It returns the dependency modules in post-order — the imported before
 // the importing, chapter 15's deterministic initialization order — with
 // the root excluded (the caller checks it last); a non-zero code means
@@ -210,8 +212,27 @@ func (e *env) loadGraph(dir, rootPath string, root *ast.File) ([]typecheck.Modul
 			if !ok {
 				continue
 			}
+			// The std segment resolves from the compiler-provided
+			// registry, never the file system (chapter 15 R1): the
+			// module rides the graph like any dependency — provided
+			// before the importing — and an unknown path is E1302's
+			// std form (no expected-path clause: nothing maps it).
 			if imp.Path[0] == "std" {
-				return e.boundary("standard-library modules (chapter 15)")
+				key := strings.Join(imp.Path, ".")
+				if color[key] == black {
+					continue
+				}
+				stdFile, ok := typecheck.StdModule(key)
+				if !ok {
+					e.report(diag.Error("E1302", typecheck.StdModuleNotFound(key)).
+						At(path, imp.PathLine, imp.PathCol).
+						WithHelp(helpE1302))
+					return exitDiagnostic
+				}
+				if code := visit(key, key, stdFile); code != exitOK {
+					return code
+				}
+				continue
 			}
 			depKey := strings.Join(imp.Path, ".")
 			if color[depKey] == gray {

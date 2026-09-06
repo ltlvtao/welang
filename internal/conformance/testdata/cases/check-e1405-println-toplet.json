@@ -1,0 +1,20 @@
+{
+  "name": "check-e1405-println-toplet",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\nlet banner = io.println(\"boot\")\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:3:14: error[E1405]: effectful call in a top-level initializer \u2014 the initializer of \"banner\" calls \"println\", which performs effect \"io\"; move the work into main, or initialize from a pure computation over constants\n",
+  "files": {
+    "src/main.we": "import std.io\n\nlet banner = io.println(\"boot\")\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

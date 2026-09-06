@@ -1,0 +1,20 @@
+{
+  "name": "check-std-io-print-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect io {\n    io.print(\"x\")\n    io.println(\"y\")\n    return\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() effect io {\n    io.print(\"x\")\n    io.println(\"y\")\n    return\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

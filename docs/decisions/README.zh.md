@@ -6,3 +6,4 @@
 | --- | --- | --- |
 | [ADR-0001](ADR-0001-english-authoritative-bilingual-docs.zh.md) | docs/ 下英文权威的双语文档 | 已接受 |
 | [ADR-0002](ADR-0002-llvm-first-commercial-runtime.zh.md) | LLVM 优先编译与自建商用运行时 | 已接受 |
+| [ADR-0003](ADR-0003-gc-strategy.zh.md) | shadow-stack 根登记与 stop-the-world 精确标记清除 | 已接受 |

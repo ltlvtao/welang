@@ -1,0 +1,18 @@
+{
+  "name": "check-std-comb-any-all-find",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn work(xs: List<Int64>) -> Bool {\n    let hit = xs.iterator().any(|x| x > 1)\n    let all = xs.iterator().all(|x| x > 1)\n    let found = xs.iterator().find(|x| x > 1)\n    let _ = all\n    let _ = found\n    return hit\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn work(xs: List<Int64>) -> Bool {\n    let hit = xs.iterator().any(|x| x > 1)\n    let all = xs.iterator().all(|x| x > 1)\n    let found = xs.iterator().find(|x| x > 1)\n    let _ = all\n    let _ = found\n    return hit\n}\n"
+  }
+}

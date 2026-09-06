@@ -7,8 +7,10 @@
 #include <stdlib.h>
 
 int __we_main(void);
+void __we_gc_boot(void);
 
 int main(void) {
+    __we_gc_boot();
     return __we_main();
 }
 

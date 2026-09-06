@@ -1,0 +1,18 @@
+{
+  "name": "check-stdio-fn-value-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "import std.io\n\nfn work(f: fn(String) io -> ()) effect io {\n    f(\"x\")\n    return\n}\n\nfn caller() effect io {\n    work(io.println)\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "import std.io\n\nfn work(f: fn(String) io -> ()) effect io {\n    f(\"x\")\n    return\n}\n\nfn caller() effect io {\n    work(io.println)\n    return\n}\n"
+  }
+}

@@ -5,7 +5,9 @@
 // package-less directory keeps them invisible to it. `we build`
 // materializes them under build/ and compiles them with the pinned clang
 // (design D6 of the native-vertical change); the prebuilt-objects
-// distribution story arrives with packaging.
+// distribution story arrives with packaging. Since M8 the allocator pair
+// lives in gc.c (alloc.c's malloc pass-through retired — the ABI stayed,
+// the body became the collector's).
 package weruntime
 
 import _ "embed"
@@ -13,5 +15,8 @@ import _ "embed"
 //go:embed c/startup.c
 var StartupSource string
 
-//go:embed c/alloc.c
-var AllocSource string
+//go:embed c/gc.c
+var GCSource string
+
+//go:embed c/io.c
+var IOSource string

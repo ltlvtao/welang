@@ -1,0 +1,18 @@
+{
+  "name": "check-stdio-bare-qualifier",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn work() {\n    io.println(\"x\")\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:5: error[E1304]: unresolved name \u2014 the qualifier \"io\" of \"io.println\" is not an import name; qualify through an existing import name\n",
+  "files": {
+    "demo/main.we": "fn work() {\n    io.println(\"x\")\n    return\n}\n"
+  }
+}

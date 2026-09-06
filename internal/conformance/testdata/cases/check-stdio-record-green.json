@@ -1,0 +1,20 @@
+{
+  "name": "check-stdio-record-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub record Greeter { greeting: String }\n\npub fn main() effect io -> Result<(), AppError> {\n    let g = Greeter { greeting: \"hello\" }\n    io.println(g.greeting)\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub record Greeter { greeting: String }\n\npub fn main() effect io -> Result<(), AppError> {\n    let g = Greeter { greeting: \"hello\" }\n    io.println(g.greeting)\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

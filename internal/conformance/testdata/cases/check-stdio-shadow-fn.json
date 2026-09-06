@@ -1,0 +1,18 @@
+{
+  "name": "check-stdio-shadow-fn",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "import std.io\n\nfn io() {\n    return\n}\n\nfn work() {\n    io.println(\"x\")\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:3:4: error[E0404]: duplicate name in one module \u2014 \"io\" is already declared at line 1; one module has one name space\n",
+  "files": {
+    "demo/main.we": "import std.io\n\nfn io() {\n    return\n}\n\nfn work() {\n    io.println(\"x\")\n    return\n}\n"
+  }
+}

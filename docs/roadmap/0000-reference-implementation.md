@@ -21,7 +21,7 @@ This document is the single authority for reference-toolchain execution state: t
 | M6a | `generics-iterables-collections` | Chapter 10 interfaces and generics, chapter 11 iterables, the chapter 5 for statement, chapter 17 collections | done 2026-09-06 |
 | M6b | `modules-errors` | Chapter 13 resources, chapter 14 in full, chapter 15 module resolution in full | done 2026-09-06 |
 | M7 | `effects` | Chapter 16 effect declarations and effect checking | done 2026-09-06 |
-| M8 | `stdlib-and-gc` | `std.io` core; the runtime's precise GC design lands | pending |
+| M8 | `stdlib-and-gc` | `std.io` core; the runtime's precise GC design lands | done 2026-09-07 |
 | M9 | `concurrency` | Chapter 18 tasks, channels, scheduler, virtual clock | pending |
 | M10 | `testing` | Chapter 20 test runner, mocks, exploration | pending |
 | M11 | `fmt-vet-doc` | Chapter 21 formatter, vet, documentation generation | pending |

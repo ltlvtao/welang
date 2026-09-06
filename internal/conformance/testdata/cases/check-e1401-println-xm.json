@@ -1,0 +1,22 @@
+{
+  "name": "check-e1401-println-xm",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import b\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() {\n    b.say()\n    return\n}\n",
+      "src/b.we": "import std.io\n\npub fn say() effect io {\n    io.println(\"hello\")\n    return\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:10:5: error[E1401]: undeclared effect at a call \u2014 \"say\" performs effect \"io\" which \"work\" does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead\n",
+  "files": {
+    "src/main.we": "import b\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\nfn work() {\n    b.say()\n    return\n}\n",
+    "src/b.we": "import std.io\n\npub fn say() effect io {\n    io.println(\"hello\")\n    return\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

@@ -317,8 +317,10 @@ func TestNameResolution(t *testing.T) {
 	// Base type names may be shadowed by variants, and uses resolve to
 	// the module declaration.
 	wantOK(t, "type T = Int64\nlet x = Int64\n")
-	// Imports: std is not provided; single-file locals have no source root.
-	wantBnd(t, "import std\n\nfn f() { return }\n", bndStdModules)
+	// Imports: an unknown std path (the single-segment form included) is
+	// E1302's std form; single-file locals have no source root.
+	wantDiag(t, "import std\n\nfn f() { return }\n",
+		"E1302", `no standard-library module "std" exists in this build`, 1, 8)
 	wantDiag(t, "import util\n\nfn f() { return }\n",
 		"E1302", `"util" cannot resolve in single-file mode`, 1, 8)
 }
