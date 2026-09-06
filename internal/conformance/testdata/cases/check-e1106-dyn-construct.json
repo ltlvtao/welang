@@ -1,0 +1,18 @@
+{
+  "name": "check-e1106-dyn-construct",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    let f = openFile()\n    let d = Dyn<Releasable>(f)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:14:13: error[E1106]: resource type in a composite position \u2014 the construction Dyn<Releasable>(r) with a resource-typed argument is the box route; a resource is never boxed\n",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    let f = openFile()\n    let d = Dyn<Releasable>(f)\n}\n"
+  }
+}

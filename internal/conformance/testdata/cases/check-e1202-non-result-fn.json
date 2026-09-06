@@ -1,0 +1,18 @@
+{
+  "name": "check-e1202-non-result-fn",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\nfn plain() {\n    let v = g()?\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:8:16: error[E1202]: ? outside a function returning Result \u2014 the innermost enclosing function \"plain\" returns \"()\", not a Result; move the propagation into a function or closure whose return type is Result, or handle the value by match at this position\n",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\nfn plain() {\n    let v = g()?\n}\n"
+  }
+}

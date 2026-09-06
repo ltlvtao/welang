@@ -1,0 +1,18 @@
+{
+  "name": "check-e0204-defer-in-scope",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    scope resource(f = openFile()) {\n        defer {\n            let n = 1\n        }\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:14:9: error[E0204]: defer placement \u2014 defer is not a direct item of the function body's block; defer runs at function exit in reverse order and needs the single exit-point placement\n",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    scope resource(f = openFile()) {\n        defer {\n            let n = 1\n        }\n    }\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-m6a-impl-where-instantiation",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\n\nrecord User {\n    name: String\n}\n\nrecord Wrap<T> {\n    v: T\n}\n\nimpl<T> Describable for Wrap<T> where T: Eq {\n    fn describe(self) -> String {\n        return \"w\"\n    }\n}\n\nfn f(u: User) -> String {\n    let w = Wrap { v: u }\n    return w.describe()\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:20:13: error[E0830]: type argument does not satisfy a where bound \u2014 \"User\" implements no \"Eq\"; the where bound of the impl for \"Wrap<T>\" holds at every instantiation\n",
+  "files": {
+    "demo/main.we": "interface Describable {\n    fn describe(self) -> String\n}\n\nrecord User {\n    name: String\n}\n\nrecord Wrap<T> {\n    v: T\n}\n\nimpl<T> Describable for Wrap<T> where T: Eq {\n    fn describe(self) -> String {\n        return \"w\"\n    }\n}\n\nfn f(u: User) -> String {\n    let w = Wrap { v: u }\n    return w.describe()\n}\n"
+  }
+}

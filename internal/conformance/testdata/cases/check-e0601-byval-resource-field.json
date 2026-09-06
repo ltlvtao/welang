@@ -1,0 +1,18 @@
+{
+  "name": "check-e0601-byval-resource-field",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nbyval record Holder {\n    f: FileHandle\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:13:8: error[E0601]: value record field is not of the value category or a base type \u2014 the field \"f\" is \"FileHandle\", a byres record; a copy is only honest when everything in it is copyable by value\n",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nbyval record Holder {\n    f: FileHandle\n}\n"
+  }
+}

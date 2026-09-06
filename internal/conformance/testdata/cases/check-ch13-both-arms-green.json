@@ -1,0 +1,18 @@
+{
+  "name": "check-ch13-both-arms-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n\nfn use(c: Bool) {\n    let f = openFile()\n    if c {\n        take(f)\n    } else {\n        take(f)\n    }\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n\nfn use(c: Bool) {\n    let f = openFile()\n    if c {\n        take(f)\n    } else {\n        take(f)\n    }\n}\n"
+  }
+}

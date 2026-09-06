@@ -1,0 +1,18 @@
+{
+  "name": "check-ch14-panic-family-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn find(id: Int64) -> Int64 {\n    if id == 0 {\n        panic(\"no such id\")\n    } else {\n        id\n    }\n}\n\nfn parse(s: String) -> Int64 {\n    todo(\"parsing not written yet\")\n}\n\nfn check(n: Int64) {\n    assert(n > 0, \"n must be positive\")\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn find(id: Int64) -> Int64 {\n    if id == 0 {\n        panic(\"no such id\")\n    } else {\n        id\n    }\n}\n\nfn parse(s: String) -> Int64 {\n    todo(\"parsing not written yet\")\n}\n\nfn check(n: Int64) {\n    assert(n > 0, \"n must be positive\")\n    return\n}\n"
+  }
+}

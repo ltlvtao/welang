@@ -1,0 +1,18 @@
+{
+  "name": "check-ch14-short-closure-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\nfn make(s: String) -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\nfn apply(p: fn(String) -> Result<Int64, AppError>) -> Result<Int64, AppError> {\n    return p(\"x\")\n}\n\npub fn main() -> Result<(), AppError> {\n    let v = apply(|s: String| make(s)?)?\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\nfn make(s: String) -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\nfn apply(p: fn(String) -> Result<Int64, AppError>) -> Result<Int64, AppError> {\n    return p(\"x\")\n}\n\npub fn main() -> Result<(), AppError> {\n    let v = apply(|s: String| make(s)?)?\n    return Ok(())\n}\n"
+  }
+}

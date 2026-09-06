@@ -15,7 +15,9 @@ import (
 func TestRecordDeclarations(t *testing.T) {
 	wantOK(t, "record User { name: String, age: Int64 }\n")
 	wantOK(t, "byval record Point { x: Int64, y: Int64 }\n")
-	wantOK(t, "byres record Conn { host: String }\n")
+	// Since M6b a byres record owns its release: the fixture carries its
+	// impl (chapter 13's module-level completeness).
+	wantOK(t, "byres record Conn { host: String }\nimpl Releasable for Conn {\n    fn release(mut self) {\n        return\n    }\n}\n")
 	wantOK(t, "record Empty { }\n")
 	wantOK(t, "pub record P { x: Int64 }\n")
 	// Category honesty: a copy is only honest when everything in it is

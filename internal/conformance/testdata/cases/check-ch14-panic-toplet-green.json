@@ -1,0 +1,18 @@
+{
+  "name": "check-ch14-panic-toplet-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn boot(p: Bool) -> Int64 {\n    if p {\n        return 1\n    }\n    panic(\"no config\")\n}\n\nlet x = boot(true)\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn boot(p: Bool) -> Int64 {\n    if p {\n        return 1\n    }\n    panic(\"no config\")\n}\n\nlet x = boot(true)\n"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "build-bnd-multi-module",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import util\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "src/util.we": "pub fn helper() {\n    return\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: functions other than main in code generation are not implemented in this reference build yet\n"
+}

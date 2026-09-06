@@ -195,14 +195,15 @@ func dg(code, part string) outcome { return outcome{code: code, part: part} }
 func bd(what string) outcome       { return outcome{what: what} }
 
 const (
-	topStmtPart = "fits no top-level item production"
-	stmtPart    = "fits no statement production"
-	exprPart    = "cannot begin an expression"
-	scopeForms  = "chapter 13 and 18 (scope) forms"
-	effectForms = "chapter 16 (effects) forms"
-	concurForms = "chapter 18 (concurrency) forms"
-	ffiForms    = "chapter 19 (ffi) forms"
-	testForms   = "chapter 20 (testing) forms"
+	topStmtPart    = "fits no top-level item production"
+	stmtPart       = "fits no statement production"
+	exprPart       = "cannot begin an expression"
+	concScopeForms = "chapter 18 (scope) forms"
+	valPart        = "produces no value"
+	effectForms    = "chapter 16 (effects) forms"
+	concurForms    = "chapter 18 (concurrency) forms"
+	ffiForms       = "chapter 19 (ffi) forms"
+	testForms      = "chapter 20 (testing) forms"
 )
 
 // dispatchTable is design D6 verbatim: keyword, its completion text, and
@@ -245,7 +246,7 @@ var dispatchTable = []struct {
 	{"impl", "I {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"where", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"derives", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"scope", "x {}", dg("E0105", topStmtPart), bd(scopeForms), bd(scopeForms)},
+	{"scope", "x {}", dg("E0105", topStmtPart), bd(concScopeForms), dg("E0202", valPart)},
 	{"resource", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"effect", "io {}", bd(effectForms), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"task", "f() {}", dg("E0105", topStmtPart), bd(concurForms), bd(concurForms)},
@@ -458,9 +459,10 @@ func TestExpressions(t *testing.T) {
 			t.Errorf("%s: got %s, want %s", c.expr, got, c.want)
 		}
 	}
-	// `?` is chapter 14's; indexing is ratified never — a diagnostic, not
-	// a boundary.
-	wantBnd(t, "fn f() {\n    let y = x?\n}\n", "chapter 14 (errors) forms")
+	// `?` is chapter 14's propagation suffix since M6b — a level-1
+	// postfix node; indexing stays ratified never — a diagnostic, not a
+	// boundary.
+	wantClean(t, "fn f() {\n    let y = x?\n}\n")
 	wantDiag(t, "fn first(list: Int64) {\n    let first = list[0]\n}\n",
 		"E0105", `postfix is .name or (args)`, 2, 21)
 	// Tuple expressions, construction braces (chapter 8), and the two
@@ -704,8 +706,8 @@ func TestBoundaryForms(t *testing.T) {
 		src  string
 		what string
 	}{
-		{"fn f() {\n    scope x {}\n}\n", scopeForms},
-		{"fn f() {\n    let y = x?\n}\n", "chapter 14 (errors) forms"},
+		{"fn f() {\n    scope x {}\n}\n", concScopeForms},
+		{"fn f() {\n    scope timeout(1) {}\n}\n", concScopeForms},
 		{"effect io {}\n", effectForms},
 		{"fn f(x: Int64) effect io -> Int64 {\n    return x\n}\n", effectForms},
 		{"fn f() {\n    task g() {}\n}\n", concurForms},

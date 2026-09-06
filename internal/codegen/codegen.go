@@ -69,9 +69,10 @@ func Emit(f *ast.File, module string) (string, *NotImplemented) {
 			// never vanish.
 			continue
 		case *ast.Import:
-			// Unreachable: typecheck stops std/multi-module forms at its own
-			// boundary before code generation runs. Row 3 is the nearest
-			// honest line if that guarantee ever changes.
+			// A multi-module root reaches here now that chapter 15's loader
+			// type-checks the graph (M6b): Emit still takes one module, so
+			// any import item is an honest stop on the other-functions row
+			// — the emitted program is one module's main, imports included.
 			return "", &NotImplemented{What: bndOtherFns}
 		}
 	}

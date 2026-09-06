@@ -1,0 +1,16 @@
+{
+  "name": "build-bnd-m6b-main-body",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\nrecord Fetcher {\n    seed: Int64\n}\n\nimpl Fetcher {\n    fn fetch(self) -> Result<Int64, AppError> {\n        return Ok(self.seed)\n    }\n}\n\npub fn main() -> Result<(), AppError> {\n    let f = Fetcher { seed: 1 }\n    let v = f.fetch()?\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: main bodies beyond a single Ok or Err return statement are not implemented in this reference build yet\n"
+}

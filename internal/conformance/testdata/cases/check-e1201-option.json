@@ -1,0 +1,18 @@
+{
+  "name": "check-e1201-option",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Option<Int64> {\n    return None\n}\n\npub fn main() -> Result<(), AppError> {\n    let v = g()?\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:8:16: error[E1201]: operand of ? is not a Result type \u2014 the operand is \"Option<Int64>\" and Option does not propagate; match the value to take its payload\n",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Option<Int64> {\n    return None\n}\n\npub fn main() -> Result<(), AppError> {\n    let v = g()?\n    return Ok(())\n}\n"
+  }
+}

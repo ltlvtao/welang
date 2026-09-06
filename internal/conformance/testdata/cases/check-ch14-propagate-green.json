@@ -1,0 +1,18 @@
+{
+  "name": "check-ch14-propagate-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\npub fn main() -> Result<(), AppError> {\n    let a = g()?\n    let b = g()?\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\npub fn main() -> Result<(), AppError> {\n    let a = g()?\n    let b = g()?\n    return Ok(())\n}\n"
+  }
+}

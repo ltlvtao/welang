@@ -284,6 +284,9 @@ type Assign struct {
 	Field     string // empty on a plain name; the field of a self write
 	Value     Expr
 	Line, Col int // at the name (self on the field form)
+	// OpLine/OpCol sit at the `=` token — chapter 13's rebound diagnostic
+	// (E1105) anchors at the operator, not at the target name.
+	OpLine, OpCol int
 }
 
 // Return is `return` or `return expr` (chapter 6's function bodies).
@@ -333,6 +336,30 @@ type ForStmt struct {
 	Iter      Expr
 	Body      Block
 	Line, Col int // at for
+}
+
+// ScopeRes is `scope resource(name = expr, …) block` (chapter 13): each
+// head binding takes over a resource handle and releases it at block
+// exit. The binding carries no annotation slot — the head expression's
+// type is the binding's type — and the names bind for the block.
+type ScopeRes struct {
+	Binds     []ScopeBind
+	Body      Block
+	Line, Col int // at scope
+}
+
+// ScopeBind is one `name = expr` of a scope resource head.
+type ScopeBind struct {
+	Name      string
+	Val       Expr
+	Line, Col int // at the name
+}
+
+// Prop is the `?` propagation suffix (chapter 14): level-1 postfix, so it
+// chains with call and member access; the node anchors the `?` token.
+type Prop struct {
+	X         Expr
+	Line, Col int // at ?
 }
 
 // Expr is one expression of the chapter 2 skeleton.
@@ -514,9 +541,10 @@ type PatTuple struct {
 
 // PatVariant names a variant of the scrutinee's sum type, bare or with
 // payload sub-patterns; Qualified marks the module-qualified form
-// module.Name.
+// module.Name, with Qual carrying the module name.
 type PatVariant struct {
 	Qualified bool
+	Qual      string // the module qualifier of the qualified form
 	Name      string
 	Args      []Pattern
 	Line, Col int // at the variant name
@@ -579,6 +607,7 @@ func (b *Break) stmt()          {}
 func (c *Continue) stmt()       {}
 func (d *Defer) stmt()          {}
 func (f *ForStmt) stmt()        {}
+func (s *ScopeRes) stmt()       {}
 func (i *Ident) expr()          {}
 func (l *Literal) expr()        {}
 func (u *Unary) expr()          {}
@@ -593,6 +622,7 @@ func (c *Construct) expr()      {}
 func (t *Tuple) expr()          {}
 func (c *Closure) expr()        {}
 func (l *ListLit) expr()        {}
+func (p *Prop) expr()           {}
 func (l *PatLiteral) pattern()  {}
 func (w *PatWildcard) pattern() {}
 func (b *PatBinding) pattern()  {}

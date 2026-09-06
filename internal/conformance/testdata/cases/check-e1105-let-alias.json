@@ -1,0 +1,18 @@
+{
+  "name": "check-e1105-let-alias",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    let f = openFile()\n    let g = f\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:14:9: error[E1105]: resource binding rebound \u2014 \"g\" is a second handle to the resource of \"f\"; the one sanctioned move is a transfer, which hands over and kills the source\n",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    let f = openFile()\n    let g = f\n}\n"
+  }
+}

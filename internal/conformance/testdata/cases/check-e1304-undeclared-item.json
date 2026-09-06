@@ -1,0 +1,22 @@
+{
+  "name": "check-e1304-undeclared-item",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import b\n\npub fn main() -> Result<(), AppError> {\n    b.nosuch()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "src/b.we": "pub fn helper() {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:4:5: error[E1304]: unresolved name \u2014 the module \"b\" declares no \"nosuch\"; qualify through a declared pub item of the import\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import b\n\npub fn main() -> Result<(), AppError> {\n    b.nosuch()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "src/b.we": "pub fn helper() {\n    return\n}\n"
+  }
+}

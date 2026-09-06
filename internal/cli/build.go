@@ -164,7 +164,7 @@ func checkClangVersion(path string) error {
 // inspection. On success it returns the artifact path and prints the
 // success faces; a failure is already reported, with its exit code.
 func (e *env) buildProject(dir string) (string, int) {
-	file, name, code := e.loadProject(dir, true)
+	file, name, _, code := e.loadProject(dir, true)
 	if file == nil {
 		return "", code
 	}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e1202-defer",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\npub fn main() -> Result<(), AppError> {\n    defer {\n        let v = g()?\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:9:20: error[E1202]: ? outside a function returning Result \u2014 the propagation stands in a defer body, which runs at exit and has no return to propagate to; handle the value by match at this position\n",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Result<Int64, AppError> {\n    return Ok(1)\n}\n\npub fn main() -> Result<(), AppError> {\n    defer {\n        let v = g()?\n    }\n    return Ok(())\n}\n"
+  }
+}

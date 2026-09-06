@@ -1,0 +1,24 @@
+{
+  "name": "check-ch15-init-order-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import u1\nimport u2\n\npub fn main() -> Result<(), AppError> {\n    let x = u2.two()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n\nlet y = u2.two()\n",
+      "src/u1.we": "pub fn one() -> Int64 {\n    return 1\n}\n",
+      "src/u2.we": "import u1\n\npub fn two() -> Int64 {\n    return u1.one() + 1\n}\n\nlet base = u1.one()\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import u1\nimport u2\n\npub fn main() -> Result<(), AppError> {\n    let x = u2.two()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n\nlet y = u2.two()\n",
+    "src/u1.we": "pub fn one() -> Int64 {\n    return 1\n}\n",
+    "src/u2.we": "import u1\n\npub fn two() -> Int64 {\n    return u1.one() + 1\n}\n\nlet base = u1.one()\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-e1101-no-impl",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\n\nfn f() {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:1:14: error[E1101]: resource record must implement Releasable \u2014 \"FileHandle\" declares no impl of Releasable in its own module; add impl Releasable for FileHandle { fn release(mut self) { ... } } in the record's module, or declare a gc or value record if it owns no resource\n",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\n\nfn f() {\n    return\n}\n"
+  }
+}

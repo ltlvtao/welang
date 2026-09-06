@@ -1,0 +1,18 @@
+{
+  "name": "check-e1201-base",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Int64 {\n    return 1\n}\n\npub fn main() -> Result<(), AppError> {\n    let v = g()?\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:8:16: error[E1201]: operand of ? is not a Result type \u2014 the operand is \"Int64\"; only Result values propagate, an Option unwraps by match\n",
+  "files": {
+    "demo/main.we": "pub type AppError = Failed(String)\n\nfn g() -> Int64 {\n    return 1\n}\n\npub fn main() -> Result<(), AppError> {\n    let v = g()?\n    return Ok(())\n}\n"
+  }
+}

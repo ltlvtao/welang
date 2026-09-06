@@ -6,13 +6,13 @@
   ],
   "setup": {
     "files": {
-      "demo/main.we": "fn f() {\n    panic(\"boom\")\n}\n"
+      "demo/main.we": "fn die() -> Never {\n    panic(\"boom\")\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: termination functions (chapter 14) are not implemented in this reference build yet\n",
+  "stderr": "",
   "files": {
-    "demo/main.we": "fn f() {\n    panic(\"boom\")\n}\n"
+    "demo/main.we": "fn die() -> Never {\n    panic(\"boom\")\n}\n"
   }
 }

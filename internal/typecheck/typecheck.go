@@ -21,7 +21,6 @@ package typecheck
 import (
 	"fmt"
 	"math/big"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -49,14 +48,12 @@ type NotImplemented struct{ What string }
 // milestone deletes its rows; the two spec-gap rows carry their follow-up
 // registration.
 const (
-	bndTermination = "termination functions (chapter 14)"
-	bndShareable   = "Shareable markers (chapter 18)"
-	bndTaskTime    = "task-scope and time-control functions (chapters 18 and 20)"
-	bndStdModules  = "standard-library modules (chapter 15)"
-	bndMultiModule = "multi-module programs (chapter 15)"
-	bndDomainGap   = "arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)"
-	bndArityGap    = "calls with an argument count the callee does not declare (spec gap; roadmap follow-up)"
-	bndCalleeGap   = "calls on values that are not functions (spec gap; roadmap follow-up)"
+	bndShareable  = "Shareable markers (chapter 18)"
+	bndTaskTime   = "task-scope and time-control functions (chapters 18 and 20)"
+	bndStdModules = "standard-library modules (chapter 15)"
+	bndDomainGap  = "arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)"
+	bndArityGap   = "calls with an argument count the callee does not declare (spec gap; roadmap follow-up)"
+	bndCalleeGap  = "calls on values that are not functions (spec gap; roadmap follow-up)"
 	// The two residual M5 boundary rows: a module-level destructure stops
 	// at the composite boundary (module initialization order is the module
 	// system's, M6), and walkItems keeps the control-flow row as its
@@ -653,6 +650,57 @@ func substArgs(as, args []Type, assocs map[string]Type) []Type {
 	return out
 }
 
+// rebaseClause shifts a type's parameter references from one method-clause
+// metric space to another: every paramRef at or above from — a method-level
+// clause position, per the outer-then-method offset the clause scopes build
+// — moves by to-from. The method clause agreement compares an interface
+// method's substituted signature with the impl method's own, and the two
+// sides resolve their identical method clauses at different offsets (the
+// interface's after its own clause, the impl's after the impl's); the
+// rebase aligns them (design D10(b)).
+func rebaseClause(t Type, from, to int) Type {
+	if from == to {
+		return t
+	}
+	shift := to - from
+	switch x := t.(type) {
+	case paramRef:
+		if x.idx >= from {
+			return paramRef{idx: x.idx + shift, name: x.name}
+		}
+	case tupleType:
+		elems := make([]Type, len(x.elems))
+		for i, e := range x.elems {
+			elems[i] = rebaseClause(e, from, to)
+		}
+		return tupleType{elems: elems}
+	case fnType:
+		return fnType{params: rebaseClauseList(x.params, from, to), tags: x.tags, ret: rebaseClause(x.ret, from, to)}
+	case namedType:
+		return namedType{decl: x.decl, args: rebaseClauseList(x.args, from, to)}
+	case recordType:
+		return recordType{decl: x.decl, args: rebaseClauseList(x.args, from, to)}
+	case newtypeType:
+		return newtypeType{decl: x.decl, args: rebaseClauseList(x.args, from, to)}
+	case ifaceType:
+		return ifaceType{decl: x.decl, args: rebaseClauseList(x.args, from, to)}
+	case dynType:
+		return dynType{inf: x.inf, args: rebaseClauseList(x.args, from, to)}
+	}
+	return t
+}
+
+func rebaseClauseList(as []Type, from, to int) []Type {
+	if len(as) == 0 {
+		return nil
+	}
+	out := make([]Type, len(as))
+	for i, a := range as {
+		out[i] = rebaseClause(a, from, to)
+	}
+	return out
+}
+
 // substFn substitutes a callable view.
 func substFn(f fnType, args []Type, assocs map[string]Type) fnType {
 	return fnType{params: substArgs(f.params, args, assocs), tags: f.tags, ret: subst(f.ret, args, assocs)}
@@ -858,6 +906,18 @@ func (c *checker) resolveArgs(refs []ast.TypeRef, slot slotKind) []Type {
 	args := make([]Type, len(refs))
 	for i, r := range refs {
 		args[i] = c.resolveTypeRef(r, slot)
+		// Every explicit instantiation passes here — an fn's clause, a
+		// construction head, an interface clause — and chapter 13 holds
+		// them all: a resource in a type-argument position is the box
+		// route under another spelling (E1106, at the argument's own
+		// reference; an inferred application carries no reference to
+		// anchor and stays a ratified revision).
+		if catOf(args[i]) == "resource" {
+			line, col := refPos(r)
+			c.fail(line, col, "E1106", fmt.Sprintf(
+				"resource type in a composite position — %q appears as a generic argument at the instantiation; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type",
+				args[i].String()))
+		}
 	}
 	return args
 }
@@ -899,6 +959,8 @@ func builtinIface(name string) *ifaceInfo {
 		return iterableIface
 	case "Eq":
 		return eqIface
+	case "Releasable":
+		return releasableIface
 	case "Hash":
 		return hashIface
 	case "Show":
@@ -956,6 +1018,21 @@ func collectionSum(decl *sumInfo) bool {
 	return decl == listSum || decl == mapSum || decl == setSum
 }
 
+// terminationFnType reads the panic family's prelude signature (chapter
+// 14): panic and todo take one String and produce Never (chapter 9's
+// bottom type, satisfying any declared return), assert takes a Bool and a
+// String and produces the unit value. They are ordinary functions — a
+// user's same-named declaration wins in the module's name space (the
+// symbols resolve first), a call takes the ordinary fn-value path, and no
+// dedicated diagnostic exists for a missing message: the declaration
+// requires it, unauditable termination is the alternative.
+func terminationFnType(name string) fnType {
+	if name == "assert" {
+		return fnType{params: []Type{baseType("Bool"), baseType("String")}, ret: unitType{}}
+	}
+	return fnType{params: []Type{baseType("String")}, ret: neverType{}}
+}
+
 // The builtin interfaces (chapter 10's derive targets and chapter 11's
 // protocol): the derive targets are marker faces whose methods derives
 // clauses generate; Iterator and Iterable register their declared shape.
@@ -969,9 +1046,18 @@ var (
 
 	iteratorIface = &ifaceInfo{name: "Iterator", params: []string{"T"}}
 	iterableIface = &ifaceInfo{name: "Iterable", params: []string{"T"}}
+
+	// Releasable is chapter 13's release protocol: every byres record
+	// owns its release and implements it (E1101/E1102 hold the category
+	// discipline; E0808 anchors the signature through the ordinary
+	// interface machinery).
+	releasableIface = &ifaceInfo{name: "Releasable"}
 )
 
 func init() {
+	// Releasable (chapter 13): fn release(mut self) — valueless, the one
+	// method every byres record's impl defines.
+	releasableIface.methods = []ifaceMethod{{name: "release", recvMut: true}}
 	// Iterator<T>: fn next(mut self) -> Option<T> — the protocol's one
 	// non-defaulted method — plus the eleven combinator defaults
 	// (chapter 11's Iterator combinators requirement): four lazy — each
@@ -1209,6 +1295,12 @@ type symbol struct {
 	nt      *newtypeInfo
 	iface   *ifaceInfo
 	vi      int // variant index into sum
+	// mod is the import's canonical module key (symImport alone): the
+	// dotted path the loader resolved the import to.
+	mod string
+	// pub is the declaration's pub bit (chapter 15): cross-module reach
+	// is exactly the qualified form, and only for pub items (E1303).
+	pub bool
 }
 
 // --- the checker -------------------------------------------------------------
@@ -1245,6 +1337,36 @@ type checker struct {
 	// the outer closure's too).
 	closures      []map[string]captureInfo
 	closureBounds []int
+	// resLets records each let's resource category as the walk types it
+	// (chapter 13): the liveness pass (resource.go) reads the facts back
+	// when it re-walks a typed-clean body.
+	resLets map[*ast.Binding]bool
+	// prop is the live propagation context (chapter 14, design D7): the
+	// innermost enclosing function body's identity and declared return.
+	// Every body entry (fn, method, closure) swaps it; a defer body walk
+	// swaps in the no-return context. Never nil after Check's
+	// initialization — the zero value is the module top level.
+	prop *propCtx
+	// modules holds every ingested module's namespace keyed by its
+	// canonical dotted path (chapter 15, design D9): syms is the live
+	// module's own bucket — one namespace per module is E1303's judgment
+	// base. isRoot gates the main convention to the root module alone.
+	modules map[string]map[string]*symbol
+	isRoot  bool
+}
+
+// propCtx is the propagation context of one body (chapter 14, design D7):
+// which function the innermost enclosing body belongs to, its declared
+// return, and the two positions that carry no return — a defer body and
+// the module top level (E1202's shapes). A short closure is the one
+// inferring context: its `?`s fix the closure's value type from the
+// operands, agreeing on one error type.
+type propCtx struct {
+	fnName    string // "" at the module top level; "(closure)" in a closure
+	ret       Type   // the body's declared return; nil = valueless
+	deferBody bool   // a defer body: it runs at exit, no return to reach
+	short     bool   // a short closure's body: `?` fixes the value type
+	shortErr  Type   // the first `?`'s error type — every later `?` agrees
 }
 
 // captureInfo is one ledger entry: the captured binding's ownership
@@ -1259,29 +1381,91 @@ type captureInfo struct {
 // Check runs the type stage over one parsed module. It returns the first
 // diagnostic, or a NotImplemented boundary, or both nil on a clean check.
 func Check(f *ast.File, file string, mode Mode) (d *diag.Diagnostic, ni *NotImplemented) {
-	c := &checker{
-		file:       file,
+	c := newChecker(mode)
+	defer stopTo(&d, &ni)
+	c.ingest(f, file, "main", true)
+	return nil, nil
+}
+
+// Module is one imported module of a project's graph (chapter 15): the
+// loader resolved it, read it, parsed it, and ordered it — Key is the
+// canonical dotted path, Path the file the diagnostics anchor against.
+type Module struct {
+	Key  string
+	Path string
+	File *ast.File
+}
+
+// CheckProject runs the type stage over a multi-module project (design
+// D9): the dependency modules first, in the loader's post-order (the
+// imported check before the importing — the deterministic initialization
+// order), then the root module, whose main convention binds it alone.
+// A diagnostic in any module stops the whole check (the first error
+// wins, whatever module holds it).
+func CheckProject(root *ast.File, rootPath string, deps []Module) (d *diag.Diagnostic, ni *NotImplemented) {
+	c := newChecker(Project)
+	defer stopTo(&d, &ni)
+	for _, m := range deps {
+		c.ingest(m.File, m.Path, m.Key, false)
+	}
+	c.ingest(root, rootPath, "main", true)
+	return nil, nil
+}
+
+// newChecker builds one checker over a single-module check. The maps the
+// declaration passes fill are AST-keyed (safe across every module one
+// checker ingests); the namespace is per-module — ingest swaps it.
+func newChecker(mode Mode) *checker {
+	return &checker{
 		mode:       mode,
 		syms:       map[string]*symbol{},
+		modules:    map[string]map[string]*symbol{},
+		isRoot:     true,
 		fnParams:   map[*ast.FnDecl][]Type{},
 		fnRets:     map[*ast.FnDecl]Type{},
 		fnWheres:   map[*ast.FnDecl]*whereInfo{},
 		implWheres: map[*ast.ImplDecl]*whereInfo{},
+		resLets:    map[*ast.Binding]bool{},
+		prop:       &propCtx{},
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			switch s := r.(type) {
-			case stop:
-				d, ni = &s.d, nil
-			case bstop:
-				d, ni = nil, &NotImplemented{What: s.what}
-			default:
-				panic(r)
-			}
+}
+
+// stopTo catches the checker's panic-based stop (fail and bnd panic out
+// of whatever depth the walk sits at), landing the diagnostic or
+// boundary in the entry's named returns; anything else re-panics.
+func stopTo(d **diag.Diagnostic, ni **NotImplemented) {
+	if r := recover(); r != nil {
+		switch s := r.(type) {
+		case stop:
+			*d, *ni = &s.d, nil
+		case bstop:
+			*d, *ni = nil, &NotImplemented{What: s.what}
+		default:
+			panic(r)
 		}
-	}()
+	}
+}
+
+// ingest checks one module of the graph under its own namespace: the
+// bucket registers under the canonical key (the qualified-form resolution
+// reads it back), the file swaps for the module's own anchors, and the
+// declaration passes run over its tree. Per-body state resets between
+// modules — the walks are symmetric, but the reset keeps one module's
+// walk tail from ever bleeding into the next.
+func (c *checker) ingest(f *ast.File, file, key string, root bool) {
+	c.file = file
+	c.isRoot = root
+	c.syms = map[string]*symbol{}
+	c.modules[key] = c.syms
+	c.locals = nil
+	c.typeScope = nil
+	c.fnRet = nil
+	c.fnBounds = nil
+	c.recvMut = false
+	c.closures = nil
+	c.closureBounds = nil
+	c.prop = &propCtx{}
 	c.checkModule(f)
-	return nil, nil
 }
 
 func (c *checker) fail(line, col int, code, message string) {
@@ -1323,12 +1507,12 @@ func (c *checker) checkModule(f *ast.File) {
 			if name == "" {
 				name = x.Path[len(x.Path)-1]
 			}
-			c.syms[name] = &symbol{kind: symImport}
+			c.syms[name] = &symbol{kind: symImport, mod: strings.Join(x.Path, ".")}
 		case *ast.FnDecl:
-			c.syms[x.Name] = &symbol{kind: symFn, fn: x}
+			c.syms[x.Name] = &symbol{kind: symFn, fn: x, pub: x.Pub}
 		case *ast.TopLet:
 			if x.Binding.Name != "_" {
-				c.syms[x.Binding.Name] = &symbol{kind: symLet}
+				c.syms[x.Binding.Name] = &symbol{kind: symLet, pub: x.Pub}
 			}
 		case *ast.SumDecl:
 			sum := &sumInfo{
@@ -1340,9 +1524,9 @@ func (c *checker) checkModule(f *ast.File) {
 			for _, v := range x.Variants {
 				sum.variants = append(sum.variants, variantInfo{name: v.Name})
 			}
-			c.syms[x.Name] = &symbol{kind: symType, sum: sum}
+			c.syms[x.Name] = &symbol{kind: symType, sum: sum, pub: x.Pub}
 			for i, v := range x.Variants {
-				c.syms[v.Name] = &symbol{kind: symVariant, sum: sum, vi: i}
+				c.syms[v.Name] = &symbol{kind: symVariant, sum: sum, vi: i, pub: x.Pub}
 			}
 		case *ast.RecordDecl:
 			c.syms[x.Name] = &symbol{kind: symRecord, rec: &recordInfo{
@@ -1350,19 +1534,19 @@ func (c *checker) checkModule(f *ast.File) {
 				cat:     x.Cat,
 				params:  typeParamNames(x.TypeParams),
 				derives: deriveTargetNames(x.Derives),
-			}}
+			}, pub: x.Pub}
 		case *ast.NewtypeDecl:
 			c.syms[x.Name] = &symbol{kind: symNewtype, nt: &newtypeInfo{
 				name:    x.Name,
 				params:  typeParamNames(x.TypeParams),
 				derives: deriveTargetNames(x.Derives),
-			}}
+			}, pub: x.Pub}
 		case *ast.InterfaceDecl:
 			inf := &ifaceInfo{name: x.Name, params: typeParamNames(x.TypeParams)}
 			for _, a := range x.Assocs {
 				inf.assocs = append(inf.assocs, a.Name)
 			}
-			c.syms[x.Name] = &symbol{kind: symIface, iface: inf}
+			c.syms[x.Name] = &symbol{kind: symIface, iface: inf, pub: x.Pub}
 		case *ast.ImplDecl:
 			implDecls = append(implDecls, x)
 		}
@@ -1374,7 +1558,7 @@ func (c *checker) checkModule(f *ast.File) {
 		}
 	}
 	// The main convention binds the root module alone.
-	if c.mode == Project {
+	if c.mode == Project && c.isRoot {
 		c.checkMain(f)
 	}
 	// Pass 2a: resolve every declaration's types under its own clause —
@@ -1401,6 +1585,15 @@ func (c *checker) checkModule(f *ast.File) {
 							"value sum payload is not of the value category or a base type — the payload of %q is %q, a %s; a copy is only honest when everything in it is copyable by value",
 							v.Name, pt.String(), catNoun(pt)))
 					}
+					// A gc sum's payloads face chapter 13's composite ban —
+					// a payload slot would share the one handle (E1106, at
+					// the payload's own reference).
+					if !sum.byval && catOf(pt) == "resource" {
+						line, col := refPos(tr)
+						c.fail(line, col, "E1106", fmt.Sprintf(
+							"resource type in a composite position — %q appears as a sum payload; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type",
+							pt.String()))
+					}
 					payloads = append(payloads, pt)
 					l, co := refPos(tr)
 					pos = append(pos, [2]int{l, co})
@@ -1424,6 +1617,16 @@ func (c *checker) checkModule(f *ast.File) {
 						"value record field is not of the value category or a base type — the field %q is %q, a %s; a copy is only honest when everything in it is copyable by value",
 						f.Name, ft.String(), catNoun(ft)))
 				}
+				// A gc record's fields face chapter 13's composite ban — a
+				// field slot would share the one handle (E1106, at the
+				// field's own reference; the byres category owns nested
+				// resources and stays outside the ban, the byval one is
+				// E0601's own rejection above).
+				if rec.cat == "gc" && catOf(ft) == "resource" {
+					c.fail(fline, fcol, "E1106", fmt.Sprintf(
+						"resource type in a composite position — %q appears as a gc record field; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type",
+						ft.String()))
+				}
 				rec.fields = append(rec.fields, fieldInfo{name: f.Name, typ: ft, line: fline, col: fcol})
 			}
 			c.checkRecordDerives(x, rec)
@@ -1433,6 +1636,14 @@ func (c *checker) checkModule(f *ast.File) {
 			c.pushTypes(paramScope(nt.params))
 			nt.underlying = c.resolveTypeRef(x.Underlying, slotAnn)
 			nt.underLine, nt.underCol = refPos(x.Underlying)
+			// A newtype wraps a value; the underlying slot faces chapter
+			// 13's composite ban — a wrapped resource shares the one handle
+			// (E1106, at the underlying reference).
+			if catOf(nt.underlying) == "resource" {
+				c.fail(nt.underLine, nt.underCol, "E1106", fmt.Sprintf(
+					"resource type in a composite position — %q appears as a newtype's underlying type; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type",
+					nt.underlying.String()))
+			}
 			c.checkNewtypeDerives(x, nt)
 			c.popTypes()
 		case *ast.FnDecl:
@@ -1468,6 +1679,20 @@ func (c *checker) checkModule(f *ast.File) {
 	for _, it := range f.Items {
 		if x, ok := it.(*ast.TopLet); ok {
 			t := c.checkBinding(&x.Binding)
+			if catOf(t) == "resource" {
+				// The module top level binds no resource (chapter 13): no
+				// channel exists outside function bodies, so no path could
+				// transfer it (E1104, at the let itself; the var spelling,
+				// if the grammar ever grows it here, is E1105's shape).
+				if x.Binding.Kw == "var" {
+					c.fail(x.Line, x.Col, "E1105", fmt.Sprintf(
+						"resource binding rebound — %q is declared var and rebindable; a resource binding is let-shaped, and the one sanctioned move is a transfer",
+						x.Binding.Name))
+				}
+				c.fail(x.Line, x.Col, "E1104", fmt.Sprintf(
+					"resource binding outside its release discipline — %q is bound at the module top level, where no channel exists outside function bodies; move the binding into a function body and transfer it there",
+					x.Binding.Name))
+			}
 			if x.Binding.Name != "_" {
 				c.syms[x.Binding.Name].letType = t
 			}
@@ -1483,29 +1708,176 @@ func (c *checker) checkModule(f *ast.File) {
 			c.checkImplBodies(x)
 		}
 	}
+	// Chapter 13's module-level completeness, at the true module tail:
+	// every byres record owns its release — an impl later in the file
+	// than its record satisfies the obligation (every impl has registered
+	// by now), and only an impl in the record's own module counts. The
+	// judgment runs after the bodies so a use-site diagnostic (E0606's
+	// update, E1002's capture) reports ahead of the declaration's missing
+	// impl (E1101, at the record's name token).
+	for _, it := range f.Items {
+		rd, ok := it.(*ast.RecordDecl)
+		if !ok || rd.Cat != "resource" {
+			continue
+		}
+		rec := c.syms[rd.Name].rec
+		released := false
+		for _, im := range c.impls {
+			if im.iface != releasableIface {
+				continue
+			}
+			if rt, ok := im.head.(recordType); ok && rt.decl == rec {
+				released = true
+				break
+			}
+		}
+		if !released {
+			c.fail(rd.NameLine, rd.NameCol, "E1101", fmt.Sprintf(
+				"resource record must implement Releasable — %q declares no impl of Releasable in its own module; add impl Releasable for %s { fn release(mut self) { ... } } in the record's module, or declare a gc or value record if it owns no resource",
+				rd.Name, rd.Name))
+		}
+	}
 }
 
-// checkImport applies the import dispositions (design D10): std is not
-// provided; a project expects a local module at src/<path>.we and, when
-// present, multi-module programs stop at their boundary; single-file mode
-// has no source root at all.
+// checkImport applies the import dispositions: std is not provided (M8);
+// in project mode the loader walked the graph — E1301 and E1302 are its
+// faces, and every import's target sits in the module buckets already;
+// single-file mode has no source root at all.
 func (c *checker) checkImport(imp *ast.Import) {
-	joined := strings.Join(imp.Path, ".")
 	if imp.Path[0] == "std" {
 		c.bnd(bndStdModules)
 	}
-	rel := filepath.Join(imp.Path...) + ".we"
 	if c.mode == SingleFile {
+		rel := filepath.Join(imp.Path...) + ".we"
 		c.fail(imp.PathLine, imp.PathCol, "E1302", fmt.Sprintf(
 			"module not found — %q cannot resolve in single-file mode: no source root exists (a project would expect it at src/%s); run we check against the project directory",
-			joined, rel))
+			strings.Join(imp.Path, "."), rel))
 	}
-	if _, err := os.Stat(filepath.Join("src", rel)); err != nil {
-		c.fail(imp.PathLine, imp.PathCol, "E1302", fmt.Sprintf(
-			"module not found — the import %q expects the module at src/%s and no file is there; create the file at the expected path, fix the path spelling, or add the dependency to the cache",
-			joined, rel))
+}
+
+// --- chapter 15: cross-module resolution -----------------------------------
+
+// importSym resolves one qualified item through an import's target module
+// (chapter 15): the item must be declared in the target and pub — a
+// declared non-pub item is E1303's shape, an undeclared one E1304's. The
+// anchor is the qualified name's first token, whatever position holds it.
+func (c *checker) importSym(mod, item string, line, col int) *symbol {
+	bucket := c.modules[mod]
+	sym, ok := bucket[item]
+	if !ok {
+		c.fail(line, col, "E1304", fmt.Sprintf(
+			"unresolved name — the module %q declares no %q; qualify through a declared pub item of the import",
+			mod, item))
 	}
-	c.bnd(bndMultiModule)
+	if !sym.pub {
+		c.fail(line, col, "E1303", fmt.Sprintf(
+			"cross-module use of a module-local item — %q is declared in %q without pub; cross-module reach is exactly the qualified form name.item through an import, and only for pub items",
+			item, mod))
+	}
+	return sym
+}
+
+// importTypeRef resolves a qualified type reference (b.Point) through the
+// import's bucket: the pub gate first, then the ordinary named-resolution
+// kinds — the target's declaration nodes drive the same machinery a local
+// reference uses (the AST-keyed maps every module's pass filled).
+func (c *checker) importTypeRef(mod string, x *ast.NamedType, slot slotKind) Type {
+	sym := c.importSym(mod, x.Name, x.Line, x.Col)
+	switch sym.kind {
+	case symType:
+		c.checkArity(x, sym.sum.name, sym.sum.params)
+		return namedType{decl: sym.sum, args: c.resolveArgs(x.Args, slotGeneric)}
+	case symRecord:
+		c.checkArity(x, sym.rec.name, sym.rec.params)
+		return recordType{decl: sym.rec, args: c.resolveArgs(x.Args, slotGeneric)}
+	case symNewtype:
+		c.checkArity(x, sym.nt.name, sym.nt.params)
+		return newtypeType{decl: sym.nt, args: c.resolveArgs(x.Args, slotGeneric)}
+	case symIface:
+		c.checkArity(x, sym.iface.name, sym.iface.params)
+		args := c.resolveArgs(x.Args, slotGeneric)
+		c.valueSlotIface(x, args)
+		return ifaceType{decl: sym.iface, args: args}
+	default:
+		// a value name held by the target module fills no type slot
+		c.fail(x.Line, x.Col, "E1304", bareUnresolved(x.Name))
+	}
+	panic("unreachable import type")
+}
+
+// importIface resolves a qualified interface reference (a where bound, a
+// Dyn argument, an impl clause) through the import's bucket: the pub gate
+// first, then the interface kind — a non-interface lands in the caller's
+// own voice (each position names one in its own code).
+func (c *checker) importIface(mod string, nt *ast.NamedType, code, notIface string) ifaceType {
+	sym := c.importSym(mod, nt.Name, nt.Line, nt.Col)
+	if sym.kind != symIface {
+		c.fail(nt.Line, nt.Col, code, notIface)
+	}
+	c.checkArity(nt, sym.iface.name, sym.iface.params)
+	return ifaceType{decl: sym.iface, args: c.resolveArgs(nt.Args, slotGeneric)}
+}
+
+// importMember types one qualified value reference (b.helper) outside a
+// call head: the pub gate first (anchored at the receiver's first token,
+// the qualified name's start), then the value kinds. A generic fn's
+// qualified name is a family like its bare name is (chapter 12) — only
+// the call head determines it.
+func (c *checker) importMember(mod string, id *ast.Ident, x *ast.Member) Type {
+	sym := c.importSym(mod, x.Name, id.Line, id.Col)
+	switch sym.kind {
+	case symFn:
+		if len(sym.fn.TypeParams) > 0 {
+			c.fail(x.NameLine, x.NameCol, "E1004", fmt.Sprintf(
+				"generic function name in value position — %q is a family of functions, not one function; call it or wrap it: |x| %s(x)",
+				x.Name, x.Name))
+		}
+		ret := Type(unitType{})
+		if r, has := c.fnRets[sym.fn]; has {
+			ret = r
+		}
+		return fnType{params: c.fnParams[sym.fn], ret: ret}
+	case symLet:
+		return sym.letType
+	case symVariant:
+		return c.variantType(sym.sum, sym.vi, x.NameLine, x.NameCol, x.Name)
+	}
+	// type names carry no value
+	c.fail(x.NameLine, x.NameCol, "E1304", bareUnresolved(x.Name))
+	panic("unreachable import member")
+}
+
+// importCall types one qualified call head (b.helper(…), b.NotFound(…)):
+// the pub gate first, then the symbol-kind dispatch a bare call head
+// takes — a generic fn's determination and a variant's payload check ride
+// the same machinery.
+func (c *checker) importCall(mod string, x *ast.Call) Type {
+	m := x.Fn.(*ast.Member)
+	sym := c.importSym(mod, m.Name, m.Recv.(*ast.Ident).Line, m.Recv.(*ast.Ident).Col)
+	switch sym.kind {
+	case symFn:
+		return c.fnCall(sym.fn, x)
+	case symVariant:
+		return c.ctorCall(sym.sum, sym.vi, x)
+	case symNewtype:
+		return c.newtypeCall(sym.nt, x)
+	}
+	c.bnd(bndCalleeGap)
+	panic("unreachable import call")
+}
+
+// importQualifier reports the canonical module key when name is an import
+// of the live module and no local binding shadows it — the one shape a
+// qualified reference resolves cross-module through.
+func (c *checker) importQualifier(name string) (string, bool) {
+	if _, shadowed := c.lookupLocal(name); shadowed {
+		return "", false
+	}
+	sym, ok := c.syms[name]
+	if !ok || sym.kind != symImport {
+		return "", false
+	}
+	return sym.mod, true
 }
 
 // checkMain enforces the main convention (design D12's chain): the root
@@ -1605,7 +1977,7 @@ func (c *checker) checkIfaceBodies(x *ast.InterfaceDecl) {
 		self := ifaceType{decl: inf, args: clauseArgs(inf.params)}
 		c.pushTypes(ifaceScope(inf))
 		c.pushTypes(paramScopeOffset(x.Methods[i].TypeParams, len(inf.params)))
-		c.checkMethodBody(x.Methods[i].Params, im.params, im.body, im.ret, self, im.recvMut)
+		c.checkMethodBody(im.name, x.Methods[i].Params, im.params, im.body, im.ret, self, im.recvMut)
 		c.popTypes()
 		c.popTypes()
 	}
@@ -1615,9 +1987,11 @@ func (c *checker) checkIfaceBodies(x *ast.InterfaceDecl) {
 // with no self): the parameters scope their names, self joins them, and
 // recvMut marks the receiver form — the one legal field-write context
 // (E0813).
-func (c *checker) checkMethodBody(params []ast.Param, types []Type, body *ast.Block, ret Type, self Type, mutRecv bool) {
-	savedRet, savedLocals, savedRecv := c.fnRet, c.locals, c.recvMut
+func (c *checker) checkMethodBody(name string, params []ast.Param, types []Type, body *ast.Block, ret Type, self Type, mutRecv bool) {
+	savedRet, savedLocals, savedRecv, savedProp := c.fnRet, c.locals, c.recvMut, c.prop
 	c.fnRet, c.recvMut = ret, mutRecv
+	// The method's own propagation context (chapter 14), as a fn's.
+	c.prop = &propCtx{fnName: name, ret: ret}
 	c.locals = []map[string]Type{{}}
 	if self != nil {
 		c.locals[0]["self"] = self
@@ -1632,7 +2006,11 @@ func (c *checker) checkMethodBody(params []ast.Param, types []Type, body *ast.Bl
 			"mixed types — the body produces (), the declared return is %s; no coercion is ever inserted",
 			ret.String()))
 	}
-	c.fnRet, c.locals, c.recvMut = savedRet, savedLocals, savedRecv
+	// Chapter 13's release discipline over the typed-clean method body
+	// (self stays outside it: the receiver is the mechanism's position,
+	// not an owned handle).
+	c.resCheck(body.Items, params, types)
+	c.fnRet, c.locals, c.recvMut, c.prop = savedRet, savedLocals, savedRecv, savedProp
 }
 
 // resolvedMethod carries one impl method's resolved signature (the body
@@ -1706,6 +2084,15 @@ func (c *checker) checkImplDecl(x *ast.ImplDecl) {
 		c.fail(x.Line, x.Col, "E0822", fmt.Sprintf(
 			"manual impl of a builtin derive target — %q is a builtin derive target; its methods are generated by the derives clause, never hand-written",
 			inf.name))
+	}
+
+	// Releasable belongs to resource heads only (chapter 13): the impl
+	// hands the record its release, so a gc or value head has nothing to
+	// release (E1102, at the impl head).
+	if inf == releasableIface && catOf(head) != "resource" {
+		c.fail(x.Line, x.Col, "E1102", fmt.Sprintf(
+			"Releasable implemented by a non-resource type — %q is not a byres record; remove the impl, or declare the head type as a byres record so it owns its release",
+			headName))
 	}
 
 	// Uniqueness (E0809): one interface at most once for one head. A
@@ -1843,7 +2230,7 @@ func (c *checker) checkImplDecl(x *ast.ImplDecl) {
 		m := &methods[i]
 		if inf != nil {
 			if im := findIfaceMethod(inf, m.fd.Name); im != nil {
-				c.checkImplMethodSig(m, im, inf, ifaceArgs, assocs)
+				c.checkImplMethodSig(m, im, inf, ifaceArgs, assocs, len(params))
 			}
 		}
 		if m.mut && catOf(head) == "value" {
@@ -1958,9 +2345,12 @@ func (c *checker) checkMethodClause(fd *ast.FnDecl, im *ifaceMethod, inf *ifaceI
 // checkImplMethodSig holds one method's agreement with its interface
 // method (E0808, design D3's order): the receiver, the parameter count and
 // types, and the return. The interface's signature arrives substituted
-// with the impl's interface arguments and associated bindings; every
-// anchor is the method name.
-func (c *checker) checkImplMethodSig(m *resolvedMethod, im *ifaceMethod, inf *ifaceInfo, ifaceArgs []Type, assocs map[string]Type) {
+// with the impl's interface arguments and associated bindings, its
+// method-clause positions rebased onto the impl method's own offset (the
+// identical method clauses resolve at different offsets — the interface's
+// after the interface's clause, the impl's after the impl's, design
+// D10(b)); every anchor is the method name.
+func (c *checker) checkImplMethodSig(m *resolvedMethod, im *ifaceMethod, inf *ifaceInfo, ifaceArgs []Type, assocs map[string]Type, clause int) {
 	nl, nc := m.fd.NameLine, m.fd.NameCol
 	recvStr := func(mut bool) string {
 		if mut {
@@ -1979,14 +2369,14 @@ func (c *checker) checkImplMethodSig(m *resolvedMethod, im *ifaceMethod, inf *if
 			m.fd.Name, len(m.params), len(im.params), inf.name))
 	}
 	for i := range im.params {
-		want := subst(im.params[i], ifaceArgs, assocs)
+		want := rebaseClause(subst(im.params[i], ifaceArgs, assocs), len(inf.params), clause)
 		if !sameType(m.params[i], want) {
 			c.fail(nl, nc, "E0808", fmt.Sprintf(
 				"impl method signature mismatches the interface method — the parameter %q of %q is %s in the impl and %s in %q; signatures match exactly",
 				m.fd.Params[i].Name, m.fd.Name, m.params[i].String(), want.String(), inf.name))
 		}
 	}
-	iRet := subst(im.ret, ifaceArgs, assocs)
+	iRet := rebaseClause(subst(im.ret, ifaceArgs, assocs), len(inf.params), clause)
 	switch {
 	case m.ret != nil && iRet == nil:
 		c.fail(nl, nc, "E0808", fmt.Sprintf(
@@ -2030,6 +2420,10 @@ func (c *checker) resolveIfaceRef(tr ast.TypeRef) ifaceType {
 			"unresolved name — the impl clause names no declared interface; the impl clause resolves a declared interface of this or an imported module")
 	}
 	if nt.Qual != "" {
+		if mod, is := c.importQualifier(nt.Qual); is {
+			return c.importIface(mod, nt, "E1304",
+				fmt.Sprintf("unresolved name — %q names no declared interface; the impl clause resolves a declared interface of this or an imported module", nt.Name))
+		}
 		c.fail(nt.Line, nt.Col, "E1304", fmt.Sprintf(
 			"unresolved name — the qualifier %q of %q is not an import name; qualify through an existing import name",
 			nt.Qual, nt.Qual+"."+nt.Name))
@@ -2085,7 +2479,7 @@ func (c *checker) checkImplBodies(x *ast.ImplDecl) {
 	c.fnBounds = c.implWheres[x]
 	for _, fd := range x.Methods {
 		c.pushTypes(paramScopeOffset(fd.TypeParams, len(params)))
-		c.checkMethodBody(fd.Params, c.fnParams[fd], &fd.Body, c.fnRets[fd], info.head, fd.Recv == ast.RecvMutSelf)
+		c.checkMethodBody(fd.Name, fd.Params, c.fnParams[fd], &fd.Body, c.fnRets[fd], info.head, fd.Recv == ast.RecvMutSelf)
 		c.popTypes()
 	}
 	c.fnBounds = savedBounds
@@ -2178,8 +2572,8 @@ func (c *checker) checkWhereDecl(params []string, wheres []*ast.WhereBound) *whe
 // slot's E0821).
 func (c *checker) boundIface(nt *ast.NamedType) ifaceType {
 	if nt.Qual != "" {
-		if sym, is := c.syms[nt.Qual]; is && sym.kind == symImport {
-			c.bnd(bndMultiModule)
+		if mod, is := c.importQualifier(nt.Qual); is {
+			return c.importIface(mod, nt, "E0829", notAnIface(nt.Name))
 		}
 		full := nt.Qual + "." + nt.Name
 		c.fail(nt.Line, nt.Col, "E1304", fmt.Sprintf(
@@ -2379,6 +2773,15 @@ func (c *checker) resolveTypeRef(tr ast.TypeRef, slot slotKind) Type {
 		elems := make([]Type, len(x.Elems))
 		for i, e := range x.Elems {
 			elems[i] = c.resolveTypeRef(e, slotAnn)
+			// Chapter 13's composite-position ban: a tuple element is a
+			// composite slot — a value there would share the one handle
+			// (E1106, at the element's own reference).
+			if catOf(elems[i]) == "resource" {
+				line, col := refPos(e)
+				c.fail(line, col, "E1106", fmt.Sprintf(
+					"resource type in a composite position — %q appears as a tuple element; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type",
+					elems[i].String()))
+			}
 		}
 		return tupleType{elems: elems}
 	case *ast.FnType:
@@ -2399,6 +2802,9 @@ func (c *checker) resolveTypeRef(tr ast.TypeRef, slot slotKind) Type {
 // reads the same bare and qualifier messages a value position does.
 func (c *checker) resolveNamed(x *ast.NamedType, slot slotKind) Type {
 	if x.Qual != "" {
+		if mod, is := c.importQualifier(x.Qual); is {
+			return c.importTypeRef(mod, x, slot)
+		}
 		full := x.Qual + "." + x.Name
 		c.fail(x.Line, x.Col, "E1304", fmt.Sprintf(
 			"unresolved name — the qualifier %q of %q is not an import name; qualify through an existing import name",
@@ -2454,6 +2860,16 @@ func (c *checker) resolveNamed(x *ast.NamedType, slot slotKind) Type {
 		args := make([]Type, len(x.Args))
 		for i, a := range x.Args {
 			args[i] = c.resolveTypeRef(a, slotGeneric)
+			// The builtin sums resolve their arguments inline (the E1204
+			// check below reads them); the instantiation ban is the same
+			// resolveArgs one — a resource in the payload slot is the box
+			// route (E1106, at the argument's own reference).
+			if catOf(args[i]) == "resource" {
+				line, col := refPos(a)
+				c.fail(line, col, "E1106", fmt.Sprintf(
+					"resource type in a composite position — %q appears as a generic argument at the instantiation; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type",
+					args[i].String()))
+			}
 		}
 		if sum == resultSum {
 			if _, named := args[1].(namedType); !named {
@@ -2492,7 +2908,16 @@ func (c *checker) resolveNamed(x *ast.NamedType, slot slotKind) Type {
 		// the erased box: one interface argument, declaring no associated
 		// types (E0819's binding could not survive erasure)
 		c.checkArity(x, "Dyn", []string{"I"})
-		return Type(c.dynFace(x.Args))
+		dt := c.dynFace(x.Args)
+		// The box route, type face (chapter 13): under the completeness
+		// obligation every box of Releasable would box a resource, and a
+		// box shares its handle (E1106, at the Dyn reference).
+		if dt.inf == releasableIface {
+			c.fail(x.Line, x.Col, "E1106", fmt.Sprintf(
+				"resource type in a composite position — \"Dyn<%s>\" is the box route in a type position; under the completeness obligation every box of Releasable would box a resource, and a resource is never boxed",
+				dt.inf.name))
+		}
+		return Type(dt)
 	case x.Name == "Shareable":
 		c.bnd(bndShareable)
 	case baseNames[x.Name]:
@@ -2663,6 +3088,7 @@ func (c *checker) checkAssign(a *ast.Assign) {
 				rt.decl.name, a.Field))
 		}
 		c.noteCapture("self", st, layer, a.Line, a.Col)
+		c.resAssignCheck(a)
 		vt := c.typeOf(a.Value, ft)
 		if !agree(vt, ft) {
 			c.fail(a.Line, a.Col, "E0501", fmt.Sprintf(
@@ -2680,6 +3106,14 @@ func (c *checker) checkAssign(a *ast.Assign) {
 		t = sym.letType
 		layer = -1
 	}
+	// Chapter 13's alias ban fires before the type judgment: an assignment
+	// moving a resource binding on either side is the rebound shape (E1105,
+	// at the `=`) — the mismatch below would otherwise mask it.
+	if catOf(t) == "resource" {
+		c.fail(a.OpLine, a.OpCol, "E1105",
+			"resource binding rebound — the assignment moves a resource binding on one side; the one sanctioned move is a transfer, which hands over and kills the source")
+	}
+	c.resAssignCheck(a)
 	c.noteAssignCapture(a.Name, t, layer, a.Line, a.Col)
 	vt := c.typeOf(a.Value, t)
 	if !agree(vt, t) {
@@ -2714,8 +3148,11 @@ func (c *checker) checkReturn(r *ast.Return) {
 // rule holds the body's final item, and a valued body that produces no
 // value reports at the declaration itself.
 func (c *checker) checkFnDecl(fd *ast.FnDecl) {
-	savedRet, savedLocals, savedRecv, savedBounds := c.fnRet, c.locals, c.recvMut, c.fnBounds
+	savedRet, savedLocals, savedRecv, savedBounds, savedProp := c.fnRet, c.locals, c.recvMut, c.fnBounds, c.prop
 	c.fnRet, c.recvMut, c.fnBounds = c.fnRets[fd], false, c.fnWheres[fd]
+	// The fn's own propagation context (chapter 14): its `?`s face its
+	// declared return, named by the fn itself (E1202's message).
+	c.prop = &propCtx{fnName: fd.Name, ret: c.fnRet}
 	c.locals = []map[string]Type{{}}
 	for i, p := range fd.Params {
 		c.locals[0][p.Name] = c.fnParams[fd][i]
@@ -2727,7 +3164,10 @@ func (c *checker) checkFnDecl(fd *ast.FnDecl) {
 			"mixed types — the body produces (), the declared return is %s; no coercion is ever inserted",
 			c.fnRet.String()))
 	}
-	c.fnRet, c.locals, c.recvMut, c.fnBounds = savedRet, savedLocals, savedRecv, savedBounds
+	// Chapter 13's release discipline, over the typed-clean body (the
+	// last judgment this body faces).
+	c.resCheck(fd.Body.Items, fd.Params, c.fnParams[fd])
+	c.fnRet, c.locals, c.recvMut, c.fnBounds, c.prop = savedRet, savedLocals, savedRecv, savedBounds, savedProp
 }
 
 // tailProduces reports whether the body's final item can carry the fn's
@@ -2779,6 +3219,9 @@ func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 				break
 			}
 			t := c.checkBinding(st)
+			if catOf(t) == "resource" {
+				c.resLets[st] = true // the liveness pass's fact (resource.go)
+			}
 			if st.Name != "_" {
 				c.locals[len(c.locals)-1][st.Name] = t
 			}
@@ -2792,11 +3235,19 @@ func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 		case *ast.Loop:
 			c.walkItems(st.Body.Items, walkControl)
 		case *ast.Defer:
+			// A defer body runs at fn exit and carries no return of its
+			// own (chapter 14): `?` there has nothing to propagate to
+			// (E1202's defer shape), whatever fn encloses the defer.
+			savedProp := c.prop
+			c.prop = &propCtx{deferBody: true}
 			c.walkItems(st.Block.Items, walkControl)
+			c.prop = savedProp
 		case *ast.Break, *ast.Continue:
 			// Loop placement is E0201's, held at parse; nothing types here.
 		case *ast.ForStmt:
 			c.checkFor(st)
+		case *ast.ScopeRes:
+			c.checkScopeRes(st)
 		case *ast.ExprStmt:
 			// A fn body's tail expression checks against the declared
 			// return — the expected type threads into the expression, so
@@ -2844,10 +3295,23 @@ func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 			if last {
 				val = t
 				if mode == walkFn && c.fnRet != nil && !agree(t, c.fnRet) {
-					line, col := exprPos(st.Expr)
-					c.fail(line, col, "E0501", fmt.Sprintf(
-						"mixed types — the final expression is %s, the declared return is %s; no coercion is ever inserted",
-						t.String(), c.fnRet.String()))
+					// A bare `?` tail hands its payload Ok-wrapped to the
+					// caller (chapter 14's scenario: the closure `fn(x) ->
+					// Result<...> { parse(x)? }` is legal) — the unwrapped
+					// type faces the declared return's Ok slot; any other
+					// tail faces the full declared return.
+					want := c.fnRet
+					if _, isProp := st.Expr.(*ast.Prop); isProp {
+						if rt, ok := c.fnRet.(namedType); ok && rt.decl == resultSum {
+							want = rt.args[0]
+						}
+					}
+					if !agree(t, want) {
+						line, col := exprPos(st.Expr)
+						c.fail(line, col, "E0501", fmt.Sprintf(
+							"mixed types — the final expression is %s, the declared return is %s; no coercion is ever inserted",
+							t.String(), c.fnRet.String()))
+					}
 				}
 			}
 		default:
@@ -3007,8 +3471,16 @@ func (c *checker) checkPattern(p ast.Pattern, scrut Type, binds map[string]Type,
 		}
 	case *ast.PatVariant:
 		if x.Qualified {
-			// a qualified variant head is multi-module by construction
-			c.bnd(bndMultiModule)
+			// the qualified form reaches the variant through the import's
+			// bucket — the pub gate (chapter 15), then the same scrutinee
+			// matching the bare form takes
+			if mod, is := c.importQualifier(x.Qual); is {
+				c.importSym(mod, x.Name, x.Line, x.Col)
+			} else {
+				c.fail(x.Line, x.Col, "E1304", fmt.Sprintf(
+					"unresolved name — the qualifier %q of %q is not an import name; qualify through an existing import name",
+					x.Qual, x.Qual+"."+x.Name))
+			}
 		}
 		nt, ok := scrut.(namedType)
 		if !ok {
@@ -3398,6 +3870,8 @@ func exprPos(e ast.Expr) (int, int) {
 		return exprPos(x.Fn)
 	case *ast.Member:
 		return exprPos(x.Recv)
+	case *ast.Prop:
+		return exprPos(x.X)
 	case *ast.Ident:
 		return x.Line, x.Col
 	case *ast.Literal:
@@ -3490,8 +3964,67 @@ func (c *checker) typeOf(e ast.Expr, expected Type) Type {
 		return c.closureType(x, expected)
 	case *ast.ListLit:
 		return c.listLitType(x, expected)
+	case *ast.Prop:
+		return c.propType(x)
 	}
 	panic("unreachable expr")
+}
+
+// propType types the propagation postfix `expr?` (chapter 14, design D7).
+// The operand must be the canonical Result (E1201 — Option gets its own
+// note, it is the shape a reader most likely wanted); the position must
+// hold a live context — the innermost enclosing body's declared Result
+// return, with a defer body and the module top level carrying none (E1202,
+// naming the enclosing function); and the operand's error type must be the
+// declared one by identity (E1203 — no implicit wrapping or lifting). The
+// value is the Ok payload: on Err the context function returns early
+// through its own return, the resource obligations travelling as with any
+// return (chapter 13). A short closure's `?` is the one inferring context:
+// the operands fix the error type and closureType wraps the value type.
+func (c *checker) propType(x *ast.Prop) Type {
+	t := c.typeOf(x.X, nil)
+	nt, ok := t.(namedType)
+	if !ok || nt.decl != resultSum {
+		note := "; only Result values propagate, an Option unwraps by match"
+		if ok && nt.decl == optionSum {
+			note = " and Option does not propagate; match the value to take its payload"
+		}
+		c.fail(x.Line, x.Col, "E1201", fmt.Sprintf(
+			"operand of ? is not a Result type — the operand is %q%s", t.String(), note))
+	}
+	p := c.prop
+	if p.deferBody {
+		c.fail(x.Line, x.Col, "E1202", "? outside a function returning Result — the propagation stands in a defer body, which runs at exit and has no return to propagate to; handle the value by match at this position")
+	}
+	if p.short {
+		if p.shortErr == nil {
+			p.shortErr = nt.args[1]
+		} else if !sameType(nt.args[1], p.shortErr) {
+			c.fail(x.Line, x.Col, "E1203", fmt.Sprintf(
+				"? error type disagrees with the declared error type — %q is not the declared error type %q; there is no implicit wrapping or lifting, error conversion is explicit",
+				nt.args[1].String(), p.shortErr.String()))
+		}
+		return nt.args[0]
+	}
+	if p.fnName == "" {
+		c.fail(x.Line, x.Col, "E1202", "? outside a function returning Result — the propagation stands at the module top level, where no return exists to propagate to; move it into a function or closure whose return type is Result")
+	}
+	ret := p.ret
+	if ret == nil {
+		ret = unitType{}
+	}
+	dst, ok := ret.(namedType)
+	if !ok || dst.decl != resultSum {
+		c.fail(x.Line, x.Col, "E1202", fmt.Sprintf(
+			"? outside a function returning Result — the innermost enclosing function %q returns %q, not a Result; move the propagation into a function or closure whose return type is Result, or handle the value by match at this position",
+			p.fnName, ret.String()))
+	}
+	if !sameType(nt.args[1], dst.args[1]) {
+		c.fail(x.Line, x.Col, "E1203", fmt.Sprintf(
+			"? error type disagrees with the declared error type — %q is not the declared error type %q; there is no implicit wrapping or lifting, error conversion is explicit",
+			nt.args[1].String(), dst.args[1].String()))
+	}
+	return nt.args[0]
 }
 
 // closureType types one closure (design D9): fully annotated parameters
@@ -3548,7 +4081,7 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 		c.closures = c.closures[:len(c.closures)-1]
 		c.closureBounds = c.closureBounds[:len(c.closureBounds)-1]
 	}()
-	savedRet, savedLocals := c.fnRet, c.locals
+	savedRet, savedLocals, savedProp := c.fnRet, c.locals, c.prop
 	c.locals = append(c.locals, map[string]Type{})
 	for i, p := range x.Params {
 		if p.Name != "_" {
@@ -3559,6 +4092,10 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 	switch {
 	case x.Ret != nil:
 		c.fnRet = c.resolveTypeRef(x.Ret, slotRet)
+		// The closure is its own propagation context (chapter 14): a full
+		// closure's `?`s face its declared return, never the function the
+		// closure sits in.
+		c.prop = &propCtx{fnName: "(closure)", ret: c.fnRet}
 		c.walkItems(x.Body.Items, walkFn)
 		if !tailProduces(x.Body.Items) {
 			c.fail(x.Line, x.Col, "E0501", fmt.Sprintf(
@@ -3571,12 +4108,27 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 		// return exists to face (chapter 12: the return type comes from
 		// the body)
 		c.fnRet = nil
+		// A short closure's `?` is the one inferring context (chapter 14):
+		// the operands fix one error type, and the closure's value type
+		// wraps to Result over the body's type — the binding the closure
+		// reaches is legal because the closure is the `?`'s innermost
+		// function.
+		c.prop = &propCtx{fnName: "(closure)", short: true}
 		ret = c.walkItems(x.Body.Items, walkPlain)
+		if c.prop.shortErr != nil {
+			ret = namedType{decl: resultSum, args: []Type{ret, c.prop.shortErr}}
+		}
 	default:
 		c.fnRet = nil
+		c.prop = &propCtx{fnName: "(closure)"}
 		c.walkItems(x.Body.Items, walkFn)
 	}
-	c.fnRet, c.locals = savedRet, savedLocals
+	// Chapter 13's release discipline over the typed-clean body: a closure
+	// is a fn body for the bindings it declares (its parameters among
+	// them — a resource-typed closure parameter is the transfer channel's
+	// callee side).
+	c.resCheck(x.Body.Items, x.Params, params)
+	c.fnRet, c.locals, c.prop = savedRet, savedLocals, savedProp
 	return fnType{params: params, ret: ret}
 }
 
@@ -3589,24 +4141,28 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 // construction) missing fields are E0604; each field value checks against
 // its declared type (E0501, anchored at the field name).
 func (c *checker) constructType(x *ast.Construct) Type {
+	var sym *symbol
 	if x.Qual != "" {
-		// a qualified head reaches another module's records or fails as a
-		// qualifier — either way this build stops before it types
-		if sym, ok := c.syms[x.Qual]; ok && sym.kind == symImport {
-			c.bnd(bndMultiModule)
+		// a qualified head constructs another module's record through the
+		// pub gate (chapter 15); a non-import qualifier is E1304's shape
+		if mod, is := c.importQualifier(x.Qual); is {
+			sym = c.importSym(mod, x.Name, x.Line, x.Col)
+		} else {
+			c.fail(x.Line, x.Col, "E1304", fmt.Sprintf(
+				"unresolved name — the qualifier %q of %q is not an import name; qualify through an existing import name",
+				x.Qual, x.Qual+"."+x.Name))
 		}
-		c.fail(x.Line, x.Col, "E1304", fmt.Sprintf(
-			"unresolved name — the qualifier %q of %q is not an import name; qualify through an existing import name",
-			x.Qual, x.Qual+"."+x.Name))
-	}
-	sym, ok := c.syms[x.Name]
-	if !ok {
-		if baseNames[x.Name] {
-			c.fail(x.Line, x.Col, "E0603", fmt.Sprintf(
-				"construction or update head or base is not the record type — the head %q names a base type, not a record; construction and update heads name record types",
-				x.Name))
+	} else {
+		var ok bool
+		sym, ok = c.syms[x.Name]
+		if !ok {
+			if baseNames[x.Name] {
+				c.fail(x.Line, x.Col, "E0603", fmt.Sprintf(
+					"construction or update head or base is not the record type — the head %q names a base type, not a record; construction and update heads name record types",
+					x.Name))
+			}
+			c.fail(x.Line, x.Col, "E1304", bareUnresolved(x.Name))
 		}
-		c.fail(x.Line, x.Col, "E1304", bareUnresolved(x.Name))
 	}
 	if sym.kind != symRecord {
 		what := "a value name"
@@ -3640,6 +4196,7 @@ func (c *checker) constructType(x *ast.Construct) Type {
 	}
 	rt := recordType{decl: rec, args: args}
 	if args != nil {
+		c.checkImplWhereAtConstruct(rec, args, x)
 		c.checkFieldInstantiation(rec, typeArgAnchors(x.TypeArgs, args, x.Line, x.Col), args, rt)
 	}
 	if x.Base != nil {
@@ -3693,6 +4250,46 @@ func (c *checker) constructType(x *ast.Construct) Type {
 		}
 	}
 	return rt
+}
+
+// checkImplWhereAtConstruct holds a generic impl's where bounds at a
+// construction of its head (E0830's construction position, design D10(c)):
+// the head's application determines the impl's clause positions, and each
+// bound holds at every instantiation — whatever the site does with the
+// impl's interface. The clause is the impl's declaration fact; the anchor
+// is the construction head.
+func (c *checker) checkImplWhereAtConstruct(rec *recordInfo, args []Type, x *ast.Construct) {
+	for _, im := range c.impls {
+		if !im.generic {
+			continue
+		}
+		h, ok := im.head.(recordType)
+		if !ok || h.decl != rec || len(h.args) != len(args) {
+			continue
+		}
+		w := c.implWheres[im.decl]
+		if w == nil {
+			continue
+		}
+		// The impl head's argument positions bind the impl's clause —
+		// a parameter position in the head receives the construction's
+		// argument at the same position.
+		binds := map[int]Type{}
+		for i, ha := range h.args {
+			if p, is := ha.(paramRef); is {
+				binds[p.idx] = args[i]
+			}
+		}
+		for _, b := range w.bounds {
+			subject, bound := binds[b.idx]
+			if !bound || c.implementsFace(subject, b.face) {
+				continue
+			}
+			c.fail(x.Line, x.Col, "E0830", fmt.Sprintf(
+				"type argument does not satisfy a where bound — %q implements no %q; the where bound of the impl for %q holds at every instantiation",
+				subject.String(), b.face.String(), im.headStr))
+		}
+	}
 }
 
 // checkFieldInstantiation re-checks a record's honesty at an application:
@@ -4178,7 +4775,7 @@ func (c *checker) identType(x *ast.Ident, expected Type) Type {
 			c.noteCapture(x.Name, sym.letType, -1, x.Line, x.Col)
 			return sym.letType
 		case symVariant:
-			return c.variantType(sym.sum, sym.vi, x)
+			return c.variantType(sym.sum, sym.vi, x.Line, x.Col, x.Name)
 		case symFn:
 			// A fn's bare name in value position is its fn type (chapter
 			// 12) — a generic fn's name is a family, not one function, and
@@ -4200,7 +4797,9 @@ func (c *checker) identType(x *ast.Ident, expected Type) Type {
 	}
 	switch x.Name {
 	case "panic", "todo", "assert":
-		c.bnd(bndTermination)
+		// The panic family's prelude signatures (chapter 14): ordinary
+		// functions, the bare name its fn type like any fn's.
+		return terminationFnType(x.Name)
 	case "currentCancelSignal", "advanceTime":
 		c.bnd(bndTaskTime)
 	case "None":
@@ -4225,12 +4824,12 @@ func undetermined(name, sum string) string {
 
 // variantType types a bare user variant reference: a unit variant is its
 // sum's value; a payloaded constructor used without arguments is E0704.
-func (c *checker) variantType(sum *sumInfo, vi int, x *ast.Ident) Type {
+func (c *checker) variantType(sum *sumInfo, vi int, line, col int, name string) Type {
 	v := sum.variants[vi]
 	if len(v.payloads) > 0 {
-		c.fail(x.Line, x.Col, "E0704", fmt.Sprintf(
+		c.fail(line, col, "E0704", fmt.Sprintf(
 			"payloaded variant constructor used without arguments — %q carries a payload; construct with the call form %s(...)",
-			x.Name, x.Name))
+			name, name))
 	}
 	return namedType{decl: sum}
 }
@@ -4250,11 +4849,19 @@ func (c *checker) variantType(sum *sumInfo, vi int, x *ast.Ident) Type {
 // for statement's (E0816). An unresolvable bare receiver identifier
 // reads as a failed qualifier (E1304 at the receiver).
 func (c *checker) memberType(x *ast.Member, asCall bool) Type {
-	if id, ok := x.Recv.(*ast.Ident); ok && !c.nameResolvable(id.Name) {
-		full := id.Name + "." + x.Name
-		c.fail(id.Line, id.Col, "E1304", fmt.Sprintf(
-			"unresolved name — the qualifier %q of %q is not an import name; qualify through an existing import name",
-			id.Name, full))
+	if id, ok := x.Recv.(*ast.Ident); ok {
+		// An import name in the receiver is the qualified form's head
+		// (chapter 15): the item resolves through the target's bucket,
+		// never through the import name's own (valueless) type.
+		if mod, is := c.importQualifier(id.Name); is {
+			return c.importMember(mod, id, x)
+		}
+		if !c.nameResolvable(id.Name) {
+			full := id.Name + "." + x.Name
+			c.fail(id.Line, id.Col, "E1304", fmt.Sprintf(
+				"unresolved name — the qualifier %q of %q is not an import name; qualify through an existing import name",
+				id.Name, full))
+		}
 	}
 	if x.Name == "forEach" {
 		c.fail(x.NameLine, x.NameCol, "E0816", fmt.Sprintf(
@@ -4282,6 +4889,16 @@ func (c *checker) memberOfType(t Type, x *ast.Member, asCall bool) Type {
 			m := &t.decl.methods[i]
 			if m.name != x.Name {
 				continue
+			}
+			// Chapter 13's single release trigger: user code never names
+			// release on a resource receiver — the impl's own body
+			// included — the early spelling is an early scope exit (E1104,
+			// at the receiver's first token).
+			if asCall && x.Name == "release" && t.decl.cat == "resource" {
+				line, col := exprPos(x.Recv)
+				c.fail(line, col, "E1104", fmt.Sprintf(
+					"resource binding outside its release discipline — %q calls release directly; release has one trigger, the scope-exit machinery, and the spelling for early release is an early scope exit",
+					recvText(x.Recv)+".release()"))
 			}
 			c.methodUse(x, asCall)
 			return substFn(m.fn, t.args, nil)
@@ -4491,8 +5108,10 @@ func (c *checker) dynIfaceRef(tr ast.TypeRef) ifaceType {
 			t.String()))
 	}
 	if nt.Qual != "" {
-		if sym, is := c.syms[nt.Qual]; is && sym.kind == symImport {
-			c.bnd(bndMultiModule)
+		if mod, is := c.importQualifier(nt.Qual); is {
+			return c.importIface(mod, nt, "E0820", fmt.Sprintf(
+				"Dyn argument is not an interface type — %q is not an interface; Dyn boxes an interface type",
+				nt.Name))
 		}
 		full := nt.Qual + "." + nt.Name
 		c.fail(nt.Line, nt.Col, "E1304", fmt.Sprintf(
@@ -4549,6 +5168,15 @@ func (c *checker) dynCall(x *ast.Call) Type {
 		c.bnd(bndArityGap)
 	}
 	at := c.typeOf(x.Args[0], nil)
+	// The box route, construction face (chapter 13): a resource-typed
+	// argument boxes the one handle, whatever face the box carries (E1106,
+	// at the construction head's first token).
+	if catOf(at) == "resource" {
+		line, col := exprPos(x)
+		c.fail(line, col, "E1106", fmt.Sprintf(
+			"resource type in a composite position — the construction Dyn<%s>(r) with a resource-typed argument is the box route; a resource is never boxed",
+			box.inf.name))
+	}
 	face := ifaceType{decl: box.inf, args: box.args}
 	if c.implementsFace(at, face) {
 		return box
@@ -4580,6 +5208,17 @@ func nominalDeclName(t Type) string {
 // then the argument count (the spec-gap boundary) and the arguments
 // against the parameters.
 func (c *checker) callType(x *ast.Call, expected Type) Type {
+	// A qualified call head (b.helper(…)) takes the symbol-kind dispatch
+	// a bare head takes (chapter 15): a generic fn's determination and a
+	// variant's payload check ride the same machinery through the target
+	// module's declaration nodes.
+	if m, ok := x.Fn.(*ast.Member); ok {
+		if id, is := m.Recv.(*ast.Ident); is {
+			if mod, imp := c.importQualifier(id.Name); imp {
+				return c.importCall(mod, x)
+			}
+		}
+	}
 	if id, ok := x.Fn.(*ast.Ident); ok {
 		if t, isLocal := c.lookupLocal(id.Name); isLocal {
 			ft, isFn := t.(fnType)
@@ -4620,7 +5259,10 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 		}
 		switch id.Name {
 		case "panic", "todo", "assert":
-			c.bnd(bndTermination)
+			// The panic family's prelude signatures (chapter 14): the call
+			// takes the ordinary fn-value path — the arguments check
+			// position-wise, the arity gap stays the honest boundary.
+			return c.fnValueCall(terminationFnType(id.Name), x)
 		case "currentCancelSignal", "advanceTime":
 			c.bnd(bndTaskTime)
 		case "Ok", "Err", "Some", "None":
@@ -5253,6 +5895,29 @@ func (c *checker) checkFor(st *ast.ForStmt) {
 	elem := c.forElem(st)
 	c.locals = append(c.locals, map[string]Type{})
 	c.bindForPattern(st.Pat, elem)
+	c.walkItems(st.Body.Items, walkControl)
+	c.locals = c.locals[:len(c.locals)-1]
+}
+
+// checkScopeRes types chapter 13's scope resource statement: each head
+// expression takes over a handle — its type must implement Releasable
+// (E1103, at the head expression's first token) — the bindings join one
+// fresh locals layer, and the body is a plain nested block. The binding's
+// transfer discipline is the liveness pass's (design D4); a defer inside
+// the block is E0204's placement rule, held at parse.
+func (c *checker) checkScopeRes(st *ast.ScopeRes) {
+	binds := map[string]Type{}
+	for _, b := range st.Binds {
+		t := c.typeOf(b.Val, nil)
+		if !c.implementsFace(t, ifaceType{decl: releasableIface}) {
+			line, col := exprPos(b.Val)
+			c.fail(line, col, "E1103", fmt.Sprintf(
+				"scope resource head does not implement Releasable — the head expression's type %q implements no \"Releasable\"; bind the expression with let, or make the head's type a byres record implementing Releasable",
+				t.String()))
+		}
+		binds[b.Name] = t
+	}
+	c.locals = append(c.locals, binds)
 	c.walkItems(st.Body.Items, walkControl)
 	c.locals = c.locals[:len(c.locals)-1]
 }

@@ -1,0 +1,18 @@
+{
+  "name": "check-e0202-scope-value",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn use() {\n    let x = scope resource(y = 1) {\n        return\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:13: error[E0202]: valueless form in value position \u2014 \"scope\" produces no value and cannot stand in a let initializer; valueless forms are statements\n",
+  "files": {
+    "demo/main.we": "fn use() {\n    let x = scope resource(y = 1) {\n        return\n    }\n}\n"
+  }
+}

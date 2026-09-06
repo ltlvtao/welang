@@ -1,0 +1,24 @@
+{
+  "name": "check-e1301-cycle",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import a\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "src/a.we": "import b\n\npub fn afn() {\n    return\n}\n",
+      "src/b.we": "import a\n\npub fn bfn() {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/b.we:1:8: error[E1301]: circular module dependency \u2014 the import closes the cycle a -> b -> a; there are no forward declarations, and the fix is extracting the shared code into a third module both import\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import a\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "src/a.we": "import b\n\npub fn afn() {\n    return\n}\n",
+    "src/b.we": "import a\n\npub fn bfn() {\n    return\n}\n"
+  }
+}

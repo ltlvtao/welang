@@ -1,0 +1,18 @@
+{
+  "name": "check-m6a-generic-map-override-mismatch",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "record BoxIter<T> {\n    v: T\n}\n\nimpl<T> Iterator<T> for BoxIter<T> {\n    fn next(mut self) -> Option<T> {\n        return None\n    }\n    fn map<U>(mut self, f: fn(U) -> T) -> Dyn<Iterator<U> > {\n        return Dyn<Iterator<U> >(BoxIter { v: self.v })\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:9:8: error[E0808]: impl method signature mismatches the interface method \u2014 the parameter \"f\" of \"map\" is fn(U) -> T in the impl and fn(T) -> U in \"Iterator\"; signatures match exactly\n",
+  "files": {
+    "demo/main.we": "record BoxIter<T> {\n    v: T\n}\n\nimpl<T> Iterator<T> for BoxIter<T> {\n    fn next(mut self) -> Option<T> {\n        return None\n    }\n    fn map<U>(mut self, f: fn(U) -> T) -> Dyn<Iterator<U> > {\n        return Dyn<Iterator<U> >(BoxIter { v: self.v })\n    }\n}\n"
+  }
+}

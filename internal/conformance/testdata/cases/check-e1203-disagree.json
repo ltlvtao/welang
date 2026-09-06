@@ -1,0 +1,18 @@
+{
+  "name": "check-e1203-disagree",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "pub type ErrA = Failed(String)\npub type ErrB = Other(String)\n\nfn g() -> Result<Int64, ErrA> {\n    return Err(Failed(\"x\"))\n}\n\npub fn main() -> Result<Int64, ErrB> {\n    let v = g()?\n    return Ok(v)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:9:16: error[E1203]: ? error type disagrees with the declared error type \u2014 \"ErrA\" is not the declared error type \"ErrB\"; there is no implicit wrapping or lifting, error conversion is explicit\n",
+  "files": {
+    "demo/main.we": "pub type ErrA = Failed(String)\npub type ErrB = Other(String)\n\nfn g() -> Result<Int64, ErrA> {\n    return Err(Failed(\"x\"))\n}\n\npub fn main() -> Result<Int64, ErrB> {\n    let v = g()?\n    return Ok(v)\n}\n"
+  }
+}

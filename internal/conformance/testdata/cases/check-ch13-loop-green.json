@@ -1,0 +1,18 @@
+{
+  "name": "check-ch13-loop-green",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n\nfn use(c: Bool) {\n    while c {\n        let f = openFile()\n        take(f)\n    }\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n\nfn use(c: Bool) {\n    while c {\n        let f = openFile()\n        take(f)\n    }\n}\n"
+  }
+}

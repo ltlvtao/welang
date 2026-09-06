@@ -33,13 +33,12 @@ import (
 // The boundary form groups (design D6's closed table). Each later
 // milestone deletes its rows; the list shrinks to zero with the roadmap.
 const (
-	bndScope  = "chapter 13 and 18 (scope) forms"
-	bndErr    = "chapter 14 (errors) forms"
-	bndEffect = "chapter 16 (effects) forms"
-	bndConc   = "chapter 18 (concurrency) forms"
-	bndFFI    = "chapter 19 (ffi) forms"
-	bndTest   = "chapter 20 (testing) forms"
-	bndMutPar = "mut parameters"
+	bndConcScope = "chapter 18 (scope) forms"
+	bndEffect    = "chapter 16 (effects) forms"
+	bndConc      = "chapter 18 (concurrency) forms"
+	bndFFI       = "chapter 19 (ffi) forms"
+	bndTest      = "chapter 20 (testing) forms"
+	bndMutPar    = "mut parameters"
 )
 
 // helps carries each code's remediation, compressed from its registry
@@ -1565,7 +1564,7 @@ func (p *parser) parseStmt() ast.Stmt {
 		case "for":
 			return p.parseFor()
 		case "scope":
-			p.bnd(bndScope)
+			return p.parseScopeRes()
 		case "task", "select":
 			p.bnd(bndConc)
 		case "mock":
@@ -1590,15 +1589,17 @@ func (p *parser) parseStmt() ast.Stmt {
 		p.next() // .
 		ft := p.cur()
 		p.next() // field
+		op := p.cur()
 		p.next() // =
 		v := p.parseExpr(valueCtx)
-		return &ast.Assign{Name: "self", Field: ft.Text, Value: v, Line: t.Line, Col: t.Col}
+		return &ast.Assign{Name: "self", Field: ft.Text, Value: v, Line: t.Line, Col: t.Col, OpLine: op.Line, OpCol: op.Col}
 	}
 	if t.Kind == lex.KindIdent && p.peek().Kind == "=" && p.peek().Line == t.Line {
 		p.next() // name
+		op := p.cur()
 		p.next() // =
 		v := p.parseExpr(valueCtx)
-		return &ast.Assign{Name: t.Text, Value: v, Line: t.Line, Col: t.Col}
+		return &ast.Assign{Name: t.Text, Value: v, Line: t.Line, Col: t.Col, OpLine: op.Line, OpCol: op.Col}
 	}
 	e := p.parseExpr(stmtCtx)
 	return &ast.ExprStmt{Expr: e, Line: t.Line, Col: t.Col}
@@ -1888,6 +1889,90 @@ func (p *parser) parseDefer() *ast.Defer {
 	return &ast.Defer{Block: blk, Line: t.Line, Col: t.Col}
 }
 
+// parseScopeRes parses `scope resource(name = expr, …) block` (chapter 13).
+// Any other `scope` shape — bare, timeout, collectAll — is chapter 18's and
+// keeps its own honest boundary row. Head names are block bindings:
+// camelCase (E0012) and duplicates (E0404, the pattern-binding variant's
+// wording) keep their existing codes. The body is a plain nested block:
+// loop depth persists (break/continue punch through scope blocks) and defer
+// inside is not at a function body's top level (E0204's existing check).
+func (p *parser) parseScopeRes() ast.Stmt {
+	t := p.cur()
+	p.next() // scope
+	if !isKw(p.cur(), "resource") {
+		p.bnd(bndConcScope)
+	}
+	p.next() // resource
+	if p.cur().Kind != "(" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a scope resource head is scope resource(name = expr, …) { … }")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where \"(\" opens the scope resource binding list: a scope resource head is scope resource(name = expr, …) { … }", p.cur().Text))
+	}
+	p.next() // (
+	// The binding list is a paren region — line breaks fold inside and
+	// a head expression's construction braces open (the noBrace
+	// suspension binds only at depth zero).
+	p.depth++
+	defer func() { p.depth-- }()
+	var binds []ast.ScopeBind
+	seen := map[string]int{}
+	for {
+		nt := p.cur()
+		if nt.Kind != lex.KindIdent && nt.Kind != "_" {
+			if p.atEnd() {
+				p.failTok(nt, "E0105", "unexpected end of file — a scope resource binding is name = expr")
+			}
+			p.failTok(nt, "E0105",
+				fmt.Sprintf("unexpected token — %q where a scope resource binding's name goes: a binding is name = expr", nt.Text))
+		}
+		if nt.Kind == "_" {
+			p.failTok(nt, "E0105",
+				`unexpected token — "_" fits no scope resource binding: each head binding takes over a handle and names it`)
+		}
+		p.checkCamel(nt)
+		if line, dup := seen[nt.Text]; dup {
+			p.failTok(nt, "E0404",
+				fmt.Sprintf("duplicate name in one module — the scope resource head binds %q twice, first at line %d; a head binds each name at most once", nt.Text, line))
+		}
+		seen[nt.Text] = nt.Line
+		p.next()
+		if p.cur().Kind != "=" {
+			if p.atEnd() {
+				p.failTok(p.cur(), "E0105", "unexpected end of file — a scope resource binding is name = expr")
+			}
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q where a scope resource binding's = goes: a binding is name = expr", p.cur().Text))
+		}
+		p.next() // =
+		val := p.headExpr()
+		binds = append(binds, ast.ScopeBind{Name: nt.Text, Val: val, Line: nt.Line, Col: nt.Col})
+		if p.cur().Kind == "," {
+			p.next()
+			continue
+		}
+		if p.cur().Kind == ")" {
+			p.next()
+			break
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — the scope resource binding list closes with )")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where the scope resource binding list closes with )", p.cur().Text))
+	}
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a scope resource wants its body block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a scope resource body block opens", p.cur().Text))
+	}
+	body := p.parseBlock(nil)
+	return &ast.ScopeRes{Binds: binds, Body: body, Line: t.Line, Col: t.Col}
+}
+
 // --- chapter 3's if and chapter 4's match (expressions) ------------------------
 
 // valueSite names the enclosing value position for E0202's message; the
@@ -2070,6 +2155,7 @@ func (p *parser) patternAtom() ast.Pattern {
 	case t.Kind == lex.KindIdent && !isPascal(t.Text):
 		// a lowercase identifier followed by `.` qualifies a variant
 		if p.peek().Kind == "." {
+			qual := t.Text
 			p.next() // module
 			p.next() // .
 			nt := p.cur()
@@ -2077,13 +2163,13 @@ func (p *parser) patternAtom() ast.Pattern {
 				p.failTok(nt, "E0105",
 					fmt.Sprintf("unexpected token — %q where the variant name goes: a qualified pattern is module.Variant or module.Variant(sub-patterns)", nt.Text))
 			}
-			return p.patVariant(nt, true)
+			return p.patVariant(nt, true, qual)
 		}
 		p.checkCamel(t)
 		p.next()
 		return &ast.PatBinding{Name: t.Text, Line: t.Line, Col: t.Col}
 	case t.Kind == lex.KindIdent && isPascal(t.Text):
-		return p.patVariant(t, false)
+		return p.patVariant(t, false, "")
 	case t.Kind == "(":
 		return p.patTuple(t)
 	case t.Kind == "-":
@@ -2099,9 +2185,10 @@ func (p *parser) patternAtom() ast.Pattern {
 }
 
 // patVariant parses a variant pattern from its name token: bare (a unit
-// variant), or with a parenthesized payload sub-pattern list.
-func (p *parser) patVariant(t lex.Token, qualified bool) ast.Pattern {
-	v := &ast.PatVariant{Name: t.Text, Qualified: qualified, Line: t.Line, Col: t.Col}
+// variant), or with a parenthesized payload sub-pattern list. The
+// qualified form carries its module qualifier's name.
+func (p *parser) patVariant(t lex.Token, qualified bool, qual string) ast.Pattern {
+	v := &ast.PatVariant{Name: t.Text, Qualified: qualified, Qual: qual, Line: t.Line, Col: t.Col}
 	p.next()
 	if p.cur().Kind != "(" {
 		return v
@@ -2397,7 +2484,10 @@ func (p *parser) parsePostfix(ctx exprCtx) ast.Expr {
 		case "(":
 			node = &ast.Call{Fn: node, Args: p.parseCallArgs(), Line: t.Line, Col: t.Col}
 		case "?":
-			p.bnd(bndErr)
+			// `?` is the propagation suffix (chapter 14): level-1 postfix,
+			// chained with call and member access, anchored at the token.
+			node = &ast.Prop{X: node, Line: t.Line, Col: t.Col}
+			p.next()
 		case "<":
 			// Explicit type arguments (chapter 10) reach a bare-name head
 			// only — obj.m<T>() keeps the comparison reading (the method
@@ -2730,7 +2820,7 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 			return p.parseIf(ctx)
 		case "match":
 			return p.parseMatch()
-		case "while", "loop", "break", "continue", "defer", "for":
+		case "while", "loop", "break", "continue", "defer", "for", "scope":
 			// ratified valueless statement forms — in any expression
 			// position they produce no value (E0202). Inside a short
 			// closure's maximal body break/continue hit the closure-body
@@ -2751,8 +2841,6 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 			}
 			p.failTok(t, "E0105",
 				fmt.Sprintf("unexpected token — %q where a closure's parameter list opens: an expression fn is a closure, fn(name: type, …) [-> type] { body }", p.peek().Text))
-		case "scope":
-			p.bnd(bndScope)
 		case "task", "select":
 			p.bnd(bndConc)
 		}

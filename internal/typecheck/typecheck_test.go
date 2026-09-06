@@ -294,9 +294,13 @@ func TestNameResolution(t *testing.T) {
 		"E0501", "the expression is Int64, the annotation is List<Int64>", 2, 9)
 	wantDiag(t, "fn f() {\n    let m: Map<String, Int64> = 1\n}\n",
 		"E0501", "the expression is Int64, the annotation is Map<String, Int64>", 2, 9)
-	wantBnd(t, "fn f() {\n    panic(\"boom\")\n}\n", bndTermination)
-	wantBnd(t, "fn f() {\n    todo()\n}\n", bndTermination)
-	wantBnd(t, "fn f() {\n    assert(true)\n}\n", bndTermination)
+	// The panic family carries its prelude signatures now (chapter 14):
+	// ordinary calls — a Never call satisfies any return and never drops,
+	// and a count the signature does not declare stays the arity gap's
+	// honest boundary (design D8's disclosed follow-up).
+	wantOK(t, "fn f() {\n    panic(\"boom\")\n    return\n}\n")
+	wantBnd(t, "fn f() {\n    todo()\n}\n", bndArityGap)
+	wantBnd(t, "fn f() {\n    assert(true)\n}\n", bndArityGap)
 	// The Dyn box reads its interface argument now (this milestone's
 	// member-resolution pass): a bare name misses the clause's arity
 	// judgment, and a non-interface argument is E0820.

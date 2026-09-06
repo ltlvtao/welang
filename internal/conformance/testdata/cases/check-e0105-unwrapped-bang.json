@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-unwrapped-bang",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn g() -> Int64 {\n    return 1\n}\n\nfn f() -> Int64 {\n    let x = g()!\n    return 1\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:6:16: error[E0105]: unexpected token \u2014 \"!\" after a complete statement: a statement ends at its line break; only } or a new statement follows\n",
+  "files": {
+    "demo/main.we": "fn g() -> Int64 {\n    return 1\n}\n\nfn f() -> Int64 {\n    let x = g()!\n    return 1\n}\n"
+  }
+}

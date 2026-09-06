@@ -1,0 +1,18 @@
+{
+  "name": "check-e1104-if-one-arm",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n\nfn use(c: Bool) {\n    let f = openFile()\n    if c {\n        take(f)\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:19:9: error[E1104]: resource binding outside its release discipline \u2014 the binding \"f\" reaches the end of its scope on a path with no transfer; transfer it on every path - scope resource(x = f), return f, or pass it to a fn whose parameter declares the type\n",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n\nfn use(c: Bool) {\n    let f = openFile()\n    if c {\n        take(f)\n    }\n}\n"
+  }
+}

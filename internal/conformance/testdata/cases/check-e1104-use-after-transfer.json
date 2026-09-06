@@ -1,0 +1,18 @@
+{
+  "name": "check-e1104-use-after-transfer",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    let f = openFile()\n    take(f)\n    let n = f.fd\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:15:13: error[E1104]: resource binding outside its release discipline \u2014 \"f\" is used after its transfer; a transfer hands over and kills the source binding, and the one handle is gone\n",
+  "files": {
+    "demo/main.we": "byres record FileHandle { fd: Int64 }\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\nfn use() {\n    let f = openFile()\n    take(f)\n    let n = f.fd\n}\n\nfn take(f: FileHandle) {\n    scope resource(g = f) {\n        let n = g.fd\n    }\n}\n"
+  }
+}

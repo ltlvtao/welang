@@ -1,0 +1,22 @@
+{
+  "name": "check-e1302-chain",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import a\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "src/a.we": "import missing\n\npub fn afn() {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/a.we:1:8: error[E1302]: module not found \u2014 the import \"missing\" expects the module at src/missing.we and no file is there; create the file at the expected path, fix the path spelling, or add the dependency to the cache\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import a\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "src/a.we": "import missing\n\npub fn afn() {\n    return\n}\n"
+  }
+}

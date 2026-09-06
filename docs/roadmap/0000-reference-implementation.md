@@ -19,7 +19,7 @@ This document is the single authority for reference-toolchain execution state: t
 | M4 | `native-vertical` | Minimal LLVM IR emission, minimal C runtime (startup, allocator), `we build` and `we run` end to end on the skeleton program | done 2026-09-05 |
 | M5 | `control-and-composites` | Chapter 3 control flow, chapter 4 match, chapter 8 composites and ownership, chapter 9 sums, chapter 12 fn types and closures | done 2026-09-05 |
 | M6a | `generics-iterables-collections` | Chapter 10 interfaces and generics, chapter 11 iterables, the chapter 5 for statement, chapter 17 collections | done 2026-09-06 |
-| M6b | `modules-errors` | Chapter 13 resources, chapter 14 in full, chapter 15 module resolution in full | pending |
+| M6b | `modules-errors` | Chapter 13 resources, chapter 14 in full, chapter 15 module resolution in full | done 2026-09-06 |
 | M7 | `effects` | Chapter 16 effect declarations and effect checking | pending |
 | M8 | `stdlib-and-gc` | `std.io` core; the runtime's precise GC design lands | pending |
 | M9 | `concurrency` | Chapter 18 tasks, channels, scheduler, virtual clock | pending |

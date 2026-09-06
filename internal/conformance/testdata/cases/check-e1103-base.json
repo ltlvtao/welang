@@ -1,0 +1,18 @@
+{
+  "name": "check-e1103-base",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f() {\n    scope resource(x = 1) {\n        return\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:24: error[E1103]: scope resource head does not implement Releasable \u2014 the head expression's type \"Int64\" implements no \"Releasable\"; bind the expression with let, or make the head's type a byres record implementing Releasable\n",
+  "files": {
+    "demo/main.we": "fn f() {\n    scope resource(x = 1) {\n        return\n    }\n}\n"
+  }
+}

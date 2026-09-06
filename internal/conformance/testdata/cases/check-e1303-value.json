@@ -1,0 +1,22 @@
+{
+  "name": "check-e1303-value",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import b\n\npub fn main() -> Result<(), AppError> {\n    b.helper()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "src/b.we": "fn helper() {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:4:5: error[E1303]: cross-module use of a module-local item \u2014 \"helper\" is declared in \"b\" without pub; cross-module reach is exactly the qualified form name.item through an import, and only for pub items\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import b\n\npub fn main() -> Result<(), AppError> {\n    b.helper()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "src/b.we": "fn helper() {\n    return\n}\n"
+  }
+}

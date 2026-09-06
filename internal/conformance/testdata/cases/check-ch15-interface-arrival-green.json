@@ -1,0 +1,22 @@
+{
+  "name": "check-ch15-interface-arrival-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import b\n\npub fn main() -> Result<(), AppError> {\n    let d = b.make()\n    let s = d.describe()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+      "src/b.we": "pub interface Describable {\n    fn describe(self) -> String\n}\n\nrecord D {\n    n: Int64\n}\n\nimpl Describable for D {\n    fn describe(self) -> String {\n        return \"d\"\n    }\n}\n\npub fn make() -> Dyn<Describable> {\n    return Dyn<Describable>(D { n: 1 })\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "import b\n\npub fn main() -> Result<(), AppError> {\n    let d = b.make()\n    let s = d.describe()\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "src/b.we": "pub interface Describable {\n    fn describe(self) -> String\n}\n\nrecord D {\n    n: Int64\n}\n\nimpl Describable for D {\n    fn describe(self) -> String {\n        return \"d\"\n    }\n}\n\npub fn make() -> Dyn<Describable> {\n    return Dyn<Describable>(D { n: 1 })\n}\n"
+  }
+}
