@@ -1,0 +1,20 @@
+{
+  "name": "check-e1608-outside-task",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn plain() {\n    let s = currentCancelSignal()\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:13: error[E1608]: currentCancelSignal called outside a task block — the call sits in \"plain\", where no current task exists and no default signal does, and the check is static; take a CancelSignal parameter when a caller wants to cancel the work, or move the call inside the task block that should answer cancellation\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn plain() {\n    let s = currentCancelSignal()\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

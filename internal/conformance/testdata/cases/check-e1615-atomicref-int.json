@@ -1,0 +1,20 @@
+{
+  "name": "check-e1615-atomicref-int",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let r = conc.AtomicRef(3)\n    let _ = r\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:13: error[E1615]: AtomicRef type argument is not a gc record type — the argument has type \"Int64\"; base types belong in Atomic, and non-record shapes have no whole-record pointer swap, so use Atomic for base types and Mutex or RwLock for other composites\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let r = conc.AtomicRef(3)\n    let _ = r\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

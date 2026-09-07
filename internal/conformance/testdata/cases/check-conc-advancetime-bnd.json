@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-advancetime-bnd",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let t = advanceTime(5)\n    let _ = t\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: task-scope and time-control functions (chapters 18 and 20) are not implemented in this reference build yet\n",
+  "files": {
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let t = advanceTime(5)\n    let _ = t\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

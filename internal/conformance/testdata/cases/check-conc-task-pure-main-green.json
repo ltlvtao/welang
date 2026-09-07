@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-task-pure-main-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn fetch() effect net {\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let t = task effect net { fetch() }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn fetch() effect net {\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let t = task effect net { fetch() }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

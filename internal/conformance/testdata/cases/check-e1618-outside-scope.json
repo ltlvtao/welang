@@ -1,0 +1,20 @@
+{
+  "name": "check-e1618-outside-scope",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn top() effect net {\n    let t = task effect net { 1 }\n    let _ = t.await()\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:13: error[E1618]: task block outside any scope block — no enclosing scope block joins the handle, and no task outlives its scope; open a scope block around the task creation, or move the work into an ordinary function call\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn top() effect net {\n    let t = task effect net { 1 }\n    let _ = t.await()\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

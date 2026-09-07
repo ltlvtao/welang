@@ -1,0 +1,20 @@
+{
+  "name": "check-e1607-unawaited",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -> Result<(), AppError> {\n    scope {\n        let t = task effect net { 1 }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:7:17: error[E1607]: task handle reaches scope exit un-awaited, or await and cancel both fire — the binding \"t\" reaches the scope body's end on a path with neither await nor cancel; await or cancel the handle on every path from its creation - on early exits the scope's own exit discharge covers it, plain and timeout forms canceling the rest, collectAll joining them\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -> Result<(), AppError> {\n    scope {\n        let t = task effect net { 1 }\n    }\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

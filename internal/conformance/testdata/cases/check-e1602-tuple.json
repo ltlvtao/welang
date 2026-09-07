@@ -1,0 +1,20 @@
+{
+  "name": "check-e1602-tuple",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let pair = (1, xs)\n    scope {\n        let t = task effect net { pair }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:9:35: error[E1602]: task block captures unsynchronized gc state — the captured binding \"pair\" has type \"(Int64, List<Int64>)\", a value shape whose parts hold gc state the Shareable set excludes; store the list in a Mutex, send it through a Channel, or capture only Shareable data and let the task receive the rest\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let pair = (1, xs)\n    scope {\n        let t = task effect net { pair }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

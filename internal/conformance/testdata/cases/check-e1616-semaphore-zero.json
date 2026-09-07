@@ -1,0 +1,20 @@
+{
+  "name": "check-e1616-semaphore-zero",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let none = conc.Semaphore(0)\n    let _ = none\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:31: error[E1616]: Semaphore count is not a positive integer — the count constant-evaluates to 0, and what the compiler can decide, it decides, at the construction site; construct with a positive count - a non-positive count at runtime is a checked panic of chapter 14's family\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let none = conc.Semaphore(0)\n    let _ = none\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

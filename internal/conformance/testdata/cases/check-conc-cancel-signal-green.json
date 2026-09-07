@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-cancel-signal-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let t = task effect net {\n            let stop = currentCancelSignal()\n            let flag = stop.isCancelled()\n            let _ = flag\n        }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let t = task effect net {\n            let stop = currentCancelSignal()\n            let flag = stop.isCancelled()\n            let _ = flag\n        }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

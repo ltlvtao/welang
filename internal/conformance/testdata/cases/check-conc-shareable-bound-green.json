@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-shareable-bound-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn echo<T>(x: T) -> T where T: Shareable {\n    return x\n}\n\npub fn main() -> Result<(), AppError> {\n    let a = echo(5)\n    let b = echo(true)\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn echo<T>(x: T) -> T where T: Shareable {\n    return x\n}\n\npub fn main() -> Result<(), AppError> {\n    let a = echo(5)\n    let b = echo(true)\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

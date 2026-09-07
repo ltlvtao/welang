@@ -1,0 +1,20 @@
+{
+  "name": "check-e1605-generic-no-bound",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn go<T>(v: T) effect net {\n    scope {\n        let t = task effect net { v }\n        let _ = t.await()\n    }\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:7:35: error[E1605]: task block captures a generic-parameter binding without a Shareable bound — \"v\" mentions the generic parameter \"T\", which carries no Shareable bound, so it admits unsynchronized gc state; declare the parameter with a Shareable bound, or keep the capture to concrete Shareable types\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn go<T>(v: T) effect net {\n    scope {\n        let t = task effect net { v }\n        let _ = t.await()\n    }\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

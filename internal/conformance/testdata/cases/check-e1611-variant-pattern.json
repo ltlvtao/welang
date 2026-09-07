@@ -1,0 +1,20 @@
+{
+  "name": "check-e1611-variant-pattern",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case Some(x) = a.receive() => x\n        case y = a.receive() => y\n    }\n    let _ = v\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:8:9: error[E1611]: select case pattern is not a binding or the wildcard — the case carries a pattern beyond a bare binding name or the wildcard _, and a no-match policy exists for no rule here; bind the whole yield to a name or discard it with _, and match inside the body if the yield needs splitting\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case Some(x) = a.receive() => x\n        case y = a.receive() => y\n    }\n    let _ = v\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

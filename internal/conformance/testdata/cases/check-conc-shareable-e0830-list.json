@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-shareable-e0830-list",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn pass<T>(x: T) -> T where T: Shareable {\n    return x\n}\n\npub fn main() -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let ys = pass(xs)\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:9:14: error[E0830]: type argument does not satisfy a where bound — \"List<Int64>\" implements no \"Shareable\"; the where bound of \"pass\" holds at every call\n",
+  "files": {
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn pass<T>(x: T) -> T where T: Shareable {\n    return x\n}\n\npub fn main() -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let ys = pass(xs)\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

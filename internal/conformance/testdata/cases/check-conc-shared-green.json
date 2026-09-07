@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-shared-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nrecord Config { keep: Int64 }\n\npub fn main() -> Result<(), AppError> {\n    let counter = conc.Mutex(0)\n    let next = counter.update(|v| v + 1)\n    let seen = counter.get()\n    counter.set(5)\n    let ready = conc.Atomic(true)\n    ready.set(false)\n    let cfg = conc.AtomicRef(Config { keep: 1 })\n    let text = \"abc\"\n    let cache = conc.RwLock(text)\n    let upper = cache.read(|s| s)\n    let a = conc.Mutex(0)\n    let b = conc.Mutex(0)\n    let good = a.update(|x| x + b.get())\n    let _ = next\n    let _ = seen\n    let _ = cfg\n    let _ = upper\n    let _ = good\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nrecord Config { keep: Int64 }\n\npub fn main() -> Result<(), AppError> {\n    let counter = conc.Mutex(0)\n    let next = counter.update(|v| v + 1)\n    let seen = counter.get()\n    counter.set(5)\n    let ready = conc.Atomic(true)\n    ready.set(false)\n    let cfg = conc.AtomicRef(Config { keep: 1 })\n    let text = \"abc\"\n    let cache = conc.RwLock(text)\n    let upper = cache.read(|s| s)\n    let a = conc.Mutex(0)\n    let b = conc.Mutex(0)\n    let good = a.update(|x| x + b.get())\n    let _ = next\n    let _ = seen\n    let _ = cfg\n    let _ = upper\n    let _ = good\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

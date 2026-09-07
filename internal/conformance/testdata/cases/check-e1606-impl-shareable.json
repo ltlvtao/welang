@@ -1,0 +1,20 @@
+{
+  "name": "check-e1606-impl-shareable",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nbyval record Rec { n: Int64 }\n\nimpl Shareable for Rec { }\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:7:1: error[E1606]: Shareable cannot be manually implemented — the impl head names Shareable, a marker the compiler computes from a declaration's own shape: field types, payload types, category; delete the impl - the type is Shareable exactly when its own shape says so, and the bound T: Shareable checks that shape\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nbyval record Rec { n: Int64 }\n\nimpl Shareable for Rec { }\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

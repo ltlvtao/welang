@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-bare-mutex-e1304",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let m = Mutex(0)\n    let _ = m\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:4:13: error[E1304]: unresolved name — \"Mutex\" is held by no scope: no block-local binding, module declaration, or prelude name carries it; fix the spelling, declare the name, or import its module\n",
+  "files": {
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let m = Mutex(0)\n    let _ = m\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

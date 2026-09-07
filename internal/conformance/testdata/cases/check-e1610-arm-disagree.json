@@ -1,0 +1,20 @@
+{
+  "name": "check-e1610-arm-disagree",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let b: conc.Channel<String> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n        case y = b.receive() => y\n    }\n    let _ = v\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:10:9: error[E1610]: select arms disagree in type — the arms produce \"Option<Int64>\" and \"Option<String>\", and the select expression's value is the taken case's body value; give the arms one type, or bind what differs and unify in a following expression\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let b: conc.Channel<String> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n        case y = b.receive() => y\n    }\n    let _ = v\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

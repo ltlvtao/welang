@@ -22,7 +22,8 @@
 | M6b | `modules-errors` | 第 13 章 resource、第 14 章全量、第 15 章模块解析全量 | done 2026-09-06 |
 | M7 | `effects` | 第 16 章效果声明与效果检查 | done 2026-09-06 |
 | M8 | `stdlib-and-gc` | `std.io` 核心；运行时精确 GC 设计落地 | done 2026-09-07 |
-| M9 | `concurrency` | 第 18 章 task、channel、调度器、虚拟钟 | pending |
+| M9a | `concurrency-check` | 第 18 章检查塔：std.concurrent 装载、内建类型面、Shareable、task 块与捕获纪律、scope/句柄纪律、select 定型 | done 2026-09-07 |
+| M9b | `concurrency-run` | 第 18 章运行塔：单线程协作调度器、共享状态与 channel 原语运行时、真实时钟 timeout（虚拟钟随 M10 落地） | pending |
 | M10 | `testing` | 第 20 章测试运行、mock、探索 | pending |
 | M11 | `fmt-vet-doc` | 第 21 章格式化器、vet、文档生成 | pending |
 | M12 | `ffi` | 第 19 章 foreign 块与构建时链接（E1906） | pending |
@@ -49,3 +50,4 @@
 7. **赋值目标可变性。** 没有已批准 Requirement 固定 `let` 绑定名被重赋值（`let x = 1; x = 2`）时的规则与诊断；第 8 章所有权文本固定的是捕获类别，不是非 `var` 绑定的重赋值。修订认领前，实现维持 M3 行为（赋值对照绑定的类型检查通过）。M5（`control-and-composites` design D14）发现。
 8. **注册表 E0604 陈旧子句。** E0604 的注册表描述含「a member access names an undeclared field / Fires under: Field access」，与第 8 章 R5 的路由（记录上未知名走 E0816，「一个规则一个码」）冲突——章文是触发语义权威，M5 在该处发 E0816。陈旧子句的清除归属下一个触 `diagnostics.toml` 的变更（或专门维护变更）。M5（`control-and-composites` design D10）发现。
 9. **`we run` 自项目目录外的路径解析。** `we run <path>` 把子进程工作目录设为项目路径、却按相对路径解析工件，从项目目录外调用时报 `fork/exec … no such file or directory`；从目录内调用（`we run .`，conformance runner 同款）正常。工具链修复应在切换子进程 cwd 前按调用目录解析工件绝对路径。M5（`control-and-composites` T7 观察；M4 遗留，`internal/cli` 未被 M5 触碰）发现。
+10. **newtype 与 Shareable 集。** 第 18 章闭集点名基类型、unit、全字段 Shareable 的 value 记录、全载荷 Shareable 的 value sum、tuple、十一类同步 gc 型——未点名「Shareable 底类型之上的 byval newtype」，第 8 章的品类派生规则也不延伸到 marker。修订批准入集前，实现维持字面读：newtype 不是 Shareable，无论其品类。M9a（`concurrency-check` design D3、T5 披露）发现。

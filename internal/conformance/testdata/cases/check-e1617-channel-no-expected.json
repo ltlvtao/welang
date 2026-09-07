@@ -1,0 +1,20 @@
+{
+  "name": "check-e1617-channel-no-expected",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let bare = conc.channel(4)\n    let _ = bare\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:16: error[E1617]: channel construction without an expected type — the binding \"bare\" carries no annotation and no declaration fixes the element type, and the language infers nothing; annotate the binding, or place the construction where a parameter or declared return fixes the type\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let bare = conc.channel(4)\n    let _ = bare\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-sums-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(4)\n    let s = ch.trySend(1)\n    let a = match s {\n        conc.Sent => 1\n        conc.Full => 2\n        conc.Closed => 3\n    }\n    let r = ch.tryReceive()\n    let b = match r {\n        conc.Received(v) => v\n        conc.Empty => 0\n        conc.Closed => 0\n    }\n    let _ = a\n    let _ = b\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(4)\n    let s = ch.trySend(1)\n    let a = match s {\n        conc.Sent => 1\n        conc.Full => 2\n        conc.Closed => 3\n    }\n    let r = ch.tryReceive()\n    let b = match r {\n        conc.Received(v) => v\n        conc.Empty => 0\n        conc.Closed => 0\n    }\n    let _ = a\n    let _ = b\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

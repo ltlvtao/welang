@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-select-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let b: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n        case y = b.receive() => y\n    }\n    let w = select {\n        case _ = a.receive() => 1\n        case _ = b.receive() => 2\n    }\n    let _ = v\n    let _ = w\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let b: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n        case y = b.receive() => y\n    }\n    let w = select {\n        case _ = a.receive() => 1\n        case _ = b.receive() => 2\n    }\n    let _ = v\n    let _ = w\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

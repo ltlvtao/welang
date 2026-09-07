@@ -1,0 +1,20 @@
+{
+  "name": "check-e1614-atomic-string",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let ready = conc.Atomic(\"name\")\n    let _ = ready\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:17: error[E1614]: Atomic type argument is not an atomic base type — the argument has type \"String\", not one of the eight integer types, Bool, Float32, Float64; composite values have no single-word read-modify-write to be atomic over, so wrap the composite in Mutex or RwLock, or hold the base-type part in the Atomic\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let ready = conc.Atomic(\"name\")\n    let _ = ready\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

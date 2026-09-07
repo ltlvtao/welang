@@ -1,0 +1,20 @@
+{
+  "name": "check-e1603-var",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -> Result<(), AppError> {\n    var total = 0\n    scope {\n        let t = task effect net { total }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:8:35: error[E1603]: task block captures a var binding — \"total\" is var, of whatever type: mutability and concurrency together are a race by definition; carry the state in a shared-state type and reach it through its methods, or copy the value into an immutable binding before the task block\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -> Result<(), AppError> {\n    var total = 0\n    scope {\n        let t = task effect net { total }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

@@ -465,6 +465,48 @@ type MatchArm struct {
 	Line, Col int // at the pattern's first token
 }
 
+// TaskExpr is chapter 18's task block: `task effect tag… block`, the
+// handle-creating form. The effect segment is mandatory at parse (E1601);
+// the body is a function-body context — return carries the block's value
+// and the task's own declared set rules the body's calls (the checker's
+// face).
+type TaskExpr struct {
+	EffectTags []string
+	EffectLine int // at the segment's first tag (the tag-resolution anchor)
+	EffectCol  int
+	Body       Block
+	Line, Col  int // at task
+}
+
+// ScopeExpr is chapter 18's compound scope: bare, timeout(n), collectAll,
+// or timeout(n) collectAll. The block's value is the scope's value (the
+// timeout forms wrap it in Result<T, TimeoutError>, the checker's face).
+// The resource form is ScopeRes (chapter 13's, a statement).
+type ScopeExpr struct {
+	Timeout    Expr // nil without the clause
+	CollectAll bool
+	Body       Block
+	Line, Col  int // at scope
+}
+
+// SelectExpr is chapter 18's select: two or more cases racing their wait
+// sources; the taken case's body value is the expression's value.
+type SelectExpr struct {
+	Cases     []SelectCase
+	Line, Col int // at select
+}
+
+// SelectCase is `case name = source => body`, or the wildcard `case _ =
+// source => body`. The source is one of the four wait-source calls; the
+// binding (when named) holds the source's yield for the body.
+type SelectCase struct {
+	Wildcard  bool
+	Name      string
+	Source    Expr
+	Body      Expr
+	Line, Col int // at case
+}
+
 // Construct is a record construction or update expression (chapter 8):
 // `Head<T…> { field: value, … [with &base] }`. Base non-nil marks an update;
 // TypeArgs holds the head's explicit generic clause (chapter 10).
@@ -639,6 +681,9 @@ func (b *BlockExpr) expr()      {}
 func (u *Unit) expr()           {}
 func (i *If) expr()             {}
 func (m *Match) expr()          {}
+func (t *TaskExpr) expr()       {}
+func (s *ScopeExpr) expr()      {}
+func (s *SelectExpr) expr()     {}
 func (c *Construct) expr()      {}
 func (t *Tuple) expr()          {}
 func (c *Closure) expr()        {}

@@ -308,8 +308,15 @@ func TestNameResolution(t *testing.T) {
 		"E0828", `"Dyn" wants 1 type argument, got 0`, 1, 9)
 	wantDiag(t, "fn f(x: Dyn<Int64>) {\n    return\n}\n",
 		"E0820", `"Int64" is not an interface`, 1, 13)
-	wantBnd(t, "fn f(x: Shareable) {\n    return\n}\n", bndShareable)
-	wantBnd(t, "fn f() {\n    let s = currentCancelSignal\n}\n", bndTaskTime)
+	// M9a: Shareable is a real bound now (T: Shareable dispatches to the
+	// closed set) — a value-surface use of the marker is E0821's rule.
+	wantDiag(t, "fn f(x: Shareable) {\n    return\n}\n",
+		"E0821", "compiler-attached marker of chapter 18", 1, 9)
+	// M9a: currentCancelSignal is a real 0-ary fn gated on task-block
+	// containment (E1608 outside — the bare-name value form rides the
+	// same rule); advanceTime stays the chapter 20 boundary (Q3's pin).
+	wantDiag(t, "fn f() {\n    let s = currentCancelSignal\n}\n",
+		"E1608", "currentCancelSignal called outside a task block", 2, 13)
 	wantBnd(t, "fn f() {\n    advanceTime(1)\n}\n", bndTaskTime)
 	// Local declarations shadow prelude names legally.
 	wantOK(t, "fn panic(msg: String) -> Never {\n    return panic(msg)\n}\n\nfn f() { return }\n")

@@ -1,0 +1,20 @@
+{
+  "name": "check-e1613-nested-access",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a = conc.Mutex(0)\n    let b = conc.Mutex(0)\n    let x = a.update(|v| a.get() + b.get())\n    let _ = x\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:8:26: error[E1613]: nested access to one shared value within its own callback — the callback running under \"a\"'s update calls get on \"a\" again, re-acquiring what it holds; use the callback's own parameter - it is the value - access other shared values freely, and move cross-value work outside the callback\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a = conc.Mutex(0)\n    let b = conc.Mutex(0)\n    let x = a.update(|v| a.get() + b.get())\n    let _ = x\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

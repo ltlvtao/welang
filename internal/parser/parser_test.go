@@ -245,11 +245,11 @@ var dispatchTable = []struct {
 	{"impl", "I {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"where", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"derives", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"scope", "x {}", dg("E0105", topStmtPart), bd(concScopeForms), dg("E0202", valPart)},
+	{"scope", "{ 1 }", dg("E0105", topStmtPart), okRes(), okRes()},
 	{"resource", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"effect", "db", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"task", "f() {}", dg("E0105", topStmtPart), bd(concurForms), bd(concurForms)},
-	{"select", "{}", dg("E0105", topStmtPart), bd(concurForms), bd(concurForms)},
+	{"task", "effect net { 1 }", dg("E0105", topStmtPart), okRes(), okRes()},
+	{"select", "{\n        case _ = a.f() => 1\n        case _ = a.f() => 2\n    }", dg("E0105", topStmtPart), okRes(), okRes()},
 	{"case", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"timeout", "1", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"collectAll", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
@@ -707,10 +707,8 @@ func TestBoundaryForms(t *testing.T) {
 		src  string
 		what string
 	}{
-		{"fn f() {\n    scope x {}\n}\n", concScopeForms},
-		{"fn f() {\n    scope timeout(1) {}\n}\n", concScopeForms},
-		{"fn f() {\n    task g() {}\n}\n", concurForms},
-		{"fn f() {\n    select {}\n}\n", concurForms},
+		// chapter 18's rows left the table with M9a (the concurrency
+		// forms parse now; m9a_test.go pins their true outcomes)
 		{"foreign fn f() {}\n", ffiForms},
 		{"test \"t\" {\n}\n", testForms},
 		{"fn f() {\n    mock m {}\n}\n", testForms},

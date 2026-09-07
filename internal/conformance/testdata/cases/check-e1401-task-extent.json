@@ -1,0 +1,20 @@
+{
+  "name": "check-e1401-task-extent",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn fetch() effect net {\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let t = task effect io { fetch() }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:11:34: error[E1401]: undeclared effect at a call — \"fetch\" performs effect \"net\" which the task block does not declare; add the missing tag to the task's effect segment, or call a pure function instead\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn fetch() effect net {\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let t = task effect io { fetch() }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

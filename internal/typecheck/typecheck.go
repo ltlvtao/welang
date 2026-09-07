@@ -48,7 +48,6 @@ type NotImplemented struct{ What string }
 // milestone deletes its rows; the two spec-gap rows carry their follow-up
 // registration.
 const (
-	bndShareable  = "Shareable markers (chapter 18)"
 	bndTaskTime   = "task-scope and time-control functions (chapters 18 and 20)"
 	bndStdModules = "standard-library modules (chapter 15)"
 	bndDomainGap  = "arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)"
@@ -97,6 +96,18 @@ var tHelps = map[string]string{
 	"E1402": "Widen the expected type's effect segment to cover the value's set, or supply a value that performs less.",
 	"E1404": "Copy the interface method's effect segment into the impl method's signature exactly, in both directions.",
 	"E1405": "Move the work into main, or initialize from a pure computation over constants.",
+	"E1614": "Wrap the composite in Mutex or RwLock, or hold the base-type part in the Atomic.",
+	"E1615": "Use Atomic for base types and Mutex or RwLock for other composites.",
+	"E1616": "Construct with a positive count; guard non-constant counts before the call - a non-positive count at runtime is a checked panic of chapter 14's family.",
+	"E1617": "Annotate the binding, or place the construction where a parameter or declared return fixes the type.",
+	"E1606": "Delete the impl: the type is Shareable exactly when its own shape says so, and the bound T: Shareable checks that shape.",
+	"E1608": "Take a CancelSignal parameter when a caller wants to cancel the work, or move the call inside the task block that should answer cancellation.",
+	"E1618": "Open a scope block around the task creation, or move the work into an ordinary function call.",
+	"E1602": "Carry the state in a synchronized type (store the list in a Mutex, send it through a Channel), or capture only Shareable data and let the task receive the rest.",
+	"E1603": "Carry the mutable state in a shared-state type and reach it through its methods, or copy the value into an immutable binding before the task block.",
+	"E1604": "Restrict the type to self methods, keep the task out, or materialize the contents and capture those instead.",
+	"E1605": "Declare the parameter with a Shareable bound, or keep the capture to concrete Shareable types.",
+	"E1607": "Await or cancel the handle on every path from its creation; on early exits the scope's own exit discharge covers it - plain and timeout forms canceling the rest, collectAll joining them.",
 }
 
 // stop and bstop unwind the check at the first diagnostic or boundary,
@@ -1334,6 +1345,227 @@ func collectionMembers(t namedType) map[string]fnType {
 	return m
 }
 
+// The chapter 18 shared-state types (concurrency): checker-side nominal
+// declarations — the List/Map precedent, no synthetic source, for faces a
+// We file cannot write (the builtin types carry builtin surfaces). The
+// four NAMED sums beside them (TimeoutError, TaskPanic, SendResult,
+// ReceiveResult) are real declarations in the std.concurrent module's
+// synthetic file instead — We-writable shapes the same ingest machinery
+// rides. Every type here is gc-category by construction (sumInfo without
+// the byval flag); the closed member sets live in concurrentMembers.
+var (
+	mutexSum        = &sumInfo{name: "Mutex", params: []string{"T"}}
+	rwlockSum       = &sumInfo{name: "RwLock", params: []string{"T"}}
+	atomicSum       = &sumInfo{name: "Atomic", params: []string{"T"}}
+	atomicRefSum    = &sumInfo{name: "AtomicRef", params: []string{"T"}}
+	condSum         = &sumInfo{name: "Cond", params: []string{"T"}}
+	semaphoreSum    = &sumInfo{name: "Semaphore"}
+	channelSum      = &sumInfo{name: "Channel", params: []string{"T"}}
+	sendOnlySum     = &sumInfo{name: "SendOnly", params: []string{"T"}}
+	receiveOnlySum  = &sumInfo{name: "ReceiveOnly", params: []string{"T"}}
+	taskHandleSum   = &sumInfo{name: "TaskHandle", params: []string{"T"}}
+	cancelSignalSum = &sumInfo{name: "CancelSignal"}
+)
+
+// concurrentTypes indexes the shared-state declarations for the qualified
+// resolution path (conc.Mutex through the import) — the bare names stay
+// unresolved (the qualified spellings are the reachable ones).
+var concurrentTypes = map[string]*sumInfo{
+	"Mutex": mutexSum, "RwLock": rwlockSum, "Atomic": atomicSum,
+	"AtomicRef": atomicRefSum, "Cond": condSum, "Semaphore": semaphoreSum,
+	"Channel": channelSum, "SendOnly": sendOnlySum,
+	"ReceiveOnly": receiveOnlySum, "TaskHandle": taskHandleSum,
+	"CancelSignal": cancelSignalSum,
+}
+
+// concurrentType reports whether a nominal declaration is one of the
+// chapter 18 shared-state types (whose member sets are closed — a miss is
+// E0816, never the stdlib boundary).
+func concurrentType(decl *sumInfo) bool {
+	_, ok := concurrentTypes[decl.name]
+	return ok
+}
+
+// shareableMarker is chapter 18's compiler-attached marker: an interface
+// declaration with no clause, no associated types, and no method set — a
+// bound on it grants nothing and its application dispatches to the shape
+// judgment (shareableOf), never to an implements walk. The marker occupies
+// no value surface (a bound, never a parameter or a box) and is
+// prelude-visible — no import gates the name (the panic family's
+// precedent).
+var shareableMarker = &ifaceInfo{name: "Shareable"}
+
+// shareableOf is the Shareable membership judgment (chapter 18): a type is
+// Shareable exactly when it belongs to the closed set — the base types,
+// unit, value records whose every field is Shareable, value sums whose
+// every payload is Shareable, tuples of Shareable types, and the
+// synchronized gc classes (the declarer alone decides — the type arguments
+// never descend: an Atomic argument is already an atomic base type).
+// Everything else is outside: closures and fn values, non-synchronized gc
+// (the collections, gc records), resources (their captures walk E1604's
+// own gate), boxes, and the bottom type.
+func shareableOf(t Type) bool {
+	switch x := t.(type) {
+	case baseType:
+		return true
+	case unitType:
+		return true
+	case recordType:
+		if x.decl.cat != "value" {
+			return false
+		}
+		for _, f := range x.decl.fields {
+			ft := f.typ
+			if len(x.args) > 0 {
+				ft = subst(ft, x.args, nil)
+			}
+			if !shareableOf(ft) {
+				return false
+			}
+		}
+		return true
+	case namedType:
+		if concurrentType(x.decl) {
+			return true
+		}
+		if !x.decl.byval {
+			return false
+		}
+		for _, v := range x.decl.variants {
+			for _, p := range v.payloads {
+				pt := p
+				if len(x.args) > 0 {
+					pt = subst(pt, x.args, nil)
+				}
+				if !shareableOf(pt) {
+					return false
+				}
+			}
+		}
+		return true
+	case tupleType:
+		for _, e := range x.elems {
+			if !shareableOf(e) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// shareableBoundArg is the Shareable judgment at a bound's application: a
+// clause position carrying the bound hands its parameter through (M6a's
+// bound-carried machine — the same walk implementsFace reads), anything
+// else answers the closed set.
+func (c *checker) shareableBoundArg(t Type) bool {
+	if pr, ok := t.(paramRef); ok {
+		if c.fnBounds == nil {
+			return false
+		}
+		for _, b := range c.fnBounds.bounds {
+			if b.idx == pr.idx && b.face.decl == shareableMarker {
+				return true
+			}
+		}
+		return false
+	}
+	return shareableOf(t)
+}
+
+// concurrentMembers holds each shared-state type's closed member set
+// (chapter 18): the synchronized state cells' update/get/set family,
+// RwLock's read, the cell-specific faces, and the channel and handle
+// methods. The views are pure fn types — waiting performs no effect
+// (chapter 16's carve-out lands as signature purity). RwLock.read's own
+// clause position (U) stays symbolic past the receiver's positions: the
+// call's text determines it, the method-call machine's ordinary course.
+// The three named sums a return mentions resolve through the module's
+// bucket — the pointer-identical declarations the ingest built.
+func (c *checker) concurrentMembers(t namedType) map[string]fnType {
+	cell := func() map[string]fnType {
+		e := paramRef{idx: 0, name: "T"}
+		return map[string]fnType{
+			"update": {params: []Type{fnType{params: []Type{e}, ret: e}}, ret: e},
+			"get":    {ret: e},
+			"set":    {params: []Type{e}, ret: unitType{}},
+		}
+	}
+	opt := func(inner Type) Type {
+		return namedType{decl: optionSum, args: []Type{inner}}
+	}
+	switch t.decl {
+	case mutexSum, atomicSum, atomicRefSum:
+		return cell()
+	case rwlockSum:
+		m := cell()
+		e := paramRef{idx: 0, name: "T"}
+		u := paramRef{idx: 1, name: "U"}
+		m["read"] = fnType{params: []Type{fnType{params: []Type{e}, ret: u}}, ret: u}
+		return m
+	case condSum:
+		e := paramRef{idx: 0, name: "T"}
+		return map[string]fnType{
+			"wait":      {params: []Type{fnType{params: []Type{e}, ret: baseType("Bool")}}, ret: unitType{}},
+			"signal":    {ret: unitType{}},
+			"broadcast": {ret: unitType{}},
+		}
+	case semaphoreSum:
+		return map[string]fnType{
+			"acquire":      {ret: unitType{}},
+			"tryAcquire":   {ret: baseType("Bool")},
+			"release":      {ret: unitType{}},
+			"currentCount": {ret: baseType("Int64")},
+		}
+	case channelSum, sendOnlySum:
+		e := paramRef{idx: 0, name: "T"}
+		m := map[string]fnType{
+			"send": {params: []Type{e}, ret: unitType{}},
+			"trySend": {params: []Type{e},
+				ret: namedType{decl: c.stdConcSum("SendResult")}},
+			"close": {ret: unitType{}},
+		}
+		if t.decl == channelSum {
+			m["receive"] = fnType{ret: opt(e)}
+			m["tryReceive"] = fnType{
+				ret: namedType{decl: c.stdConcSum("ReceiveResult"), args: []Type{e}},
+			}
+			m["toSendOnly"] = fnType{ret: namedType{decl: sendOnlySum, args: t.args}}
+			m["toReceiveOnly"] = fnType{ret: namedType{decl: receiveOnlySum, args: t.args}}
+		}
+		return m
+	case receiveOnlySum:
+		e := paramRef{idx: 0, name: "T"}
+		return map[string]fnType{
+			"receive":    {ret: opt(e)},
+			"tryReceive": {ret: namedType{decl: c.stdConcSum("ReceiveResult"), args: []Type{e}}},
+		}
+	case taskHandleSum:
+		e := paramRef{idx: 0, name: "T"}
+		return map[string]fnType{
+			"await":  {ret: namedType{decl: resultSum, args: []Type{e, namedType{decl: c.stdConcSum("TaskPanic")}}}},
+			"cancel": {ret: unitType{}},
+		}
+	case cancelSignalSum:
+		return map[string]fnType{
+			"isCancelled":    {ret: baseType("Bool")},
+			"awaitCancelled": {ret: unitType{}},
+		}
+	}
+	return nil
+}
+
+// stdConcSum reads one named sum of the std.concurrent module from the
+// ingest-built bucket — the pointer-identical declaration every return
+// view must mention (the sameType machine keys on the pointer).
+func (c *checker) stdConcSum(name string) *sumInfo {
+	bucket := c.modules["std.concurrent"]
+	if sym, ok := bucket[name]; ok && sym.kind == symType {
+		return sym.sum
+	}
+	return &sumInfo{name: name}
+}
+
 // The prelude's base type names (chapter 7's base types; Bytes has no
 // literal form — its values come from methods, the standard library's).
 var baseNames = map[string]bool{
@@ -1471,6 +1703,33 @@ type checker struct {
 	// types is E1405's — the one ratified position that evaluates outside
 	// a signature, and it must stay pure.
 	topLetName string
+	// letName carries the name of the binding whose initializer is being
+	// typed (chapter 18, design D2): the expectation-free channel
+	// construction names it in E1617's context — the one diagnostic whose
+	// text reads the binding, not the expression. A destructure carries no
+	// single name; its initializer walks under the empty string.
+	letName string
+	// The chapter 18 lexical context (design D6): scopeDepth counts the
+	// enclosing compound-scope bodies — a task block must sit inside one
+	// (E1618; the compound forms alone join handles) — and taskDepth the
+	// enclosing task-block bodies (currentCancelSignal's lexical rule,
+	// E1608). Both cross closure bodies: the containment is lexical,
+	// chapter 18's own word. taskVal/inTaskBody hold the task body's
+	// inferred value judgment — every early exit and the tail expression
+	// must agree, no coercion ever inserted — reset by a closure body,
+	// whose returns are its own; bodyTask marks that the live bodyTags
+	// name a task extent, so E1401's message addresses the task.
+	scopeDepth int
+	taskDepth  int
+	taskVal    Type
+	inTaskBody bool
+	bodyTask   bool
+	// varScopes tracks var bindings by block layer (chapter 18, design
+	// D4): the task-capture pre-pass reads it back — a var capture is
+	// E1603 whatever its type. Only walkItems' binding case ever writes
+	// it (parameters, patterns, and scope heads are let-shaped), so the
+	// layers stay one-per-block like the locals stack it mirrors.
+	varScopes []map[string]bool
 	// typeScope is the generic-clause layer stack: a declaration's clause
 	// parameters (and an impl's associated bindings) shadow the module
 	// namespace while its annotations and bodies resolve (chapter 10).
@@ -1969,24 +2228,60 @@ func (c *checker) checkImport(imp *ast.Import) {
 // provides std.io (design D2); the self-hosting route — real sources over
 // a foreign layer — is design D9's disclosed follow-up.
 func StdModule(key string) (*ast.File, bool) {
-	if key != "std.io" {
-		return nil, false
+	switch key {
+	case "std.io":
+		return &ast.File{Items: []ast.Item{
+			&ast.FnDecl{
+				Pub:        true,
+				Name:       "println",
+				Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
+				EffectTags: []string{"io"},
+			},
+			&ast.FnDecl{
+				Pub:        true,
+				Name:       "print",
+				Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
+				EffectTags: []string{"io"},
+			},
+		}}, true
+	case "std.concurrent":
+		return stdConcurrentFile, true
 	}
-	return &ast.File{Items: []ast.Item{
-		&ast.FnDecl{
-			Pub:        true,
-			Name:       "println",
-			Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
-			EffectTags: []string{"io"},
-		},
-		&ast.FnDecl{
-			Pub:        true,
-			Name:       "print",
-			Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
-			EffectTags: []string{"io"},
-		},
-	}}, true
+	return nil, false
 }
+
+// stdConcurrentFile is the std.concurrent module's synthetic source
+// (design D2): the four named sums are real declarations — We-writable
+// shapes the same ingest machinery a user module rides (the std.io
+// precedent) — and channel's marker FnDecl exists for the qualified
+// name's reach; its typing is the expectation-driven construction path,
+// never the fn-call one. The declarations sit at the file's 1:1 (the
+// synthetic prelude's convention — no diagnostic anchors inside). A
+// package-level singleton: one file object per run, so the bucket's
+// sumInfo pointers stay identical however many faces read them back.
+// The variant name Closed appears in two sums — chapter 18's own
+// enumeration spells it in both SendResult and ReceiveResult; the
+// synthetic module never parses (the parser owns E0404's one-name-space
+// rule), and pattern resolution is scrutinee-side, so the shared name
+// gates the pub reach alone.
+var stdConcurrentFile = &ast.File{Items: []ast.Item{
+	&ast.SumDecl{Pub: true, Name: "TimeoutError", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+		Variants: []ast.Variant{{Name: "TimedOut", Line: 1, Col: 1}}},
+	&ast.SumDecl{Pub: true, Name: "TaskPanic", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+		Variants: []ast.Variant{{Name: "Panicked", Line: 1, Col: 1,
+			Payload: []ast.TypeRef{&ast.NamedType{Name: "String", Line: 1, Col: 1}}}}},
+	&ast.SumDecl{Pub: true, Name: "SendResult", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+		Variants: []ast.Variant{
+			{Name: "Sent", Line: 1, Col: 1}, {Name: "Full", Line: 1, Col: 1}, {Name: "Closed", Line: 1, Col: 1}}},
+	&ast.SumDecl{Pub: true, Name: "ReceiveResult", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+		TypeParams: []*ast.TypeParam{{Name: "T", Line: 1, Col: 1}},
+		Variants: []ast.Variant{
+			{Name: "Received", Line: 1, Col: 1,
+				Payload: []ast.TypeRef{&ast.NamedType{Name: "T", Line: 1, Col: 1}}},
+			{Name: "Empty", Line: 1, Col: 1}, {Name: "Closed", Line: 1, Col: 1}}},
+	&ast.FnDecl{Pub: true, Name: "channel", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+		Params: []ast.Param{{Name: "n", Type: &ast.NamedType{Name: "Int64", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}}},
+}}
 
 // StdModuleNotFound renders E1302's std form — the one text the loader and
 // the import pass report for a std path no build provides.
@@ -2042,6 +2337,16 @@ func (c *checker) importSym(mod, item string, line, col int) *symbol {
 // kinds — the target's declaration nodes drive the same machinery a local
 // reference uses (the AST-keyed maps every module's pass filled).
 func (c *checker) importTypeRef(mod string, x *ast.NamedType, slot slotKind) Type {
+	// The chapter 18 shared-state types ride the qualifier without a
+	// module declaration (checker-side singletons, design D2) — the gate
+	// is the module key itself, so a user module's same-named Mutex never
+	// reaches this branch.
+	if mod == "std.concurrent" {
+		if sum, ok := concurrentTypes[x.Name]; ok {
+			c.checkArity(x, sum.name, sum.params)
+			return namedType{decl: sum, args: c.resolveArgs(x.Args, slotGeneric)}
+		}
+	}
 	sym := c.importSym(mod, x.Name, x.Line, x.Col)
 	switch sym.kind {
 	case symType:
@@ -2110,9 +2415,20 @@ func (c *checker) importMember(mod string, id *ast.Ident, x *ast.Member) Type {
 // importCall types one qualified call head (b.helper(…), b.NotFound(…)):
 // the pub gate first, then the symbol-kind dispatch a bare call head
 // takes — a generic fn's determination and a variant's payload check ride
-// the same machinery.
-func (c *checker) importCall(mod string, x *ast.Call) Type {
+// the same machinery. The std.concurrent constructions dispatch ahead of
+// the gate (checker-side singletons, design D2): the shared-state cells
+// take their parameter from the argument, the channel from the expected
+// type at its position.
+func (c *checker) importCall(mod string, x *ast.Call, expected Type) Type {
 	m := x.Fn.(*ast.Member)
+	if mod == "std.concurrent" {
+		if sum, ok := concurrentTypes[m.Name]; ok {
+			return c.concurrentCtorCall(sum, x, expected)
+		}
+		if m.Name == "channel" {
+			return c.channelCall(x, expected)
+		}
+	}
 	sym := c.importSym(mod, m.Name, m.Recv.(*ast.Ident).Line, m.Recv.(*ast.Ident).Col)
 	switch sym.kind {
 	case symFn:
@@ -2124,6 +2440,126 @@ func (c *checker) importCall(mod string, x *ast.Call) Type {
 	}
 	c.bnd(bndCalleeGap)
 	panic("unreachable import call")
+}
+
+// --- chapter 18: the shared-state constructions (design D2) --------------------
+
+// concurrentCtorCall types one shared-state cell construction
+// (conc.Mutex(v), conc.Semaphore(n), …): the one argument's type is the
+// cell's parameter — no determination machinery, no explicit type-argument
+// form. The judgments the compiler can make at the site it makes
+// (E1614/E1615 for the atomic cells' argument shapes, E1616 for the
+// semaphore's constant count); everything else is the argument's own
+// position-wise check.
+func (c *checker) concurrentCtorCall(sum *sumInfo, x *ast.Call, expected Type) Type {
+	id := x.Fn.(*ast.Member).Recv.(*ast.Ident)
+	if len(x.Args) != 1 {
+		c.bnd(bndArityGap)
+	}
+	switch sum {
+	case mutexSum, rwlockSum, atomicSum, atomicRefSum:
+		t := c.typeOf(x.Args[0], nil)
+		switch sum {
+		case atomicSum:
+			if !atomicBaseType(t) {
+				c.fail(id.Line, id.Col, "E1614", fmt.Sprintf(
+					"Atomic type argument is not an atomic base type — the argument has type %q, not one of the eight integer types, Bool, Float32, Float64; composite values have no single-word read-modify-write to be atomic over, so wrap the composite in Mutex or RwLock, or hold the base-type part in the Atomic",
+					t.String()))
+			}
+		case atomicRefSum:
+			rt, isRec := t.(recordType)
+			if !isRec || rt.decl.cat != "gc" {
+				c.fail(id.Line, id.Col, "E1615", fmt.Sprintf(
+					"AtomicRef type argument is not a gc record type — the argument has type %q; base types belong in Atomic, and non-record shapes have no whole-record pointer swap, so use Atomic for base types and Mutex or RwLock for other composites",
+					t.String()))
+			}
+		}
+		return namedType{decl: sum, args: []Type{t}}
+	case condSum:
+		// A cond binds the mutex it waits on: the one argument is a
+		// Mutex<X>, and the cond's own parameter takes X.
+		at := c.typeOf(x.Args[0], nil)
+		mt, ok := at.(namedType)
+		if !ok || mt.decl != mutexSum {
+			line, col := exprPos(x.Args[0])
+			c.fail(line, col, "E0501", fmt.Sprintf(
+				"mixed types — the argument is %s, the parameter is Mutex<T>; no coercion is ever inserted",
+				at.String()))
+		}
+		return namedType{decl: condSum, args: mt.args}
+	case semaphoreSum:
+		c.semaphoreCount(x.Args[0])
+		c.checkArgs(x.Args, []Type{baseType("Int64")})
+		return namedType{decl: semaphoreSum}
+	}
+	c.bnd(bndCalleeGap)
+	panic("unreachable concurrent construction")
+}
+
+// channelCall types one channel construction (conc.channel(n), design
+// D2): the element type has exactly one source — the expected type at
+// the construction's position, a Channel<T> fixing T. Nothing runs from
+// the capacity argument, and no explicit type-argument form exists; a
+// position that fixes nothing is E1617 (the construction names the
+// binding it initializes when one names it).
+func (c *checker) channelCall(x *ast.Call, expected Type) Type {
+	id := x.Fn.(*ast.Member).Recv.(*ast.Ident)
+	if len(x.Args) != 1 {
+		c.bnd(bndArityGap)
+	}
+	c.checkArgs(x.Args, []Type{baseType("Int64")})
+	if nt, ok := expected.(namedType); ok && nt.decl == channelSum {
+		return namedType{decl: channelSum, args: nt.args}
+	}
+	context := "no declaration fixes the element type"
+	if c.letName != "" {
+		context = fmt.Sprintf("the binding %q carries no annotation and no declaration fixes the element type", c.letName)
+	}
+	c.fail(id.Line, id.Col, "E1617", fmt.Sprintf(
+		"channel construction without an expected type — %s, and the language infers nothing; annotate the binding, or place the construction where a parameter or declared return fixes the type",
+		context))
+	panic("unreachable channel construction")
+}
+
+// atomicBaseType reports one of the types an Atomic may hold (chapter
+// 18): the eight integer types, Bool, Float32, Float64 — the shapes a
+// single-word read-modify-write covers.
+func atomicBaseType(t Type) bool {
+	b, ok := t.(baseType)
+	return ok && (intNames[string(b)] || b == "Bool" || b == "Float32" || b == "Float64")
+}
+
+// semaphoreCount judges one Semaphore construction's count (chapter 18):
+// a count the compiler can decide — one integer literal, or a unary
+// minus directly before one — it decides at the site; a non-positive
+// constant is E1616, anchored at the count's own token. Any other count
+// expression leaves its judgment to the runtime's checked panic.
+func (c *checker) semaphoreCount(e ast.Expr) {
+	v, ok := constCount(e)
+	if !ok || v.Sign() > 0 {
+		return
+	}
+	line, col := exprPos(e)
+	c.fail(line, col, "E1616", fmt.Sprintf(
+		"Semaphore count is not a positive integer — the count constant-evaluates to %s, and what the compiler can decide, it decides, at the construction site; construct with a positive count - a non-positive count at runtime is a checked panic of chapter 14's family",
+		v.String()))
+}
+
+// constCount reads a count expression's constant value: one integer
+// literal, or a unary minus directly before one (the minus renders in
+// the value).
+func constCount(e ast.Expr) (*big.Int, bool) {
+	if lit, ok := e.(*ast.Literal); ok && lit.Kind == "int" {
+		_, v := intLiteral(lit.Text)
+		return v, true
+	}
+	if u, ok := e.(*ast.Unary); ok && u.Op == "-" {
+		if lit, ok := u.X.(*ast.Literal); ok && lit.Kind == "int" {
+			_, v := intLiteral(lit.Text)
+			return new(big.Int).Neg(v), true
+		}
+	}
+	return nil, false
 }
 
 // importQualifier reports the canonical module key when name is an import
@@ -2270,6 +2706,14 @@ func (c *checker) checkCallEffect(calleeTags []string, callee string, line, col 
 	ds := make([]string, len(missing))
 	for i, m := range missing {
 		ds[i] = displayTag(m)
+	}
+	// A task extent addresses the task, not a named declaration: the body
+	// answers the task's own declared segment (chapter 18, design D6).
+	if c.bodyTask {
+		c.fail(line, col, "E1401", fmt.Sprintf(
+			"undeclared effect at a call — %q performs effect %s which the task block does not declare; add the missing tag to the task's effect segment, or call a pure function instead",
+			callee, quoteTags(ds)))
+		return
 	}
 	c.fail(line, col, "E1401", fmt.Sprintf(
 		"undeclared effect at a call — %q performs effect %s which %q does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead",
@@ -2579,6 +3023,13 @@ func (c *checker) checkImplDecl(x *ast.ImplDecl) {
 	var ifaceArgs []Type
 	ifaceView := Type(nil)
 	if x.Iface != nil {
+		// Chapter 18's marker is compiler-attached: a manual impl has no
+		// method set to write (E1606, at the impl head) — checked before
+		// the interface resolution, which would read the marker as an
+		// unresolved name instead.
+		if nt, ok := x.Iface.(*ast.NamedType); ok && nt.Qual == "" && nt.Name == "Shareable" {
+			c.fail(x.Line, x.Col, "E1606", "Shareable cannot be manually implemented — the impl head names Shareable, a marker the compiler computes from a declaration's own shape: field types, payload types, category; delete the impl - the type is Shareable exactly when its own shape says so, and the bound T: Shareable checks that shape")
+		}
 		iv := c.resolveIfaceRef(x.Iface)
 		inf, ifaceArgs, ifaceView = iv.decl, iv.args, iv
 	}
@@ -3160,8 +3611,16 @@ func (c *checker) boundIface(nt *ast.NamedType) ifaceType {
 		c.checkArity(nt, inf.name, inf.params)
 		return ifaceType{decl: inf, args: c.resolveArgs(nt.Args, slotGeneric)}
 	}
+	if nt.Name == "Shareable" {
+		// chapter 18's compiler-attached marker: prelude-visible (the
+		// panic family's precedent — no import gates the name), no method
+		// set — the application's judgment is the closed set's own shape
+		// rule, never an implements walk
+		c.checkArity(nt, "Shareable", nil)
+		return ifaceType{decl: shareableMarker}
+	}
 	switch nt.Name {
-	case "Never", "Result", "Option", "Dyn", "List", "Map", "Set", "Range", "Shareable":
+	case "Never", "Result", "Option", "Dyn", "List", "Map", "Set", "Range":
 		// known prelude names that are no interfaces — E0829 below
 	default:
 		if !baseNames[nt.Name] {
@@ -3191,7 +3650,13 @@ func (c *checker) checkWhereSatisfies(info *whereInfo, args []Type, x *ast.Call,
 		if b.idx >= len(args) {
 			continue
 		}
-		if c.implementsFace(args[b.idx], b.face) {
+		if b.face.decl == shareableMarker {
+			// the marker grants no method set — the judgment is the
+			// closed set's own shape rule (design D3)
+			if c.shareableBoundArg(args[b.idx]) {
+				continue
+			}
+		} else if c.implementsFace(args[b.idx], b.face) {
 			continue
 		}
 		line, col := exprPos(x.Fn)
@@ -3487,7 +3952,12 @@ func (c *checker) resolveNamed(x *ast.NamedType, slot slotKind) Type {
 		}
 		return Type(dt)
 	case x.Name == "Shareable":
-		c.bnd(bndShareable)
+		// chapter 18's marker occupies no value surface (the spec's own
+		// sentence): a bound, never a parameter annotation, a let slot,
+		// or a type argument
+		c.fail(x.Line, x.Col, "E0821", fmt.Sprintf(
+			"interface name used as a value type — %q is the compiler-attached marker of chapter 18; it stands in bounds (T: Shareable), never in a value type slot",
+			x.Name))
 	case baseNames[x.Name]:
 		c.checkArity(x, x.Name, nil)
 		return baseType(x.Name)
@@ -3537,7 +4007,13 @@ func (c *checker) checkBinding(b *ast.Binding) Type {
 	if b.Typ != nil {
 		ann = c.resolveTypeRef(b.Typ, slotAnn)
 	}
+	// The initializer walks under its binding's name (chapter 18, design
+	// D2): an expectation-free channel construction inside it names the
+	// binding in E1617's context.
+	savedLet := c.letName
+	c.letName = b.Name
 	it := c.typeOf(b.Init, ann)
+	c.letName = savedLet
 	if ann != nil && !agree(it, ann) && !c.checkFnSlot(it, ann, b.NameLine, b.NameCol) {
 		c.fail(b.NameLine, b.NameCol, "E0501", fmt.Sprintf(
 			"mixed types — the expression is %s, the annotation is %s; no coercion is ever inserted",
@@ -3560,7 +4036,12 @@ func (c *checker) checkLetPattern(b *ast.Binding) {
 	if b.Typ != nil {
 		ann = c.resolveTypeRef(b.Typ, slotAnn)
 	}
+	// A destructure binds many names — no one name names the initializer
+	// (E1617's context walks under the empty string here).
+	savedLet := c.letName
+	c.letName = ""
 	it := c.typeOf(b.Init, ann)
+	c.letName = savedLet
 	if ann != nil {
 		if !agree(it, ann) {
 			line, col := patAnchor(b.Pat)
@@ -3697,6 +4178,12 @@ func (c *checker) checkAssign(a *ast.Assign) {
 // return: a valued return anchors at the value's first token, a bare
 // return in a valued fn at the keyword itself.
 func (c *checker) checkReturn(r *ast.Return) {
+	// A task body's returns carry the task's own inferred value (chapter
+	// 18), never a declared return — the exits' join takes over here.
+	if c.inTaskBody {
+		c.taskReturn(r)
+		return
+	}
 	if c.fnRet == nil {
 		return // a valueless fn — the parser guarantees bare returns only
 	}
@@ -3786,7 +4273,11 @@ const (
 // statements do.
 func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 	c.locals = append(c.locals, map[string]Type{})
-	defer func() { c.locals = c.locals[:len(c.locals)-1] }()
+	c.varScopes = append(c.varScopes, map[string]bool{})
+	defer func() {
+		c.locals = c.locals[:len(c.locals)-1]
+		c.varScopes = c.varScopes[:len(c.varScopes)-1]
+	}()
 	val := Type(unitType{})
 	for i, s := range items {
 		last := i == len(items)-1
@@ -3794,6 +4285,9 @@ func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 		case *ast.Binding:
 			if st.Pat != nil {
 				c.checkLetPattern(st)
+				if st.Kw == "var" {
+					addNames(c.varScopes[len(c.varScopes)-1], patBindNames(st.Pat))
+				}
 				break
 			}
 			t := c.checkBinding(st)
@@ -3802,6 +4296,9 @@ func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 			}
 			if st.Name != "_" {
 				c.locals[len(c.locals)-1][st.Name] = t
+				if st.Kw == "var" {
+					c.varScopes[len(c.varScopes)-1][st.Name] = true
+				}
 			}
 		case *ast.Assign:
 			c.checkAssign(st)
@@ -4084,7 +4581,16 @@ func (c *checker) checkPattern(p ast.Pattern, scrut Type, binds map[string]Type,
 				len(x.Args), x.Name, len(v.payloads)))
 		}
 		for i, a := range x.Args {
-			c.checkPattern(a, v.payloads[i], binds, nodes)
+			// A payload slot the declaration writes as a clause position
+			// binds at the scrutinee's application of it — the pattern's
+			// binding types read the scrutinee, not the declaration (a
+			// generic sum's payload positions substituted with its
+			// arguments; the fix M9a's std.concurrent matches surfaced).
+			pt := v.payloads[i]
+			if len(nt.args) > 0 {
+				pt = subst(pt, nt.args, nil)
+			}
+			c.checkPattern(a, pt, binds, nodes)
 		}
 	case *ast.PatOr:
 		// Branch 1 fixes the name set; a later branch binding one name at
@@ -4276,10 +4782,27 @@ func defaultRows(rows [][]ast.Pattern) [][]ast.Pattern {
 func finiteCtors(t Type) ([]ctorKey, [][]Type, bool) {
 	switch s := t.(type) {
 	case namedType:
+		// A sum declaring no variants is not a finite empty domain — no
+		// legal sum declares zero (the parser holds that), so this shape
+		// is the checker's opaque one: the collections' method-only sums
+		// and the std.concurrent named sums before their module ingests.
+		// Reading it as empty would judge every pattern under it dead
+		// (E0307's false face); it is an unknown domain like any other.
+		if len(s.decl.variants) == 0 {
+			return nil, nil, false
+		}
 		keys := make([]ctorKey, len(s.decl.variants))
 		payloads := make([][]Type, len(s.decl.variants))
 		for i, v := range s.decl.variants {
 			keys[i] = ctorKey{variant: v.name}
+			// The payload slots an application carries are its arguments'
+			// — the usefulness matrix specializes through the applied
+			// types (a clause position here would read as an opaque
+			// domain and misjudge nested constructor arms).
+			if len(s.args) > 0 {
+				payloads[i] = substArgs(v.payloads, s.args, nil)
+				continue
+			}
 			payloads[i] = v.payloads
 		}
 		return keys, payloads, true
@@ -4550,8 +5073,208 @@ func (c *checker) typeOf(e ast.Expr, expected Type) Type {
 		return c.listLitType(x, expected)
 	case *ast.Prop:
 		return c.propType(x)
+	case *ast.TaskExpr:
+		return c.taskType(x)
+	case *ast.ScopeExpr:
+		return c.scopeType(x)
+	case *ast.SelectExpr:
+		return c.selectType(x)
 	}
 	panic("unreachable expr")
+}
+
+// taskType types one task block (chapter 18, design D6): the creation must
+// sit lexically inside a compound scope's body (E1618 — a handle with no
+// scope to join it), the body walks as a function-body context under the
+// task's OWN declared effect segment — the body's calls answer the task,
+// never the enclosing declaration, and the creation itself performs no
+// calls, only the capture copies — and the value is the handle
+// TaskHandle<T>, T the body's block value (unit for a valueless body;
+// every early exit agrees with the tail, and a resource T never travels
+// into a handle — E1106, a composite position).
+func (c *checker) taskType(x *ast.TaskExpr) Type {
+	if c.scopeDepth == 0 {
+		c.fail(x.Line, x.Col, "E1618", "task block outside any scope block — no enclosing scope block joins the handle, and no task outlives its scope; open a scope block around the task creation, or move the work into an ordinary function call")
+	}
+	savedTags, savedName, savedInBody, savedInClosure, savedTask := c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask
+	savedRet, savedProp, savedVal, savedIn := c.fnRet, c.prop, c.taskVal, c.inTaskBody
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask = c.resolveEffectTags(x.EffectTags, x.EffectLine, x.EffectCol), "(task)", true, false, true
+	// A task body carries its value early through return like a closure's
+	// (chapter 18's function-body context): the fn's own return machinery
+	// stands down, the exits' join takes over. The `?` suffix has no
+	// declaration to face either — the task's value is inferred, never a
+	// Result contract (E1202's no-context shape).
+	c.fnRet, c.prop = nil, &propCtx{fnName: "(task)"}
+	c.taskVal, c.inTaskBody = nil, true
+	// The capture pre-pass runs before the body walk (design D4): a
+	// capture diagnostic precedes any the body's own typing would raise.
+	c.checkTaskCaptures(x)
+	c.taskDepth++
+	t := c.walkItems(x.Body.Items, walkPlain)
+	c.taskDepth--
+	c.inTaskBody = savedIn
+	// Join the tail with the early exits: the first exit fixes the
+	// candidate, the tail and every later exit must agree with it (the fn
+	// machinery's own discipline — a bare return exits with unit, and the
+	// if-return pair's block value is () against a valued exit, exactly
+	// as a declared fn's body judges it today).
+	if last, ok := lastExpr(x.Body.Items); ok && c.taskVal != nil && !agree(c.taskVal, t) {
+		c.fail(last.Line, last.Col, "E0501", fmt.Sprintf(
+			"mixed types — the final expression is %s, the task block's value is %s; no coercion is ever inserted",
+			t.String(), c.taskVal.String()))
+	}
+	if c.taskVal != nil {
+		t = c.taskVal
+	}
+	c.taskVal = savedVal
+	if catOf(t) == "resource" {
+		line, col := x.Line, x.Col
+		if last, ok := lastExpr(x.Body.Items); ok {
+			line, col = exprPos(last.Expr)
+		}
+		c.fail(line, col, "E1106", fmt.Sprintf(
+			"resource type in a composite position — %q appears as a task block's value; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type",
+			t.String()))
+	}
+	c.fnRet, c.prop = savedRet, savedProp
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask = savedTags, savedName, savedInBody, savedInClosure, savedTask
+	return namedType{decl: taskHandleSum, args: []Type{t}}
+}
+
+// lastExpr reports the block's final item when it is an expression
+// statement (the block-value tail), with the statement's own position.
+func lastExpr(items []ast.Stmt) (*ast.ExprStmt, bool) {
+	if len(items) == 0 {
+		return nil, false
+	}
+	es, ok := items[len(items)-1].(*ast.ExprStmt)
+	return es, ok
+}
+
+// outsideTaskMsg renders E1608's message: where the call sits — the
+// enclosing body's own declaration, or the module top level — with the
+// static rule and the registry's remediation.
+func outsideTaskMsg(bodyName string) string {
+	sits := "the call sits at the module top level"
+	if bodyName != "" {
+		sits = fmt.Sprintf("the call sits in %q", bodyName)
+	}
+	return fmt.Sprintf(
+		"currentCancelSignal called outside a task block — %s, where no current task exists and no default signal does, and the check is static; take a CancelSignal parameter when a caller wants to cancel the work, or move the call inside the task block that should answer cancellation",
+		sits)
+}
+
+// taskReturn types one return inside a task body: the body's value type is
+// inferred from its exits — a valued return contributes its type, a bare
+// one exits with unit — and the exits must agree among themselves before
+// the tail joins (the fn machinery's mirror, E0501 at the disagreement).
+func (c *checker) taskReturn(r *ast.Return) {
+	vt := Type(unitType{})
+	if r.HasValue {
+		vt = c.typeOf(r.Value, nil)
+	}
+	if c.taskVal == nil {
+		c.taskVal = vt
+		return
+	}
+	if !agree(c.taskVal, vt) {
+		if r.HasValue {
+			line, col := exprPos(r.Value)
+			c.fail(line, col, "E0501", fmt.Sprintf(
+				"mixed types — the return expression is %s, the task block's value is %s; no coercion is ever inserted",
+				vt.String(), c.taskVal.String()))
+		}
+		c.fail(r.Line, r.Col, "E0501", fmt.Sprintf(
+			"mixed types — the return expression is (), the task block's value is %s; no coercion is ever inserted",
+			c.taskVal.String()))
+	}
+}
+
+// scopeType types one compound scope block (chapter 18, design D7): the
+// timeout clause types Int64 (E0501 at the clause expression), the body
+// walks in a new scope frame — the depth the E1618 gate reads, so a task
+// may be created inside — and the value is the body's block value, the
+// timeout forms wrapping it in Result<T, TimeoutError> through the
+// synthetic module's own declaration.
+func (c *checker) scopeType(x *ast.ScopeExpr) Type {
+	if x.Timeout != nil {
+		tt := c.typeOf(x.Timeout, baseType("Int64"))
+		if !agree(tt, baseType("Int64")) {
+			line, col := exprPos(x.Timeout)
+			c.fail(line, col, "E0501", fmt.Sprintf(
+				"mixed types — the timeout expression is %s, the clause wants Int64; no coercion is ever inserted",
+				tt.String()))
+		}
+	}
+	c.scopeDepth++
+	val := c.walkItems(x.Body.Items, walkPlain)
+	c.scopeDepth--
+	// The handle discipline runs after the body typed clean (the chapter 13
+	// release walk's position): every handle the body created must take its
+	// one fire on every path that is not an early exit (design D5).
+	c.handleCheck(x.Body.Items)
+	if x.Timeout != nil {
+		return namedType{decl: resultSum, args: []Type{val, namedType{decl: c.stdConcSum("TimeoutError")}}}
+	}
+	return val
+}
+
+// selectType types one select expression (chapter 18, design D7): each
+// case's source types first on the existing member-call road, then must
+// sit in the four-call wait-source closed set (E1609); the case's binding
+// takes the wait's own value shape (Channel/ReceiveOnly receive → the
+// element Option, TaskHandle await → the body Result, CancelSignal
+// awaitCancelled → unit); the arms must agree in type (E1610), and the
+// select's value is the taken case's body value.
+func (c *checker) selectType(x *ast.SelectExpr) Type {
+	var val Type
+	for i, cs := range x.Cases {
+		c.typeOf(cs.Source, nil)
+		bind := c.waitSourceBind(cs)
+		c.locals = append(c.locals, map[string]Type{})
+		if !cs.Wildcard && cs.Name != "_" {
+			c.locals[len(c.locals)-1][cs.Name] = bind
+		}
+		bt := c.typeOf(cs.Body, nil)
+		c.locals = c.locals[:len(c.locals)-1]
+		if i == 0 {
+			val = bt
+		} else if !agree(bt, val) {
+			c.fail(cs.Line, cs.Col, "E1610", fmt.Sprintf(
+				"select arms disagree in type — the arms produce %q and %q, and the select expression's value is the taken case's body value; give the arms one type, or bind what differs and unify in a following expression",
+				val.String(), bt.String()))
+		}
+	}
+	return val
+}
+
+// waitSourceBind judges one select case's source against the closed
+// wait-source set (E1609) and returns the case binding's own value shape.
+func (c *checker) waitSourceBind(cs ast.SelectCase) Type {
+	if call, ok := cs.Source.(*ast.Call); ok {
+		if m, ok := call.Fn.(*ast.Member); ok {
+			if nt, isN := c.typeOf(m.Recv, nil).(namedType); isN {
+				switch m.Name {
+				case "receive":
+					if nt.decl == channelSum || nt.decl == receiveOnlySum {
+						return namedType{decl: optionSum, args: []Type{nt.args[0]}}
+					}
+				case "await":
+					if nt.decl == taskHandleSum {
+						return namedType{decl: resultSum, args: []Type{
+							nt.args[0], namedType{decl: c.stdConcSum("TaskPanic")}}}
+					}
+				case "awaitCancelled":
+					if nt.decl == cancelSignalSum {
+						return unitType{}
+					}
+				}
+			}
+		}
+	}
+	line, col := exprPos(cs.Source)
+	c.fail(line, col, "E1609", "select source is not a wait source — the source expression is not one of Channel.receive(), ReceiveOnly.receive(), TaskHandle.await(), CancelSignal.awaitCancelled() and nothing else; use one of the four wait-source calls as the case's source, or call the non-waiting expression outside the select")
+	return nil
 }
 
 // propType types the propagation postfix `expr?` (chapter 14, design D7).
@@ -4680,6 +5403,13 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 	// closure value is called through its fn type.
 	savedInClosure := c.inClosure
 	c.inClosure = true
+	// A closure's returns answer the closure's own fnRet (swapped in
+	// below), never the task join of a task body the closure sits in —
+	// the exit-value machine stands down inside the closure body. The
+	// task's lexical depth (E1608's gate) is deliberately untouched:
+	// containment reads through closures.
+	savedInTask, savedTaskVal := c.inTaskBody, c.taskVal
+	c.inTaskBody = false
 	ret := Type(unitType{})
 	switch {
 	case x.Ret != nil:
@@ -4722,6 +5452,7 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 	c.resCheck(x.Body.Items, x.Params, params)
 	c.fnRet, c.locals, c.prop = savedRet, savedLocals, savedProp
 	c.inClosure = savedInClosure
+	c.inTaskBody, c.taskVal = savedInTask, savedTaskVal
 	// The inference's settled set is the closure value's own segment
 	// (chapter 16 R4): every face of the value from here — the woven
 	// agreement at a slot, the call judgment when it is called — weighs
@@ -4879,7 +5610,16 @@ func (c *checker) checkImplWhereAtConstruct(rec *recordInfo, args []Type, x *ast
 		}
 		for _, b := range w.bounds {
 			subject, bound := binds[b.idx]
-			if !bound || c.implementsFace(subject, b.face) {
+			if !bound {
+				continue
+			}
+			// the Shareable bound's instantiation judgment is the same
+			// shape rule the fn-application site reads (design D3)
+			if b.face.decl == shareableMarker {
+				if c.shareableBoundArg(subject) {
+					continue
+				}
+			} else if c.implementsFace(subject, b.face) {
 				continue
 			}
 			c.fail(x.Line, x.Col, "E0830", fmt.Sprintf(
@@ -5397,7 +6137,15 @@ func (c *checker) identType(x *ast.Ident, expected Type) Type {
 		// The panic family's prelude signatures (chapter 14): ordinary
 		// functions, the bare name its fn type like any fn's.
 		return terminationFnType(x.Name)
-	case "currentCancelSignal", "advanceTime":
+	case "currentCancelSignal":
+		// Chapter 18's accessor as a value: the 0-ary fn type, legal
+		// only lexically inside a task body (E1608 elsewhere — the
+		// containment reads through closures, never the join machine).
+		if c.taskDepth == 0 {
+			c.fail(x.Line, x.Col, "E1608", outsideTaskMsg(c.bodyName))
+		}
+		return fnType{ret: namedType{decl: cancelSignalSum}}
+	case "advanceTime":
 		c.bnd(bndTaskTime)
 	case "None":
 		if nt, ok := expected.(namedType); ok && nt.decl == optionSum {
@@ -5546,6 +6294,21 @@ func (c *checker) memberOfType(t Type, x *ast.Member, asCall bool) Type {
 				return view
 			}
 			c.bnd(bndStdModules)
+		}
+		if concurrentType(t.decl) {
+			// the chapter 18 faces are the language's own closed sets
+			// (design D2): a member no family names is a miss (E0816),
+			// never the stdlib boundary. The view substitutes the
+			// receiver's arguments into the clause positions — RwLock's
+			// read keeps its own clause position (U) for the call's text
+			// to determine.
+			if view, ok := c.concurrentMembers(t)[x.Name]; ok {
+				c.methodUse(x, asCall)
+				return substFn(view, t.args, nil)
+			}
+			c.fail(x.NameLine, x.NameCol, "E0816", fmt.Sprintf(
+				"no such member on the receiver's type — %q has no member %q; member access names a field or a method of the receiver's type",
+				t.decl.name, x.Name))
 		}
 		c.fail(x.NameLine, x.NameCol, "E0816", fmt.Sprintf(
 			"no such member on the receiver's type — %q has no member %q; member access names a field or a method of the receiver's type",
@@ -5746,7 +6509,10 @@ func (c *checker) dynIfaceRef(tr ast.TypeRef) ifaceType {
 	}
 	switch nt.Name {
 	case "Shareable":
-		c.bnd(bndShareable)
+		// chapter 18's marker is never boxed either — no value surface
+		c.fail(nt.Line, nt.Col, "E0820", fmt.Sprintf(
+			"Dyn argument is not an interface type — %q is the compiler-attached marker of chapter 18; it stands in bounds (T: Shareable), never as a box",
+			nt.Name))
 	case "Never", "Result", "Option", "Dyn", "List", "Map", "Set", "Range":
 		// prelude names that are no interfaces — E0820 below
 	default:
@@ -5822,7 +6588,7 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 	if m, ok := x.Fn.(*ast.Member); ok {
 		if id, is := m.Recv.(*ast.Ident); is {
 			if mod, imp := c.importQualifier(id.Name); imp {
-				return c.importCall(mod, x)
+				return c.importCall(mod, x, expected)
 			}
 		}
 	}
@@ -5870,7 +6636,16 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 			// takes the ordinary fn-value path — the arguments check
 			// position-wise, the arity gap stays the honest boundary.
 			return c.fnValueCall(terminationFnType(id.Name), x)
-		case "currentCancelSignal", "advanceTime":
+		case "currentCancelSignal":
+			// Chapter 18's accessor: a 0-ary call returning the ambient
+			// signal, legal only lexically inside a task body (E1608 —
+			// the rule is containment, so a closure inside the task body
+			// counts as inside).
+			if c.taskDepth == 0 {
+				c.fail(id.Line, id.Col, "E1608", outsideTaskMsg(c.bodyName))
+			}
+			return c.fnValueCall(fnType{ret: namedType{decl: cancelSignalSum}}, x)
+		case "advanceTime":
 			c.bnd(bndTaskTime)
 		case "Ok", "Err", "Some", "None":
 			return c.builtinCtorCall(id, x, expected)
@@ -5903,14 +6678,45 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 	if !isFn {
 		c.bnd(bndCalleeGap)
 	}
+	var rt Type
 	if head != nil && fnContainsParam(ft) {
 		// a method view still holding clause positions: the arguments
 		// determine them (design D6's method generics). A fn-typed
 		// value's parameters are the enclosing scope's positions, never
 		// a callee's to determine — that path stays positional.
-		return c.methodCall(ft, head, x, recvT)
+		rt = c.methodCall(ft, head, x, recvT)
+	} else {
+		rt = c.fnValueCall(ft, x)
 	}
-	return c.fnValueCall(ft, x)
+	// Chapter 18's nested-access discipline (E1613), after the arguments
+	// typed clean (the release walk's position): a shared cell's own
+	// callback re-acquiring the cell — direct, per binding, no chasing
+	// into further functions (the spec's own stated boundary).
+	if head != nil {
+		c.nestedAccessCheck(head, x, recvT)
+	}
+	return rt
+}
+
+// nestedAccessCheck fires E1613's walk when one call is a shared cell's
+// update or read carrying a closure argument.
+func (c *checker) nestedAccessCheck(m *ast.Member, x *ast.Call, recv Type) {
+	if m.Name != "update" && m.Name != "read" {
+		return
+	}
+	id, ok := m.Recv.(*ast.Ident)
+	if !ok {
+		return
+	}
+	nt, isN := recv.(namedType)
+	if !isN || (nt.decl != mutexSum && nt.decl != rwlockSum && nt.decl != atomicSum && nt.decl != atomicRefSum) {
+		return
+	}
+	for _, a := range x.Args {
+		if cl, isCl := a.(*ast.Closure); isCl {
+			c.checkNestedAccess(id.Name, m.Name, cl)
+		}
+	}
 }
 
 // --- chapter 10: generic determination (design D6) ----------------------------

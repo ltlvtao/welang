@@ -1,0 +1,20 @@
+{
+  "name": "check-e1612-single-case",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n    }\n    let _ = v\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:7:13: error[E1612]: select holds fewer than two cases — one case waiting on one source is a plain call wearing syntax; call the wait source directly, or add the second case the construct exists to race\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n    }\n    let _ = v\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

@@ -33,11 +33,9 @@ import (
 // The boundary form groups (design D6's closed table). Each later
 // milestone deletes its rows; the list shrinks to zero with the roadmap.
 const (
-	bndConcScope = "chapter 18 (scope) forms"
-	bndConc      = "chapter 18 (concurrency) forms"
-	bndFFI       = "chapter 19 (ffi) forms"
-	bndTest      = "chapter 20 (testing) forms"
-	bndMutPar    = "mut parameters"
+	bndFFI    = "chapter 19 (ffi) forms"
+	bndTest   = "chapter 20 (testing) forms"
+	bndMutPar = "mut parameters"
 )
 
 // helps carries each code's remediation, compressed from its registry
@@ -66,6 +64,9 @@ var helps = map[string]string{
 	"E0301": "Add at least one arm; when only a default outcome is needed, a single wildcard arm `_ => ...` covers all values.",
 	"E0302": "Give every branch the same binding names, or drop the bindings from the or-pattern (for example `200 | 404`); re-express per-branch bindings as separate arms.",
 	"E0602": "Declare a record with named fields instead of the long tuple.",
+	"E1601": "Write the segment of the chapter 16 spelling: task effect tag1 tag2 ... followed by the block.",
+	"E1611": "Bind the whole yield to a name or discard it with _, and match inside the body if the yield needs splitting.",
+	"E1612": "Call the wait source directly, or add the second case the construct exists to race.",
 }
 
 // NotImplemented reports a ratified-but-unimplemented form. What names the
@@ -1640,15 +1641,18 @@ func (p *parser) parseStmt() ast.Stmt {
 			return p.parseBreakCont()
 		case "defer":
 			return p.parseDefer()
-		case "if", "match", "fn", "true", "false":
+		case "if", "match", "fn", "true", "false", "task", "select":
 			// keyword-led expression forms; in statement position they
 			// wrap in an expression statement (chapter 2)
 		case "for":
 			return p.parseFor()
 		case "scope":
-			return p.parseScopeRes()
-		case "task", "select":
-			p.bnd(bndConc)
+			// chapter 13's resource form stays a statement of its own;
+			// chapter 18's compound forms are expressions and wrap in an
+			// expression statement here
+			if isKw(p.peek(), "resource") {
+				return p.parseScopeRes()
+			}
 		case "mock":
 			p.bnd(bndTest)
 		case "pub", "import", "as", "mut", "else", "in", "where", "derives",
@@ -1972,18 +1976,16 @@ func (p *parser) parseDefer() *ast.Defer {
 }
 
 // parseScopeRes parses `scope resource(name = expr, …) block` (chapter 13).
-// Any other `scope` shape — bare, timeout, collectAll — is chapter 18's and
-// keeps its own honest boundary row. Head names are block bindings:
-// camelCase (E0012) and duplicates (E0404, the pattern-binding variant's
-// wording) keep their existing codes. The body is a plain nested block:
-// loop depth persists (break/continue punch through scope blocks) and defer
-// inside is not at a function body's top level (E0204's existing check).
+// The caller routes `scope` here only when `resource` literally follows
+// (chapter 18's compound forms take the expression path). Head names are
+// block bindings: camelCase (E0012) and duplicates (E0404, the
+// pattern-binding variant's wording) keep their existing codes. The body
+// is a plain nested block: loop depth persists (break/continue punch
+// through scope blocks) and defer inside is not at a function body's top
+// level (E0204's existing check).
 func (p *parser) parseScopeRes() ast.Stmt {
 	t := p.cur()
 	p.next() // scope
-	if !isKw(p.cur(), "resource") {
-		p.bnd(bndConcScope)
-	}
 	p.next() // resource
 	if p.cur().Kind != "(" {
 		if p.atEnd() {
@@ -2192,6 +2194,156 @@ func patPos(p ast.Pattern) (int, int) {
 		return x.Line, x.Col
 	}
 	return 0, 0
+}
+
+// --- chapter 18's task, compound scope, and select (expressions) ---------------
+
+// parseTask parses `task effect tag… block` (chapter 18). The effect
+// segment is mandatory — its omission is E1601, a pure syntax fact (the
+// `?` precedent): the body's calls answer the task's own declaration.
+// The body is a function-body context: return carries the block's value
+// and the loop depth resets (a task body is not a loop body).
+func (p *parser) parseTask() *ast.TaskExpr {
+	t := p.cur() // task
+	p.next()
+	if !isKw(p.cur(), "effect") {
+		p.failTok(t, "E1601",
+			"task block without an effect segment — the task keyword is followed directly by its block, leaving the body's calls answerable to no declaration; write the segment of the chapter 16 spelling: task effect tag1 tag2 ... followed by the block")
+	}
+	tags, el, ec := p.parseEffectSegment()
+	body := p.parseFnBlock(&fnCtx{name: "(task)", hasRet: true})
+	return &ast.TaskExpr{EffectTags: tags, EffectLine: el, EffectCol: ec, Body: body, Line: t.Line, Col: t.Col}
+}
+
+// parseScopeCompound parses chapter 18's scope forms — bare,
+// timeout(n), collectAll, timeout(n) collectAll — as the expression the
+// value positions carry. The clause order is fixed (timeout precedes
+// collectAll, the chapter's four-form enumeration); the Int64 judgment on
+// the timeout clause is the checker's (E0501's existing machine).
+func (p *parser) parseScopeCompound() *ast.ScopeExpr {
+	t := p.cur() // scope
+	p.next()
+	node := &ast.ScopeExpr{Line: t.Line, Col: t.Col}
+	if isKw(p.cur(), "timeout") {
+		p.next() // timeout
+		if p.cur().Kind != "(" {
+			if p.atEnd() {
+				p.failTok(p.cur(), "E0105", "unexpected end of file — a scope timeout clause is timeout(n), milliseconds")
+			}
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q where \"(\" opens the scope timeout clause: the clause is timeout(n), milliseconds", p.cur().Text))
+		}
+		p.next() // (
+		node.Timeout = p.headExpr()
+		if p.cur().Kind != ")" {
+			if p.atEnd() {
+				p.failTok(p.cur(), "E0105", "unexpected end of file — the scope timeout clause closes with )")
+			}
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q where the scope timeout clause closes with )", p.cur().Text))
+		}
+		p.next() // )
+	}
+	if isKw(p.cur(), "collectAll") {
+		p.next() // collectAll
+		node.CollectAll = true
+	}
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a scope wants its body block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where the scope body opens", p.cur().Text))
+	}
+	node.Body = p.parseBlock(nil)
+	return node
+}
+
+// parseSelect parses `select { cases }` (chapter 18): at least two cases,
+// separated by line breaks with no separator token (the match-arm
+// precedent). Fewer than two is E1612 at the select keyword.
+func (p *parser) parseSelect() *ast.SelectExpr {
+	t := p.cur() // select
+	p.next()
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a select opens its cases with {")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a select's case group opens", p.cur().Text))
+	}
+	p.next() // {
+	node := &ast.SelectExpr{Line: t.Line, Col: t.Col}
+	for {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a select closes with }")
+		}
+		if !isKw(p.cur(), "case") {
+			if p.cur().Kind == "}" {
+				p.next()
+				break
+			}
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q where a select case begins: a case is case name = source => body", p.cur().Text))
+		}
+		node.Cases = append(node.Cases, p.parseSelectCase())
+		if p.cur().Kind == "}" {
+			p.next()
+			break
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a select closes with }")
+		}
+		if !p.brokeLine() {
+			p.failTok(p.cur(), "E0105",
+				fmt.Sprintf("unexpected token — %q fits no production: select cases are separated by newlines and carry no separator token", p.cur().Text))
+		}
+	}
+	if len(node.Cases) < 2 {
+		p.failTok(t, "E1612",
+			"select holds fewer than two cases — one case waiting on one source is a plain call wearing syntax; call the wait source directly, or add the second case the construct exists to race")
+	}
+	return node
+}
+
+// parseSelectCase parses `case name = source => body` (or the wildcard
+// `case _ = source => body`). The pattern is a bare binding name or the
+// wildcard — anything else is E1611 at the case keyword: a no-match
+// policy exists for no rule here.
+func (p *parser) parseSelectCase() ast.SelectCase {
+	t := p.cur() // case
+	p.next()
+	c := ast.SelectCase{Line: t.Line, Col: t.Col}
+	switch {
+	case p.cur().Kind == "_":
+		c.Wildcard = true
+		p.next()
+	case p.cur().Kind == lex.KindIdent && isCamel(p.cur().Text):
+		c.Name = p.cur().Text
+		p.next()
+	default:
+		p.failTok(t, "E1611",
+			"select case pattern is not a binding or the wildcard — the case carries a pattern beyond a bare binding name or the wildcard _, and a no-match policy exists for no rule here; bind the whole yield to a name or discard it with _, and match inside the body if the yield needs splitting")
+	}
+	if p.cur().Kind != "=" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a select case is case name = source => body")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a select case's = goes: a case is case name = source => body", p.cur().Text))
+	}
+	p.next() // =
+	c.Source = p.parseExpr(valueCtx)
+	if p.cur().Kind != "=>" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a select case is case name = source => body")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a select case's => goes: a case is case name = source => body", p.cur().Text))
+	}
+	p.next() // =>
+	c.Body = p.parseExpr(valueCtx)
+	return c
 }
 
 // --- the pattern grammar (chapter 4) -------------------------------------------
@@ -2902,7 +3054,20 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 			return p.parseIf(ctx)
 		case "match":
 			return p.parseMatch()
-		case "while", "loop", "break", "continue", "defer", "for", "scope":
+		case "scope":
+			// the resource form is chapter 13's statement — it produces
+			// no value (E0202); the compound forms are chapter 18's
+			// value-carrying expressions
+			if isKw(p.peek(), "resource") {
+				p.failTok(t, "E0202",
+					fmt.Sprintf("valueless form in value position — %q produces no value and cannot stand in %s; valueless forms are statements", t.Text, p.valSite))
+			}
+			return p.parseScopeCompound()
+		case "task":
+			return p.parseTask()
+		case "select":
+			return p.parseSelect()
+		case "while", "loop", "break", "continue", "defer", "for":
 			// ratified valueless statement forms — in any expression
 			// position they produce no value (E0202). Inside a short
 			// closure's maximal body break/continue hit the closure-body
@@ -2923,8 +3088,6 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 			}
 			p.failTok(t, "E0105",
 				fmt.Sprintf("unexpected token — %q where a closure's parameter list opens: an expression fn is a closure, fn(name: type, …) [-> type] { body }", p.peek().Text))
-		case "task", "select":
-			p.bnd(bndConc)
 		}
 		p.failTok(t, "E0105",
 			fmt.Sprintf("unexpected token — %q cannot begin an expression: expressions are identifiers, literals, (e), { block }, and unary ! - ~", t.Text))

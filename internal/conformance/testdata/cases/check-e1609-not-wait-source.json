@@ -1,0 +1,20 @@
+{
+  "name": "check-e1609-not-wait-source",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let xs = [1, 2, 3]\n    let v = select {\n        case n = xs.get(0) => n\n        case y = a.receive() => y\n    }\n    let _ = v\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:9:18: error[E1609]: select source is not a wait source — the source expression is not one of Channel.receive(), ReceiveOnly.receive(), TaskHandle.await(), CancelSignal.awaitCancelled() and nothing else; use one of the four wait-source calls as the case's source, or call the non-waiting expression outside the select\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let xs = [1, 2, 3]\n    let v = select {\n        case n = xs.get(0) => n\n        case y = a.receive() => y\n    }\n    let _ = v\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

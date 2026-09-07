@@ -1,0 +1,20 @@
+{
+  "name": "check-e1604-resource-mut-self",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nbyres record FileHandle { fd: Int64 }\n\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nimpl FileHandle {\n    fn bump(mut self) -> Int64 {\n        return 1\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\npub fn main() effect net -> Result<(), AppError> {\n    scope resource(f = openFile()) {\n        scope {\n            let t = task effect net { f }\n            let _ = t.await()\n        }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:26:39: error[E1604]: task block captures a resource whose type declares mut self methods — \"f\" has type \"FileHandle\", whose method \"bump\" takes mut self, a read-modify-write another task can race on; restrict the type to self methods, keep the task out, or materialize the contents and capture those instead\n",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nbyres record FileHandle { fd: Int64 }\n\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\nimpl FileHandle {\n    fn bump(mut self) -> Int64 {\n        return 1\n    }\n}\n\nfn openFile() -> FileHandle {\n    return FileHandle { fd: 1 }\n}\n\npub fn main() effect net -> Result<(), AppError> {\n    scope resource(f = openFile()) {\n        scope {\n            let t = task effect net { f }\n            let _ = t.await()\n        }\n    }\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

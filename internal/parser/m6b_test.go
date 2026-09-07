@@ -73,12 +73,11 @@ func TestScopeResStmt(t *testing.T) {
 // --- D1: the bndScope split ---------------------------------------------------
 
 func TestScopeSplit(t *testing.T) {
-	// A bare `scope` or any non-resource scope form is chapter 18's: it
-	// keeps its own honest boundary row after the split.
-	wantBnd(t, "fn f() {\n    scope {\n        let _ = 1\n    }\n}\n",
-		"chapter 18 (scope) forms")
-	wantBnd(t, "fn f() {\n    scope timeout(5) {\n        let _ = 1\n    }\n}\n",
-		"chapter 18 (scope) forms")
+	// M9a landed chapter 18's compound forms: a bare `scope` and the
+	// clause forms parse as expressions now (m9a_test.go carries their
+	// own probes); only the resource form stays this chapter's statement.
+	wantClean(t, "fn f() {\n    scope {\n        let _ = 1\n    }\n}\n")
+	wantClean(t, "fn f() {\n    scope timeout(5) {\n        let _ = 1\n    }\n}\n")
 	// `scope` must be followed literally by `resource` + binding list; a
 	// resource head without parentheses is not a production.
 	wantDiag(t, "fn f() {\n    scope resource {\n        let _ = 1\n    }\n}\n",

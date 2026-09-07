@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-cond-sem-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let queue = conc.Mutex(0)\n    let notEmpty = conc.Cond(queue)\n    notEmpty.wait(|v| v > 0)\n    notEmpty.signal()\n    notEmpty.broadcast()\n    let dbLimiter = conc.Semaphore(10)\n    dbLimiter.acquire()\n    dbLimiter.release()\n    let n = dbLimiter.currentCount()\n    let ok = dbLimiter.tryAcquire()\n    let _ = n\n    let _ = ok\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let queue = conc.Mutex(0)\n    let notEmpty = conc.Cond(queue)\n    notEmpty.wait(|v| v > 0)\n    notEmpty.signal()\n    notEmpty.broadcast()\n    let dbLimiter = conc.Semaphore(10)\n    dbLimiter.acquire()\n    dbLimiter.release()\n    let n = dbLimiter.currentCount()\n    let ok = dbLimiter.tryAcquire()\n    let _ = n\n    let _ = ok\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

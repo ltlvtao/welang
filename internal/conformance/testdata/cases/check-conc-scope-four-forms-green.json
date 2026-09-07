@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-scope-four-forms-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a = scope { 5 }\n    let b = scope collectAll { a }\n    let r = scope timeout(500) { b }\n    let c = scope timeout(500) collectAll { 7 }\n    let n = match r {\n        Ok(v) => v\n        Err(e) => 0\n    }\n    let m = match c {\n        Ok(v) => v\n        Err(e) => 0\n    }\n    let _ = n\n    let _ = m\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a = scope { 5 }\n    let b = scope collectAll { a }\n    let r = scope timeout(500) { b }\n    let c = scope timeout(500) collectAll { 7 }\n    let n = match r {\n        Ok(v) => v\n        Err(e) => 0\n    }\n    let m = match c {\n        Ok(v) => v\n        Err(e) => 0\n    }\n    let _ = n\n    let _ = m\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

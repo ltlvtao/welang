@@ -1,0 +1,20 @@
+{
+  "name": "check-conc-directions-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn produce(out: conc.SendOnly<Int64>) {\n    out.send(7)\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(4)\n    let so = ch.toSendOnly()\n    produce(so)\n    let ro = ch.toReceiveOnly()\n    let got = ro.receive()\n    let _ = got\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn produce(out: conc.SendOnly<Int64>) {\n    out.send(7)\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(4)\n    let so = ch.toSendOnly()\n    produce(so)\n    let ro = ch.toReceiveOnly()\n    let got = ro.receive()\n    let _ = got\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}
