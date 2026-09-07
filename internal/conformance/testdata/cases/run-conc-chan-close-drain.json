@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-chan-close-drain",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(4)\n    ch.send(7)\n    let _ = ch.close()\n    let a = ch.receive()\n    let b = ch.receive()\n    match a {\n        Some(x) => {\n            if x == 7 {\n                io.println(\"seven\")\n            } else {\n                io.println(\"ax\")\n            }\n        }\n        None => { io.println(\"anone\") }\n    }\n    match b {\n        Some(_) => { io.println(\"bsome\") }\n        None => { io.println(\"bnone\") }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "seven\nbnone\n",
+  "stderr": ""
+}

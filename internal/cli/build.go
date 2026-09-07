@@ -179,6 +179,9 @@ func (e *env) buildProject(dir string) (string, int) {
 	for _, f := range []struct{ path, content string }{
 		{filepath.Join(buildDir, name+".ll"), ir},
 		{filepath.Join(buildDir, "rt-startup.c"), weruntime.StartupSource},
+		{filepath.Join(buildDir, "sched.h"), weruntime.SchedHeader},
+		{filepath.Join(buildDir, "rt-sched.c"), weruntime.SchedSource},
+		{filepath.Join(buildDir, "rt-conc.c"), weruntime.ConcSource},
 		{filepath.Join(buildDir, "rt-gc.c"), weruntime.GCSource},
 		{filepath.Join(buildDir, "rt-io.c"), weruntime.IOSource},
 	} {
@@ -188,18 +191,25 @@ func (e *env) buildProject(dir string) (string, int) {
 	}
 	// The clang driver sequence of design D6: the runtime sources to
 	// objects, then one driver call that compiles the .ll and links.
-	// -Wno-override-module keeps the no-triple IR (D4) from warning on
-	// stderr — the success faces are silent, and a warning is output.
+	// M9b inserts the scheduler and the wait-machine sources ahead of
+	// the collector — startup enters __we_sched_boot, so the link needs
+	// them even for a plain M8 body. -Wno-override-module keeps the
+	// no-triple IR (D4) from warning on stderr — the success faces are
+	// silent, and a warning is output.
 	for _, c := range []struct {
 		name string
 		args []string
 	}{
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-startup.c"), "-o", filepath.Join(buildDir, "rt-startup.o")}},
+		{"clang", []string{"-c", filepath.Join(buildDir, "rt-sched.c"), "-o", filepath.Join(buildDir, "rt-sched.o")}},
+		{"clang", []string{"-c", filepath.Join(buildDir, "rt-conc.c"), "-o", filepath.Join(buildDir, "rt-conc.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-gc.c"), "-o", filepath.Join(buildDir, "rt-gc.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-io.c"), "-o", filepath.Join(buildDir, "rt-io.o")}},
 		{"clang", []string{"-Wno-override-module",
 			filepath.Join(buildDir, name+".ll"),
 			filepath.Join(buildDir, "rt-startup.o"),
+			filepath.Join(buildDir, "rt-sched.o"),
+			filepath.Join(buildDir, "rt-conc.o"),
 			filepath.Join(buildDir, "rt-gc.o"),
 			filepath.Join(buildDir, "rt-io.o"),
 			"-o", filepath.Join(buildDir, name)}},

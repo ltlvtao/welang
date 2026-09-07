@@ -139,26 +139,28 @@ func TestBoundaryWhats(t *testing.T) {
 		what string
 	}{
 		{
-			// An Int64-literal initializer is outside M8's expression subset
-			// (int literals ride only construction-argument positions).
+			// An Int64-literal initializer was outside M8's expression
+			// subset; M9b's T6 emits numeric lets (the operand rides the
+			// i64 domain — no instruction until a use), so the form pins
+			// clean emission now (the flip rides the T6 disclosure).
 			"binding in body",
 			replaceBody(okModule(), []ast.Stmt{
 				&ast.Binding{Kw: "let", Name: "x", Init: &ast.Literal{Kind: "int", Text: "1"}},
 				&ast.Return{HasValue: true, Value: &ast.Call{Fn: &ast.Ident{Name: "Ok"}, Args: []ast.Expr{&ast.Unit{}}}},
 			}),
-			"main bodies beyond let bindings, io calls, and a single Ok or Err return statement",
+			"",
 		},
 		{
 			"tail-expression form",
 			replaceBody(okModule(), []ast.Stmt{
 				&ast.ExprStmt{Expr: &ast.Call{Fn: &ast.Ident{Name: "Ok"}, Args: []ast.Expr{&ast.Unit{}}}},
 			}),
-			"main bodies beyond let bindings, io calls, and a single Ok or Err return statement",
+			"main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)",
 		},
 		{
 			"bare return",
 			replaceBody(okModule(), []ast.Stmt{&ast.Return{}}),
-			"main bodies beyond let bindings, io calls, and a single Ok or Err return statement",
+			"main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)",
 		},
 		{
 			"unit variant as Err argument",
@@ -209,6 +211,13 @@ func TestBoundaryWhats(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			_, ni := Emit(c.file, "demo")
+			if c.what == "" {
+				// The flipped-green form: clean emission.
+				if ni != nil {
+					t.Fatalf("expected clean emission, got boundary %q", ni.What)
+				}
+				return
+			}
 			if ni == nil {
 				t.Fatalf("expected boundary %q, got none", c.what)
 			}

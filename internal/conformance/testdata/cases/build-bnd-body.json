@@ -10,7 +10,7 @@
       "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let x: Int64 = 1\n    return Ok(())\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: main bodies beyond let bindings, io calls, and a single Ok or Err return statement are not implemented in this reference build yet\n"
+  "stderr": ""
 }

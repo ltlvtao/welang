@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-rwlock-read",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let rw = conc.RwLock(3)\n    let u = rw.read(|v| v * 2)\n    if u == 6 {\n        io.println(\"six\")\n    } else {\n        io.println(\"other\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "six\n",
+  "stderr": ""
+}

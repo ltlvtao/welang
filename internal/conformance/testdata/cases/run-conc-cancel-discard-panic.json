@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-cancel-discard-panic",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    scope {\n        let t = task effect io {\n            panic(\"discarded\")\n        }\n        let _ = t.cancel()\n    }\n    io.println(\"survived\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "survived\n",
+  "stderr": ""
+}

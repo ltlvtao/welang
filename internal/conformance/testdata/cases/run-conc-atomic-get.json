@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-atomic-get",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = conc.Atomic(true)\n    let f = a.get()\n    if f {\n        io.println(\"yes\")\n    } else {\n        io.println(\"no\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "yes\n",
+  "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-taskpanic-await",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), conc.TaskPanic> {\n    scope {\n        let t = task effect io { panic(\"boom\") }\n        let _ = t.await()?\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: boom\n"
+}

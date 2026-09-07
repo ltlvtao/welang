@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-chan-full-park",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(1)\n    ch.send(1)\n    scope {\n        let sender = task effect io {\n            ch.send(2)\n            io.println(\"sent2\")\n        }\n        let receiver = task effect io {\n            let v = ch.receive()\n            io.println(\"received\")\n        }\n        let _ = sender.await()\n        let _ = receiver.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "received\nsent2\n",
+  "stderr": ""
+}

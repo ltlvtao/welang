@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-sem-overrelease",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), conc.TaskPanic> {\n    scope {\n        let t = task effect io {\n            let s = conc.Semaphore(1)\n            let _ = s.acquire()\n            let _ = s.release()\n            let _ = s.release()\n            io.println(\"unreachable\")\n        }\n        let _ = t.await()?\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: semaphore released past its constructed count\n"
+}

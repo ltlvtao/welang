@@ -391,7 +391,7 @@ entry:
 // Supersets of the accepted set stop at the widened vocabulary (design D4's
 // new What row). Each case fires on its own trigger.
 func TestM8BodyBoundaryWhats(t *testing.T) {
-	newWhat := "main bodies beyond let bindings, io calls, and a single Ok or Err return statement"
+	newWhat := "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	cases := []struct {
 		name string
 		file *ast.File

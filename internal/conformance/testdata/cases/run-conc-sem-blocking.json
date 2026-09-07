@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-sem-blocking",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let s = conc.Semaphore(1)\n    let _ = s.acquire()\n    scope {\n        let t = task effect io {\n            let _ = s.acquire()\n            io.println(\"acquired\")\n        }\n        let _ = s.release()\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "acquired\n",
+  "stderr": ""
+}

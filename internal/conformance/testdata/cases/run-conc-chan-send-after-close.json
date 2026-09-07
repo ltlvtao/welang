@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-chan-send-after-close",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), conc.TaskPanic> {\n    let ch: conc.Channel<Int64> = conc.channel(1)\n    scope {\n        let t = task effect io {\n            ch.send(1)\n            io.println(\"unreachable\")\n        }\n        let _ = ch.close()\n        let _ = t.await()?\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: send on a closed channel\n"
+}

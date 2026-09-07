@@ -1,18 +1,23 @@
 package codegen
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ltlvtao/welang/internal/ast"
 )
 
 // M9a's new expression nodes stop at the M8 body boundary (design D9):
-// statement position, let-initializer position, the concurrent
-// constructors, the io-call argument, and the containing-fn face are each
-// pinned per-form here, so a future emitter case cannot silently swallow
-// one ("explicit case, never vanish", the M4 discipline). The
-// conformance goldens pin the CLI face of the same stops; these pin the
-// emitter's own.
+// statement position, let-initializer position, the io-call argument, and
+// the containing-fn face are each pinned per-form here, so a future
+// emitter case cannot silently swallow one ("explicit case, never
+// vanish", the M4 discipline). The M9b flips ride the T6/T7 records'
+// disclosures: the two constructor forms turned green with T6, the task
+// and scope value forms with T7 (they pin their ABI symbols now), and
+// the bare task statement stopped inside the task body with T7 — its
+// unit-valued body reads under the task word. The forms still stopping
+// at the main body carry the v2 vocabulary. The conformance goldens pin
+// the CLI face of the same stops; these pin the emitter's own.
 
 // taskExpr builds `task effect net { body }`.
 func taskExpr(body ast.Expr) *ast.TaskExpr {
@@ -68,37 +73,38 @@ func TestM9aBodyBoundaryWhats(t *testing.T) {
 		name string
 		file *ast.File
 		what string
+		abi  string // the flipped-green forms' ABI symbol
 	}{
 		{"scope statement", m9aModule(
 			&ast.ExprStmt{Expr: scopeExpr(false, unit)},
-			okReturn()), bndMainBody},
+			okReturn()), bndMainBody, ""},
 		{"bare task statement", m9aModule(
 			&ast.ExprStmt{Expr: taskExpr(unit)},
-			okReturn()), bndMainBody},
+			okReturn()), bndTaskBody, ""},
 		{"select statement", m9aModule(
 			&ast.ExprStmt{Expr: selectUnit()},
-			okReturn()), bndMainBody},
+			okReturn()), bndMainBody, ""},
 		{"let init task", m9aModule(
 			&ast.Binding{Kw: "let", Name: "t", Init: taskExpr(&ast.Literal{Kind: "int", Text: "1"})},
-			okReturn()), bndMainBody},
+			okReturn()), "", "__we_task_new"},
 		{"let init scope value", m9aModule(
 			&ast.Binding{Kw: "let", Name: "r", Init: scopeExpr(true, &ast.Literal{Kind: "int", Text: "5"})},
-			okReturn()), bndMainBody},
+			okReturn()), "", "__we_scope_enter"},
 		{"let init select", m9aModule(
 			&ast.Binding{Kw: "let", Name: "v", Init: selectUnit()},
-			okReturn()), bndMainBody},
+			okReturn()), bndMainBody, ""},
 		{"conc constructor binding", m9aModule(
 			&ast.Binding{Kw: "let", Name: "m", Init: mutexCtor()},
-			okReturn()), bndMainBody},
+			okReturn()), "", "__we_prim_new_mutex"},
 		{"conc constructor discarded", m9aModule(
 			&ast.Binding{Kw: "let", Name: "_", Init: mutexCtor()},
-			okReturn()), bndMainBody},
+			okReturn()), "", "__we_prim_new_mutex"},
 		{"io call argument concurrent expression", &ast.File{Items: []ast.Item{
 			stdIoImport("io"),
 			&ast.Import{Path: []string{"std", "concurrent"}, Alias: "conc"},
 			appError(),
 			mainDecl(ioCall("io", "println", taskExpr(&ast.Literal{Kind: "string", Text: `"s"`})), okReturn()),
-		}}, bndMainBody},
+		}}, bndMainBody, ""},
 		{"fn containing concurrent forms", &ast.File{Items: []ast.Item{
 			&ast.Import{Path: []string{"std", "concurrent"}, Alias: "conc"},
 			appError(),
@@ -108,11 +114,22 @@ func TestM9aBodyBoundaryWhats(t *testing.T) {
 				Body: ast.Block{Items: []ast.Stmt{&ast.ExprStmt{Expr: scopeExpr(false, unit)}}},
 			},
 			mainDecl(okReturn()),
-		}}, bndOtherFns},
+		}}, bndOtherFns, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, ni := Emit(c.file, "demo")
+			ir, ni := Emit(c.file, "demo")
+			if c.what == "" {
+				// The flipped-green forms: clean emission carrying the
+				// form's ABI symbol.
+				if ni != nil {
+					t.Fatalf("expected clean emission, got boundary %q", ni.What)
+				}
+				if !strings.Contains(ir, c.abi) {
+					t.Fatalf("IR missing %q:\n%s", c.abi, ir)
+				}
+				return
+			}
 			if ni == nil {
 				t.Fatalf("expected boundary %q, got none", c.what)
 			}

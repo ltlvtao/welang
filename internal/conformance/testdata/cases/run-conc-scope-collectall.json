@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-scope-collectall",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    scope collectAll {\n        let bad = task effect io { panic(\"nope\") }\n        let good = task effect io { io.println(\"good\") }\n        let _ = bad.await()\n        let _ = good.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "good\n",
+  "stderr": ""
+}

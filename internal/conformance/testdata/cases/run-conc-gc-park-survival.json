@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-gc-park-survival",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nrecord Msg {\n    text: String\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Msg> = conc.channel(0)\n    scope {\n        let sender = task effect io {\n            ch.send(Msg { text: \"hello\" })\n            io.println(\"sent\")\n        }\n        let receiver = task effect io {\n            let v = ch.receive()\n            match v {\n                Some(m) => { io.println(\"got-hello\") }\n                None => { io.println(\"got-none\") }\n            }\n        }\n        let _ = sender.await()\n        let _ = receiver.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "got-hello\nsent\n",
+  "stderr": ""
+}

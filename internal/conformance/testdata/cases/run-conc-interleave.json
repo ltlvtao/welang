@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-interleave",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(0)\n    scope {\n        let p1 = task effect io {\n            io.println(\"p1a\")\n            ch.send(1)\n            io.println(\"p1b\")\n        }\n        let c1 = task effect io {\n            let v = ch.receive()\n            io.println(\"c1a\")\n            io.println(\"c1b\")\n        }\n        let _ = p1.await()\n        let _ = c1.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "p1a\nc1a\nc1b\np1b\n",
+  "stderr": ""
+}

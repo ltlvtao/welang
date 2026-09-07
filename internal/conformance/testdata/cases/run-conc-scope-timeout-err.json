@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-scope-timeout-err",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(1)\n    let r = scope timeout(30) {\n        let t = task effect io {\n            let v = ch.receive()\n        }\n        let _ = t.await()\n    }\n    match r {\n        Ok(_) => { io.println(\"ok\") }\n        Err(_) => { io.println(\"timedout\") }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "timedout\n",
+  "stderr": ""
+}

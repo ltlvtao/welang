@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-while-scalar",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var i: Int64 = 0\n    var total: Int64 = 0\n    while i < 5 {\n        total = total + i\n        i = i + 1\n    }\n    if total == 10 {\n        io.println(\"ten\")\n    } else {\n        io.println(\"other\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "ten\n",
+  "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-select-two-chans",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(1)\n    let b: conc.Channel<Int64> = conc.channel(1)\n    a.send(1)\n    let v = select {\n        case x = a.receive() => 1\n        case y = b.receive() => 2\n    }\n    if v == 1 {\n        io.println(\"took-a\")\n    } else {\n        io.println(\"took-b\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "took-a\n",
+  "stderr": ""
+}

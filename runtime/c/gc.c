@@ -39,8 +39,55 @@ static struct chunk *chunks;
 static void *free_list; // threaded through each free block's map slot
 static u64 allocated_since; // carve bytes since the last collection
 
-static void **roots;
-static u64 nroots, roots_cap;
+// A root window (M9b design D7): each task owns one, and push/pop address
+// the active window — the running task's. Every window stays on the
+// registration chain until its task retires it, so a collection run by
+// any task marks the roots of every parked task too: a park must never
+// look like a drop.
+struct we_gc_window {
+    void **roots;
+    u64 n, cap;
+    struct we_gc_window *next;
+};
+
+// The pre-task scratch window: pushes before the first task swap in (and
+// in harnesses that link gc.c without sched.c) land here instead of
+// nowhere. It heads the chain from the start — a harness that never links
+// the scheduler roots and collects through it — and stays put forever.
+static struct we_gc_window boot_win;
+static struct we_gc_window *all_windows = &boot_win;
+static struct we_gc_window *active_win = &boot_win;
+
+struct we_gc_window *__we_gc_window_new(void) {
+    struct we_gc_window *w = calloc(1, sizeof *w);
+    if (!w) {
+        abort();
+    }
+    w->next = all_windows;
+    all_windows = w;
+    return w;
+}
+
+// A finished task's stale roots would mark dead objects forever; retiring
+// takes the window off the chain and frees its storage. The node itself
+// stays — the task structure (which joiners still read) owns it.
+void __we_gc_window_retire(struct we_gc_window *w) {
+    for (struct we_gc_window **p = &all_windows; *p; p = &(*p)->next) {
+        if (*p == w) {
+            *p = w->next;
+            break;
+        }
+    }
+    free(w->roots);
+    w->roots = NULL;
+    w->n = w->cap = 0;
+}
+
+// NULL swaps in the scratch window: outside any task, pushes are runtime
+// bookkeeping at most.
+void __we_gc_window_swap(struct we_gc_window *w) {
+    active_win = w ? w : &boot_win;
+}
 
 static void **wstack; // the mark phase's worklist
 static u64 wlen, wstack_cap;
@@ -77,16 +124,18 @@ static void push_work(void *p) {
     wstack[wlen++] = p;
 }
 
-// Mark every block reachable from the root stack, then sweep the chunk
-// prefixes: survivors lose their mark bit, everything else enters the
-// rebuilt free list. Returns the number of blocks swept.
+// Mark every block reachable from every live task's root window, then
+// sweep the chunk prefixes: survivors lose their mark bit, everything
+// else enters the rebuilt free list. Returns the number of blocks swept.
 long long __we_gc_collect(void) {
     boot_check();
-    for (u64 i = 0; i < nroots; i++) {
-        void *p = roots[i];
-        if (p && !blk_marked(p)) {
-            *(u64 *)p |= MARK;
-            push_work(p);
+    for (struct we_gc_window *w = all_windows; w; w = w->next) {
+        for (u64 i = 0; i < w->n; i++) {
+            void *p = w->roots[i];
+            if (p && !blk_marked(p)) {
+                *(u64 *)p |= MARK;
+                push_work(p);
+            }
         }
     }
     while (wlen > 0) {
@@ -129,19 +178,20 @@ long long __we_gc_collect(void) {
 
 void __we_root_push(void *p) {
     boot_check();
-    if (nroots == roots_cap) {
-        roots_cap = roots_cap ? roots_cap * 2 : 64;
-        roots = realloc(roots, roots_cap * sizeof *roots);
-        if (!roots) {
+    struct we_gc_window *w = active_win;
+    if (w->n == w->cap) {
+        w->cap = w->cap ? w->cap * 2 : 8;
+        w->roots = realloc(w->roots, w->cap * sizeof *w->roots);
+        if (!w->roots) {
             abort();
         }
     }
-    roots[nroots++] = p;
+    w->roots[w->n++] = p;
 }
 
 void __we_root_pop(void) {
-    if (nroots > 0) {
-        nroots--;
+    if (active_win->n > 0) {
+        active_win->n--;
     }
 }
 

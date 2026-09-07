@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-chan-send-recv",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(2)\n    ch.send(1)\n    ch.send(2)\n    let a = ch.receive()\n    let b = ch.receive()\n    match a {\n        Some(x) => {\n            if x == 1 {\n                io.println(\"a1\")\n            } else {\n                io.println(\"ax\")\n            }\n        }\n        None => { io.println(\"anone\") }\n    }\n    match b {\n        Some(x) => {\n            if x == 2 {\n                io.println(\"b2\")\n            } else {\n                io.println(\"bx\")\n            }\n        }\n        None => { io.println(\"bnone\") }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "a1\nb2\n",
+  "stderr": ""
+}

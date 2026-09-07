@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-scope-plain",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    scope {\n        let a = task effect io {\n            io.println(\"a1\")\n            io.println(\"a2\")\n        }\n        let b = task effect io {\n            io.println(\"b1\")\n            io.println(\"b2\")\n        }\n        let _ = a.await()\n        let _ = b.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "a1\na2\nb1\nb2\n",
+  "stderr": ""
+}

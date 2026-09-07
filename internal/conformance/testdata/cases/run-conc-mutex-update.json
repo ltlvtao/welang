@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-mutex-update",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let m = conc.Mutex(0)\n    let n = m.update(|v| v + 1)\n    if n == 1 {\n        io.println(\"one\")\n    } else {\n        io.println(\"other\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "one\n",
+  "stderr": ""
+}

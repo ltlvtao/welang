@@ -12,5 +12,5 @@
   },
   "exit": 70,
   "stdout": "",
-  "stderr": "we: main bodies beyond let bindings, io calls, and a single Ok or Err return statement are not implemented in this reference build yet\n"
+  "stderr": "we: main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n"
 }

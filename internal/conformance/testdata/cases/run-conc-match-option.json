@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-match-option",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(1)\n    ch.send(4)\n    let v = ch.receive()\n    match v {\n        Some(x) => {\n            if x == 4 {\n                io.println(\"four\")\n            } else {\n                io.println(\"x\")\n            }\n        }\n        None => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "four\n",
+  "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+  "name": "run-conc-select-await-source",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    scope {\n        let slow = task effect io { io.println(\"slow\") }\n        let fast = task effect io { io.println(\"fast\") }\n        let v = select {\n            case r1 = slow.await() => 1\n            case r2 = fast.await() => 2\n        }\n        if v == 1 {\n            io.println(\"first\")\n        } else {\n            io.println(\"second\")\n        }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "slow\nfast\nfirst\n",
+  "stderr": ""
+}

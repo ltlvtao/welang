@@ -20,3 +20,12 @@ var GCSource string
 
 //go:embed c/io.c
 var IOSource string
+
+//go:embed c/sched.h
+var SchedHeader string
+
+//go:embed c/sched.c
+var SchedSource string
+
+//go:embed c/conc.c
+var ConcSource string
