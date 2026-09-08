@@ -1,0 +1,18 @@
+{
+  "name": "check-e1804-generic-fn",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "fn pair<T>(a: T, b: T) -> T {\n    return a\n}\ntest \"target\" {\n    mock pair(a: Int64) {\n        return\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:5:10: error[E1804]: mock target is not a mockable function — pair is a generic fn; only a module-level monomorphic fn is mockable\n",
+  "files": {
+    "tests/t_test.we": "fn pair<T>(a: T, b: T) -> T {\n    return a\n}\ntest \"target\" {\n    mock pair(a: Int64) {\n        return\n    }\n}\n"
+  }
+}

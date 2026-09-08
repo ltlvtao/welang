@@ -1,0 +1,18 @@
+{
+  "name": "check-e1802-plain-fn",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "fn g() {\n    return\n}\n\nfn f() {\n    mock g() {\n        return\n    }\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:6:5: error[E1802]: mock declaration outside a test block — a mock exists only as a direct item of a test block body; move it into the test block whose calls it should intercept\n",
+  "files": {
+    "tests/t_test.we": "fn g() {\n    return\n}\n\nfn f() {\n    mock g() {\n        return\n    }\n    return\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "build-bnd-test-fns-first",
+  "args": [
+    "build",
+    "tests/math_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/math_test.we": "fn abs(n: Int64) -> Int64 {\n    if n < 0 { -n } else { n }\n}\n\ntest \"absolute\" {\n    assert(abs(0) == 0, \"zero\")\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: functions other than main in code generation are not implemented in this reference build yet\n",
+  "files": {
+    "tests/math_test.we": "fn abs(n: Int64) -> Int64 {\n    if n < 0 { -n } else { n }\n}\n\ntest \"absolute\" {\n    assert(abs(0) == 0, \"zero\")\n}\n"
+  }
+}

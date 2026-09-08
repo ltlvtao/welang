@@ -1,0 +1,18 @@
+{
+  "name": "check-test-module-green",
+  "args": [
+    "check",
+    "tests/math_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/math_test.we": "import std.test as st\n\nfn abs(n: Int64) -> Int64 {\n    if n < 0 { -n } else { n }\n}\n\ntest \"absolute value\" {\n    st.assertEqual(abs(-3), 3)\n}\n\ntest \"zero\" {\n    assert(abs(0) == 0, \"abs of zero\")\n    st.assertTrue(true)\n    st.assertFalse(false)\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "tests/math_test.we": "import std.test as st\n\nfn abs(n: Int64) -> Int64 {\n    if n < 0 { -n } else { n }\n}\n\ntest \"absolute value\" {\n    st.assertEqual(abs(-3), 3)\n}\n\ntest \"zero\" {\n    assert(abs(0) == 0, \"abs of zero\")\n    st.assertTrue(true)\n    st.assertFalse(false)\n}\n"
+  }
+}

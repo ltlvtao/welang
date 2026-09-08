@@ -1,0 +1,18 @@
+{
+  "name": "check-mock-body-segment-green",
+  "args": [
+    "check",
+    "tests/seg_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/seg_test.we": "fn touch(n: String) effect io {\n    return\n}\n\nfn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"segment\" {\n    mock read(n: String) -> String effect io {\n        touch(\"k\")\n        return \"x\"\n    }\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "tests/seg_test.we": "fn touch(n: String) effect io {\n    return\n}\n\nfn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"segment\" {\n    mock read(n: String) -> String effect io {\n        touch(\"k\")\n        return \"x\"\n    }\n}\n"
+  }
+}

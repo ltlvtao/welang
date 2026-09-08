@@ -1,0 +1,18 @@
+{
+  "name": "check-e1401-suppressed-green",
+  "args": [
+    "check",
+    "tests/driver_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/driver_test.we": "fn work() effect io {\n    return\n}\n\ntest \"driver\" {\n    work()\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "tests/driver_test.we": "fn work() effect io {\n    return\n}\n\ntest \"driver\" {\n    work()\n}\n"
+  }
+}

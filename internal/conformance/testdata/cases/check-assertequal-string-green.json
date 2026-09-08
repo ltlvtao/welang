@@ -1,0 +1,18 @@
+{
+  "name": "check-assertequal-string-green",
+  "args": [
+    "check",
+    "tests/str_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/str_test.we": "import std.test as st\n\ntest \"string\" {\n    st.assertEqual(\"a\", \"a\")\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "tests/str_test.we": "import std.test as st\n\ntest \"string\" {\n    st.assertEqual(\"a\", \"a\")\n}\n"
+  }
+}

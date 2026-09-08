@@ -48,11 +48,14 @@ type NotImplemented struct{ What string }
 // milestone deletes its rows; the two spec-gap rows carry their follow-up
 // registration.
 const (
-	bndTaskTime   = "task-scope and time-control functions (chapters 18 and 20)"
 	bndStdModules = "standard-library modules (chapter 15)"
-	bndDomainGap  = "arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)"
-	bndArityGap   = "calls with an argument count the callee does not declare (spec gap; roadmap follow-up)"
-	bndCalleeGap  = "calls on values that are not functions (spec gap; roadmap follow-up)"
+	// assertEqual's domain face (M10a design D8): the scalar comparanda
+	// are checked here; the Eq-generic widening over composites is the
+	// standard library's own change, not this checker's.
+	bndAssertEqDomain = "assertEqual beyond the scalar, Bool, and String domains (the Eq-generic face is the standard library's own widening)"
+	bndDomainGap      = "arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)"
+	bndArityGap       = "calls with an argument count the callee does not declare (spec gap; roadmap follow-up)"
+	bndCalleeGap      = "calls on values that are not functions (spec gap; roadmap follow-up)"
 	// The two residual M5 boundary rows: a module-level destructure stops
 	// at the composite boundary (module initialization order is the module
 	// system's, M6), and walkItems keeps the control-flow row as its
@@ -102,6 +105,10 @@ var tHelps = map[string]string{
 	"E1617": "Annotate the binding, or place the construction where a parameter or declared return fixes the type.",
 	"E1606": "Delete the impl: the type is Shareable exactly when its own shape says so, and the bound T: Shareable checks that shape.",
 	"E1608": "Take a CancelSignal parameter when a caller wants to cancel the work, or move the call inside the task block that should answer cancellation.",
+	"E1803": "Copy the target's signature — parameters, return, and segment — exactly; adapt the body, not the contract.",
+	"E1804": "Mock a module-level monomorphic fn — own-module bare name or imported pub qualified name; wrap richer targets in such a fn and mock the wrapper.",
+	"E1805": "Keep one mock per target per block; a second test block may mock the same target for itself.",
+	"E1806": "Advance the clock inside the test that observes it; plain code has no clock to advance.",
 	"E1618": "Open a scope block around the task creation, or move the work into an ordinary function call.",
 	"E1602": "Carry the state in a synchronized type (store the list in a Mutex, send it through a Channel), or capture only Shareable data and let the task receive the rest.",
 	"E1603": "Carry the mutable state in a shared-state type and reach it through its methods, or copy the value into an immutable binding before the task block.",
@@ -1697,6 +1704,25 @@ type checker struct {
 	bodyName  string
 	inBody    bool
 	inClosure bool
+	// bodyTest is the chapter 20 driver sentinel (design D3): a test
+	// block's own body walk raises it, and checkCallEffect stands down —
+	// a test is driver code (chapter 16:36), its calls judged by no
+	// declared segment. A task body inside resets to its own segment
+	// (taskType's swap), a mock body to the target's (design D4), and a
+	// closure body keeps its inference face (the inClosure branch reads
+	// first); the plain control forms inherit, like every body context.
+	bodyTest bool
+	// testExtent is the chapter 20 clock depth (design D7): 1 inside a
+	// test block's extent — the body itself and, without a swap, the task
+	// and scope bodies inside it (the test's own extent, chapter 20:102)
+	// — and 0 in a closure or mock body and everywhere outside a test.
+	// advanceTime's name-value and call faces gate on it (E1806).
+	testExtent int
+	// mockSeen is the live test block's mock identities (design D6): the
+	// resolved (module key, fn name) pairs it has mocked — one block
+	// mocks one target at most once (E1805). checkTestDecl swaps a fresh
+	// map in for each block; blocks are independent by chapter 20:71.
+	mockSeen map[string]bool
 	// topLetName carries the binding name of the top-level initializer
 	// being walked (chapter 16, design D8): that walk runs outside any
 	// declaration body (inBody false), so the first effectful call it
@@ -2162,6 +2188,8 @@ func (c *checker) checkModule(f *ast.File) {
 			c.checkIfaceBodies(x)
 		case *ast.ImplDecl:
 			c.checkImplBodies(x)
+		case *ast.TestDecl:
+			c.checkTestDecl(x)
 		}
 	}
 	// Chapter 13's module-level completeness, at the true module tail:
@@ -2246,6 +2274,19 @@ func StdModule(key string) (*ast.File, bool) {
 		}}, true
 	case "std.concurrent":
 		return stdConcurrentFile, true
+	case "std.test":
+		// M10a design D8: the two Bool faces are plain declarations — the
+		// ordinary import surface types their calls (the std.io println
+		// precedent); assertEqual is not an item but a call face, riding
+		// importCall's dispatch ahead of the gate, so it has no marker
+		// declaration here — a mock on it resolves nowhere (E1304), the
+		// honest reading of a face that is not a module-level fn.
+		return &ast.File{Items: []ast.Item{
+			&ast.FnDecl{Pub: true, Name: "assertTrue", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+				Params: []ast.Param{{Name: "cond", Type: &ast.NamedType{Name: "Bool", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}}},
+			&ast.FnDecl{Pub: true, Name: "assertFalse", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+				Params: []ast.Param{{Name: "cond", Type: &ast.NamedType{Name: "Bool", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}}},
+		}}, true
 	}
 	return nil, false
 }
@@ -2429,6 +2470,13 @@ func (c *checker) importCall(mod string, x *ast.Call, expected Type) Type {
 			return c.channelCall(x, expected)
 		}
 	}
+	// The std.test equality assertion rides its own face ahead of the
+	// gate (M10a design D8): a same-type-pair judgment, not a declared
+	// fn. The gate is the module key itself — a user module's
+	// same-named items never reach this branch.
+	if mod == "std.test" && m.Name == "assertEqual" {
+		return c.assertEqualCall(x)
+	}
 	sym := c.importSym(mod, m.Name, m.Recv.(*ast.Ident).Line, m.Recv.(*ast.Ident).Col)
 	switch sym.kind {
 	case symFn:
@@ -2494,6 +2542,45 @@ func (c *checker) concurrentCtorCall(sum *sumInfo, x *ast.Call, expected Type) T
 	}
 	c.bnd(bndCalleeGap)
 	panic("unreachable concurrent construction")
+}
+
+// assertEqualCall types one std.test equality assertion (st.assertEqual(got,
+// want), M10a design D8): the first argument fixes T, the second must be
+// the same type — sameType, chapter 20's word for the pair — and T's
+// domain is the scalar one: the eight integer types, Bool, String. Beyond
+// that domain the face is an honest boundary, not a judgment: chapter
+// 10's Eq rides derives alone (base-type impl heads are E0811, manual
+// impls E0822, composite equality is the generated .equals()), so an
+// Eq-bound generic here would need a builtin-instances face the spec
+// does not fix — and would widen every `fn f<T where T: Eq>` in the same
+// stroke. The widening is the standard library's own change to make.
+// Unit return, no effect segment: an assertion observes, it never
+// performs.
+func (c *checker) assertEqualCall(x *ast.Call) Type {
+	if len(x.Args) != 2 {
+		c.bnd(bndArityGap)
+	}
+	got := c.typeOf(x.Args[0], nil)
+	if b, ok := got.(baseType); !ok || !assertEqScalar[b] {
+		c.bnd(bndAssertEqDomain)
+	}
+	want := c.typeOf(x.Args[1], got)
+	if !sameType(want, got) {
+		line, col := exprPos(x.Args[1])
+		c.fail(line, col, "E0501", fmt.Sprintf(
+			"mixed types — the argument is %s, the parameter is %s; no coercion is ever inserted",
+			want.String(), got.String()))
+	}
+	return unitType{}
+}
+
+// assertEqScalar is assertEqual's domain (M10a design D8): the eight
+// integer types, Bool, and String — the comparanda whose equality the
+// language fixes without an Eq instance.
+var assertEqScalar = map[baseType]bool{
+	"Int64": true, "Int32": true, "Int16": true, "Int8": true,
+	"UInt64": true, "UInt32": true, "UInt16": true, "UInt8": true,
+	"Bool": true, "String": true,
 }
 
 // channelCall types one channel construction (conc.channel(n), design
@@ -2683,6 +2770,12 @@ func (c *checker) checkCallEffect(calleeTags []string, callee string, line, col 
 				}
 			}
 		}
+		return
+	}
+	if c.bodyTest {
+		// The test-body sentinel (chapter 16:36): a test is driver code,
+		// E1401 does not fire at calls inside one. E1402 still judges a
+		// closure built there (its own agreement, never this judgment).
 		return
 	}
 	if !c.inBody {
@@ -4235,6 +4328,205 @@ func (c *checker) checkFnDecl(fd *ast.FnDecl) {
 	c.bodyTags, c.bodyName, c.inBody, c.inClosure = savedTags, savedName, savedInBody, savedInClosure
 }
 
+// checkTestDecl types one test block's body (chapter 20, design D3/D7):
+// a valueless driver context — the parse stage already holds the return
+// discipline under the name "(test)" (E0402), and here the body walk
+// raises the two chapter 20 flags: the driver sentinel (E1401 stands
+// down inside, a task body inside resets to its own segment, a closure
+// keeps its inference face) and the clock extent (advanceTime legal
+// inside, the depth ends at closure and — with the mock face — mock
+// body walls). Mock items of the body walk in T5 (design D4); until
+// then the walk's statement faces alone run, and the mock goldens stay
+// red exactly there.
+func (c *checker) checkTestDecl(td *ast.TestDecl) {
+	savedTags, savedName, savedInBody, savedInClosure, savedDriver := c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTest
+	savedRet, savedProp, savedLocals, savedExtent := c.fnRet, c.prop, c.locals, c.testExtent
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTest = nil, "(test)", true, false, true
+	// The valueless face of a full closure without a declared return: no
+	// fnRet to face, the propagation context names the test, the block's
+	// own locals.
+	c.fnRet, c.prop = nil, &propCtx{fnName: "(test)"}
+	c.testExtent = 1
+	c.locals = []map[string]Type{{}}
+	savedSeen := c.mockSeen
+	c.mockSeen = map[string]bool{}
+	c.walkItems(td.Body.Items, walkFn)
+	c.mockSeen = savedSeen
+	// Chapter 13's release discipline over the typed-clean body: a test
+	// declares bindings like any statement code, and a resource binding's
+	// flow obligations hold inside a test exactly as outside one.
+	c.resCheck(td.Body.Items, nil, nil)
+	c.fnRet, c.prop, c.locals = savedRet, savedProp, savedLocals
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTest = savedTags, savedName, savedInBody, savedInClosure, savedDriver
+	c.testExtent = savedExtent
+}
+
+// checkMockDecl runs chapter 20's mock chain (design D4-D6), first hit
+// stops: the target resolves (a bare name through the module's own
+// symbols, a qualified name through the import face — E1304/E1303, the
+// existing texts), the resolved symbol must be a module-level
+// monomorphic fn (E1804 renders the actual category), the restated
+// signature must copy the target's verbatim (E1803, three categories:
+// parameter list, declared return, effect segment), one block mocks one
+// target at most once (E1805, resolved identity — an alias is the same
+// module, so the same target), and the body walks as a fn body of the
+// target's own shape: its declared segment (E1401 judges inside), its
+// return discipline, its clock-less extent (E1806's conservative read).
+func (c *checker) checkMockDecl(md *ast.MockDecl) {
+	display := md.Target
+	if md.TargetQual != "" {
+		display = md.TargetQual + "." + md.Target
+	}
+	var fn *ast.FnDecl
+	identity := c.modKey + "." + md.Target
+	if md.TargetQual == "" {
+		sym, ok := c.syms[md.Target]
+		if !ok {
+			c.fail(md.TargetLine, md.TargetCol, "E1304", bareUnresolved(md.Target))
+		}
+		fn = c.mockableTarget(sym, md)
+	} else {
+		mod, ok := c.importQualifier(md.TargetQual)
+		if !ok {
+			c.fail(md.TargetLine, md.TargetCol, "E1304", bareUnresolved(md.Target))
+		}
+		sym := c.importSym(mod, md.Target, md.TargetLine, md.TargetCol)
+		fn = c.mockableTarget(sym, md)
+		identity = mod + "." + md.Target
+	}
+	// The restatement resolves under this module's own scope, then the
+	// three categories compare (design D5): names equal as strings, types
+	// sameType, the tag sequence equal in order (canonical keys both
+	// sides — a qualified custom tag and its canonical target agree).
+	mockParams := make([]Type, len(md.Params))
+	for i, pp := range md.Params {
+		mockParams[i] = c.resolveTypeRef(pp.Type, slotAnn)
+	}
+	mockRet := Type(nil)
+	if md.HasRet {
+		mockRet = c.resolveTypeRef(md.Ret, slotRet)
+	}
+	mockTags := c.resolveEffectTags(md.EffectTags, md.EffectLine, md.EffectCol)
+	targetParams, targetTags := c.fnParams[fn], c.fnTags[fn]
+	targetRet, targetHasRet := c.fnRets[fn], fn.Ret != nil
+	renderParams := func(ps []ast.Param, ts []Type) string {
+		parts := make([]string, len(ps))
+		for i, pp := range ps {
+			parts[i] = pp.Name + ": " + ts[i].String()
+		}
+		return strings.Join(parts, ", ")
+	}
+	renderTags := func(keys []string) string {
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			parts[i] = displayTag(k)
+		}
+		return strings.Join(parts, " ")
+	}
+	sig := func(params string, ret Type, hasRet bool, tags string) string {
+		r := display + "(" + params + ")"
+		if hasRet {
+			r += " -> " + ret.String()
+		}
+		if tags != "" {
+			r += " effect " + tags
+		}
+		return r
+	}
+	mockSig := sig(renderParams(md.Params, mockParams), mockRet, md.HasRet, renderTags(mockTags))
+	targetSig := sig(renderParams(fn.Params, targetParams), targetRet, targetHasRet, renderTags(targetTags))
+	switch {
+	case len(md.Params) != len(fn.Params):
+		c.fail(md.Line, md.Col, "E1803", fmt.Sprintf(
+			"mock signature does not match its target — the parameter list differs: mock %s, target %s", mockSig, targetSig))
+	default:
+		for i, pp := range md.Params {
+			// The restated names and types copy verbatim (design D5):
+			// string equality per parameter name, sameType per slot,
+			// position by position.
+			if pp.Name != fn.Params[i].Name || !sameType(mockParams[i], targetParams[i]) {
+				c.fail(md.Line, md.Col, "E1803", fmt.Sprintf(
+					"mock signature does not match its target — the parameter list differs: mock %s, target %s", mockSig, targetSig))
+			}
+		}
+	}
+	if md.HasRet != targetHasRet || (md.HasRet && !sameType(mockRet, targetRet)) {
+		c.fail(md.Line, md.Col, "E1803", fmt.Sprintf(
+			"mock signature does not match its target — the declared return differs: mock %s, target %s", mockSig, targetSig))
+	}
+	if len(mockTags) != len(targetTags) {
+		c.fail(md.Line, md.Col, "E1803", fmt.Sprintf(
+			"mock signature does not match its target — the effect segment differs: mock %s, target %s", mockSig, targetSig))
+	} else {
+		for i, k := range mockTags {
+			// Verbatim in order (chapter 20:34): effect io net differs
+			// from effect net io — the segment is a sequence, not a set,
+			// in a restatement (design D5's disclosed reading).
+			if k != targetTags[i] {
+				c.fail(md.Line, md.Col, "E1803", fmt.Sprintf(
+					"mock signature does not match its target — the effect segment differs: mock %s, target %s", mockSig, targetSig))
+			}
+		}
+	}
+	if c.mockSeen[identity] {
+		c.fail(md.Line, md.Col, "E1805", fmt.Sprintf(
+			"duplicate mock of one target in a test block — %s is mocked twice in this block; one block mocks one target at most once", md.Target))
+	}
+	c.mockSeen[identity] = true
+	// The body: a fn body of the target's own shape — the walk's context
+	// swaps mirror checkFnDecl's, with the clock extent closed (E1806's
+	// conservative read: the mock body answers the target's contract,
+	// never the test's extent) and the target's parameters scoping the
+	// names (the verbatim restatement makes the two spellings one).
+	savedTags, savedName, savedInBody, savedInClosure, savedDriver := c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTest
+	savedRet, savedProp, savedLocals, savedExtent, savedRecv := c.fnRet, c.prop, c.locals, c.testExtent, c.recvMut
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTest = targetTags, fn.Name, true, false, false
+	c.fnRet, c.prop, c.recvMut = targetRet, &propCtx{fnName: fn.Name, ret: targetRet}, false
+	c.testExtent = 0
+	c.locals = []map[string]Type{{}}
+	for i, pp := range fn.Params {
+		c.locals[0][pp.Name] = targetParams[i]
+	}
+	c.walkItems(md.Body.Items, walkFn)
+	if targetHasRet && !tailProduces(md.Body.Items) {
+		c.fail(md.Line, md.Col, "E0501", fmt.Sprintf(
+			"mixed types — the body produces (), the declared return is %s; no coercion is ever inserted",
+			targetRet.String()))
+	}
+	c.resCheck(md.Body.Items, fn.Params, targetParams)
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTest = savedTags, savedName, savedInBody, savedInClosure, savedDriver
+	c.fnRet, c.prop, c.locals, c.testExtent, c.recvMut = savedRet, savedProp, savedLocals, savedExtent, savedRecv
+}
+
+// mockableTarget is the chain's second judgment (design D4): the resolved
+// symbol must be a module-level monomorphic fn — E1804 renders the actual
+// category otherwise (an impl or interface method name resolves nowhere as
+// a module symbol, so the reachable categories are the four below).
+func (c *checker) mockableTarget(sym *symbol, md *ast.MockDecl) *ast.FnDecl {
+	notMockable := func(category string) {
+		c.fail(md.TargetLine, md.TargetCol, "E1804", fmt.Sprintf(
+			"mock target is not a mockable function — %s is %s; only a module-level monomorphic fn is mockable", md.Target, category))
+	}
+	switch sym.kind {
+	case symFn:
+		if len(sym.fn.TypeParams) > 0 {
+			notMockable("a generic fn")
+		}
+		return sym.fn
+	case symVariant, symType, symRecord, symNewtype:
+		notMockable("a constructor")
+	case symLet:
+		notMockable("a top-level binding")
+	case symIface:
+		notMockable("an interface")
+	case symEffect:
+		notMockable("an effect declaration")
+	case symImport:
+		notMockable("an import")
+	}
+	panic("unreachable mock target")
+}
+
 // tailProduces reports whether the body's final item can carry the fn's
 // value: a final expression (checked against the declared return by the
 // walk itself) or a valued return. A bare-return tail has already
@@ -4302,6 +4594,11 @@ func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 			}
 		case *ast.Assign:
 			c.checkAssign(st)
+		case *ast.MockDecl:
+			// Chapter 20's mock item: reachable only at a test body's own
+			// depth (the parser's E1802 holds every other position), so
+			// the chain needs no position gate of its own.
+			c.checkMockDecl(st)
 		case *ast.Return:
 			c.checkReturn(st)
 		case *ast.While:
@@ -5096,9 +5393,12 @@ func (c *checker) taskType(x *ast.TaskExpr) Type {
 	if c.scopeDepth == 0 {
 		c.fail(x.Line, x.Col, "E1618", "task block outside any scope block — no enclosing scope block joins the handle, and no task outlives its scope; open a scope block around the task creation, or move the work into an ordinary function call")
 	}
-	savedTags, savedName, savedInBody, savedInClosure, savedTask := c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask
+	savedTags, savedName, savedInBody, savedInClosure, savedTask, savedDriver := c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask, c.bodyTest
 	savedRet, savedProp, savedVal, savedIn := c.fnRet, c.prop, c.taskVal, c.inTaskBody
-	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask = c.resolveEffectTags(x.EffectTags, x.EffectLine, x.EffectCol), "(task)", true, false, true
+	// A task extent answers the task (chapter 18), never the test that
+	// hosts it: the body judges against its own declared segment, so the
+	// test's driver sentinel stands down for the walk (design D3's reset).
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask, c.bodyTest = c.resolveEffectTags(x.EffectTags, x.EffectLine, x.EffectCol), "(task)", true, false, true, false
 	// A task body carries its value early through return like a closure's
 	// (chapter 18's function-body context): the fn's own return machinery
 	// stands down, the exits' join takes over. The `?` suffix has no
@@ -5137,7 +5437,7 @@ func (c *checker) taskType(x *ast.TaskExpr) Type {
 			t.String()))
 	}
 	c.fnRet, c.prop = savedRet, savedProp
-	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask = savedTags, savedName, savedInBody, savedInClosure, savedTask
+	c.bodyTags, c.bodyName, c.inBody, c.inClosure, c.bodyTask, c.bodyTest = savedTags, savedName, savedInBody, savedInClosure, savedTask, savedDriver
 	return namedType{decl: taskHandleSum, args: []Type{t}}
 }
 
@@ -5150,6 +5450,11 @@ func lastExpr(items []ast.Stmt) (*ast.ExprStmt, bool) {
 	es, ok := items[len(items)-1].(*ast.ExprStmt)
 	return es, ok
 }
+
+// advanceTimeOutside is E1806's message (design D7): the virtual clock is
+// bound to test blocks (chapter 20), so the value face and the call face
+// report the same text outside the test extent.
+const advanceTimeOutside = "advanceTime called outside a test block — the virtual clock is bound to test blocks; advance the clock inside the test that observes it"
 
 // outsideTaskMsg renders E1608's message: where the call sits — the
 // enclosing body's own declaration, or the module top level — with the
@@ -5410,6 +5715,12 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 	// containment reads through closures.
 	savedInTask, savedTaskVal := c.inTaskBody, c.taskVal
 	c.inTaskBody = false
+	// The clock's extent ends at the closure wall (design D7's literal
+	// reading of chapter 20:102): a closure body is a function body of
+	// its own (chapter 12), not the test's extent — advanceTime inside
+	// one is E1806.
+	savedExtent := c.testExtent
+	c.testExtent = 0
 	ret := Type(unitType{})
 	switch {
 	case x.Ret != nil:
@@ -5453,6 +5764,7 @@ func (c *checker) closureType(x *ast.Closure, expected Type) Type {
 	c.fnRet, c.locals, c.prop = savedRet, savedLocals, savedProp
 	c.inClosure = savedInClosure
 	c.inTaskBody, c.taskVal = savedInTask, savedTaskVal
+	c.testExtent = savedExtent
 	// The inference's settled set is the closure value's own segment
 	// (chapter 16 R4): every face of the value from here — the woven
 	// agreement at a slot, the call judgment when it is called — weighs
@@ -6146,7 +6458,15 @@ func (c *checker) identType(x *ast.Ident, expected Type) Type {
 		}
 		return fnType{ret: namedType{decl: cancelSignalSum}}
 	case "advanceTime":
-		c.bnd(bndTaskTime)
+		// Chapter 20's clock control (design D7): an ordinary
+		// (Int64) -> () value position-gated to the test extent — the
+		// clock is not a value that leaves the test (E1806 otherwise),
+		// and no effect segment exists to declare (the clock is a
+		// runtime control token, chapter 20:102).
+		if c.testExtent == 0 {
+			c.fail(x.Line, x.Col, "E1806", advanceTimeOutside)
+		}
+		return fnType{params: []Type{baseType("Int64")}, ret: unitType{}}
 	case "None":
 		if nt, ok := expected.(namedType); ok && nt.decl == optionSum {
 			return nt
@@ -6646,7 +6966,14 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 			}
 			return c.fnValueCall(fnType{ret: namedType{decl: cancelSignalSum}}, x)
 		case "advanceTime":
-			c.bnd(bndTaskTime)
+			// The call face of the same clock typing (design D7): the
+			// arguments check position-wise through the ordinary fn-value
+			// path (advanceTime(true) is E0501 there), the position gate
+			// reads the same extent, and the produced value is unit.
+			if c.testExtent == 0 {
+				c.fail(id.Line, id.Col, "E1806", advanceTimeOutside)
+			}
+			return c.fnValueCall(fnType{params: []Type{baseType("Int64")}, ret: unitType{}}, x)
 		case "Ok", "Err", "Some", "None":
 			return c.builtinCtorCall(id, x, expected)
 		case "Dyn":

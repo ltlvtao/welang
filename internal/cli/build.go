@@ -29,8 +29,23 @@ func (e *env) runBuild(path string, info os.FileInfo) int {
 		return code
 	}
 	if !info.IsDir() {
-		if file, code := e.loadFile(path); file == nil {
+		file, code := e.loadFile(path)
+		if file == nil {
 			return code
+		}
+		if file.IsTestModule {
+			// A test module's build story is the test tower (M10a design
+			// D9): the artifact-naming boundary below is the executable's
+			// own, and a single-file test module has no artifact face
+			// until M10b's runner — so the file proceeds to code
+			// generation, whose item walk is the honest stop (the
+			// test-module row, or the other-functions row when a helper
+			// fn precedes the first test in source order). A test module
+			// that emits cleanly (a main and no test block) keeps the
+			// naming boundary: it is still a single-file build.
+			if _, ni := codegen.Emit(file, "test"); ni != nil {
+				return e.boundary(ni.What)
+			}
 		}
 		return e.boundary(whatSingleFileBuild)
 	}

@@ -202,7 +202,6 @@ const (
 	valPart        = "produces no value"
 	concurForms    = "chapter 18 (concurrency) forms"
 	ffiForms       = "chapter 19 (ffi) forms"
-	testForms      = "chapter 20 (testing) forms"
 )
 
 // dispatchTable is design D6 verbatim: keyword, its completion text, and
@@ -253,8 +252,8 @@ var dispatchTable = []struct {
 	{"case", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"timeout", "1", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"collectAll", "x", dg("E0105", topStmtPart), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"test", `"t" {}`, bd(testForms), dg("E0105", stmtPart), dg("E0105", exprPart)},
-	{"mock", "m {}", dg("E0105", topStmtPart), bd(testForms), dg("E0105", exprPart)},
+	{"test", `"t" {}`, dg("E1801", "test block outside a test module"), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"mock", "m {}", dg("E1802", "mock declaration outside a test block"), dg("E1802", "mock declaration outside a test block"), dg("E0105", exprPart)},
 }
 
 // TestKeywordDispatchExhaustive runs every one of chapter 1's 41 keywords
@@ -707,11 +706,10 @@ func TestBoundaryForms(t *testing.T) {
 		src  string
 		what string
 	}{
-		// chapter 18's rows left the table with M9a (the concurrency
-		// forms parse now; m9a_test.go pins their true outcomes)
+		// chapter 18's rows left the table with M9a and chapter 20's with
+		// M10a (the forms parse now; m9a_test.go and m10a_test.go pin
+		// their true outcomes)
 		{"foreign fn f() {}\n", ffiForms},
-		{"test \"t\" {\n}\n", testForms},
-		{"fn f() {\n    mock m {}\n}\n", testForms},
 		{"fn f(mut x: Int64) {}\n", "mut parameters"},
 	}
 	for _, p := range probes {

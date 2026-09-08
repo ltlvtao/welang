@@ -1,0 +1,18 @@
+{
+  "name": "check-e1806-mock-body",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "fn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"mock body\" {\n    mock read(n: String) -> String effect io {\n        advanceTime(5)\n        return \"x\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:7:9: error[E1806]: advanceTime called outside a test block — the virtual clock is bound to test blocks; advance the clock inside the test that observes it\n",
+  "files": {
+    "tests/t_test.we": "fn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"mock body\" {\n    mock read(n: String) -> String effect io {\n        advanceTime(5)\n        return \"x\"\n    }\n}\n"
+  }
+}

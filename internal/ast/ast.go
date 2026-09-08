@@ -1,4 +1,4 @@
-// Package ast holds the syntax tree of chapters 2–6, 8, 10–12, and 17: one file
+// Package ast holds the syntax tree of chapters 2–6, 8, 10–12, 17, and 20: one file
 // is one module of top-level items (chapter 6), each fn body a block of
 // statements (chapter 2) with chapter 3's control-flow statements, each
 // expression built from the skeleton's primary, postfix, unary, and binary
@@ -13,6 +13,10 @@ package ast
 // File is one source file: one module (chapter 6's file structure).
 type File struct {
 	Items []Item
+	// IsTestModule carries the file-name fact of chapter 20: a name ending
+	// _test.we makes test blocks legal items. Decided at parse from the
+	// name alone — the module is otherwise ordinary under chapter 15.
+	IsTestModule bool
 	// Docs records the /// documentation units in source order and the index
 	// of the top-level item each attaches to (chapter 6's attachment rule).
 	Docs []DocAttach
@@ -102,6 +106,40 @@ type Variant struct {
 	Name      string
 	Payload   []TypeRef
 	Line, Col int // at the variant name
+}
+
+// TestDecl is a test block (chapter 20): `test "description" { body }`, a
+// top-level item legal only in a test module (the _test.we file-name fact).
+// Desc carries the description literal in two forms — a plain literal
+// decoded to its bytes, an interpolated one riding its raw text verbatim —
+// the check tower carries it with no semantics; the run tower renders it.
+type TestDecl struct {
+	Desc              string
+	DescLine, DescCol int // at the description literal
+	Body              Block
+	Line, Col         int // at test
+}
+
+// MockDecl is a mock declaration (chapter 20): `mock name(params) [-> type]
+// [effect tags] { body }` — a direct item of a test block's body, no other
+// position. Target is the mocked fn's name; TargetQual is the import
+// qualifier of a qualified target (empty on a bare name). The signature
+// restates the target's own — chapter 20's production orders the declared
+// return before the effect segment (chapter 6's fn declaration reverses
+// it); the checker judges the restatement verbatim.
+type MockDecl struct {
+	Target     string
+	TargetQual string
+	Params     []Param
+	Ret        TypeRef // nil without a declared return
+	HasRet     bool
+	EffectTags []string // nil without a segment
+	EffectLine int      // at the segment's first tag
+	EffectCol  int
+	Body       Block
+	Line, Col  int // at mock
+	TargetLine int
+	TargetCol  int // at the target name (the segment name when qualified)
 }
 
 // RecordDecl is a record declaration (chapter 8): `[pub] [gc|byval|byres]
@@ -660,7 +698,9 @@ func (n *NewtypeDecl) item()    {}
 func (i *InterfaceDecl) item()  {}
 func (m *ImplDecl) item()       {}
 func (e *EffectDecl) item()     {}
+func (td *TestDecl) item()      {}
 func (b *Binding) stmt()        {}
+func (m *MockDecl) stmt()       {}
 func (a *Assign) stmt()         {}
 func (r *Return) stmt()         {}
 func (e *ExprStmt) stmt()       {}

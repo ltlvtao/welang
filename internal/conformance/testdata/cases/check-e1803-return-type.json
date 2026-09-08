@@ -1,0 +1,18 @@
+{
+  "name": "check-e1803-return-type",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "fn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"sig\" {\n    mock read(n: String) -> Int64 effect io {\n        return \"x\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:6:5: error[E1803]: mock signature does not match its target — the declared return differs: mock read(n: String) -> Int64 effect io, target read(n: String) -> String effect io\n",
+  "files": {
+    "tests/t_test.we": "fn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"sig\" {\n    mock read(n: String) -> Int64 effect io {\n        return \"x\"\n    }\n}\n"
+  }
+}

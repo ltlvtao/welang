@@ -1,0 +1,18 @@
+{
+  "name": "check-e1304-mock-target",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "test \"nope\" {\n    mock missing(n: String) -> String {\n        return \"x\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:2:10: error[E1304]: unresolved name — \"missing\" is held by no scope: no block-local binding, module declaration, or prelude name carries it; fix the spelling, declare the name, or import its module\n",
+  "files": {
+    "tests/t_test.we": "test \"nope\" {\n    mock missing(n: String) -> String {\n        return \"x\"\n    }\n}\n"
+  }
+}

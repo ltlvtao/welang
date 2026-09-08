@@ -1,0 +1,18 @@
+{
+  "name": "check-e0105-pub-test",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "pub test \"pub\" {\n    return\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:1:5: error[E0105]: unexpected token — \"test\" after pub: pub prefixes fn, let, type, the chapter 8 declarations, and interface (an impl block carries no pub)\n",
+  "files": {
+    "tests/t_test.we": "pub test \"pub\" {\n    return\n}\n"
+  }
+}

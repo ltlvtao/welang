@@ -314,10 +314,12 @@ func TestNameResolution(t *testing.T) {
 		"E0821", "compiler-attached marker of chapter 18", 1, 9)
 	// M9a: currentCancelSignal is a real 0-ary fn gated on task-block
 	// containment (E1608 outside — the bare-name value form rides the
-	// same rule); advanceTime stays the chapter 20 boundary (Q3's pin).
+	// same rule); advanceTime is chapter 20's real clock typing since
+	// M10a (the M9a Q3 boundary pin flipped with the feature, T4).
 	wantDiag(t, "fn f() {\n    let s = currentCancelSignal\n}\n",
 		"E1608", "currentCancelSignal called outside a task block", 2, 13)
-	wantBnd(t, "fn f() {\n    advanceTime(1)\n}\n", bndTaskTime)
+	wantDiag(t, "fn f() {\n    advanceTime(1)\n}\n",
+		"E1806", "advanceTime called outside a test block", 2, 5)
 	// Local declarations shadow prelude names legally.
 	wantOK(t, "fn panic(msg: String) -> Never {\n    return panic(msg)\n}\n\nfn f() { return }\n")
 	wantOK(t, "type Option = A | B\nlet x: Option = A\n")

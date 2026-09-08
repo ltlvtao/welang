@@ -1,0 +1,18 @@
+{
+  "name": "check-e1804-constructor",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "record Point { x: Int64, y: Int64 }\ntest \"target\" {\n    mock Point(a: Int64) {\n        return\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:3:10: error[E1804]: mock target is not a mockable function — Point is a constructor; only a module-level monomorphic fn is mockable\n",
+  "files": {
+    "tests/t_test.we": "record Point { x: Int64, y: Int64 }\ntest \"target\" {\n    mock Point(a: Int64) {\n        return\n    }\n}\n"
+  }
+}

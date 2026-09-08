@@ -1,0 +1,18 @@
+{
+  "name": "check-e1806-closure-in-test",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "test \"closure\" {\n    let f = fn() {\n        advanceTime(5)\n        return\n    }\n    let _ = f\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:3:9: error[E1806]: advanceTime called outside a test block — the virtual clock is bound to test blocks; advance the clock inside the test that observes it\n",
+  "files": {
+    "tests/t_test.we": "test \"closure\" {\n    let f = fn() {\n        advanceTime(5)\n        return\n    }\n    let _ = f\n}\n"
+  }
+}

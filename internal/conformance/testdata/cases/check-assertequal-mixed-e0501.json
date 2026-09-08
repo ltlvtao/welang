@@ -1,0 +1,18 @@
+{
+  "name": "check-assertequal-mixed-e0501",
+  "args": [
+    "check",
+    "tests/mix_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/mix_test.we": "import std.test as st\n\ntest \"mixed\" {\n    st.assertEqual(1, true)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/mix_test.we:4:23: error[E0501]: mixed types — the argument is Bool, the parameter is Int64; no coercion is ever inserted\n",
+  "files": {
+    "tests/mix_test.we": "import std.test as st\n\ntest \"mixed\" {\n    st.assertEqual(1, true)\n}\n"
+  }
+}

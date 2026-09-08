@@ -1,0 +1,18 @@
+{
+  "name": "check-e1801-test-outside-test-module",
+  "args": [
+    "check",
+    "src/plain.we"
+  ],
+  "setup": {
+    "files": {
+      "src/plain.we": "fn work() {\n    return\n}\n\ntest \"outside\" {\n    work()\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/plain.we:5:1: error[E1801]: test block outside a test module — this file's name does not end _test.we; the suffix is the module-identity fact that makes test blocks legal\n",
+  "files": {
+    "src/plain.we": "fn work() {\n    return\n}\n\ntest \"outside\" {\n    work()\n}\n"
+  }
+}

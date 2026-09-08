@@ -1,0 +1,18 @@
+{
+  "name": "check-e1805-duplicate",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "fn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"dup\" {\n    mock read(n: String) -> String effect io {\n        return \"a\"\n    }\n    mock read(n: String) -> String effect io {\n        return \"b\"\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:9:5: error[E1805]: duplicate mock of one target in a test block — read is mocked twice in this block; one block mocks one target at most once\n",
+  "files": {
+    "tests/t_test.we": "fn read(n: String) effect io -> String {\n    return n\n}\n\ntest \"dup\" {\n    mock read(n: String) -> String effect io {\n        return \"a\"\n    }\n    mock read(n: String) -> String effect io {\n        return \"b\"\n    }\n}\n"
+  }
+}

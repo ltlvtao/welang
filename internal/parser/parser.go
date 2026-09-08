@@ -1,9 +1,10 @@
 // Package parser implements the parsing stage of chapters 2–5, 6–8, 10, 12,
-// and 17 (docs/spec/0200-grammar.md, docs/spec/0300-control-flow.md,
+// 17, and 20 (docs/spec/0200-grammar.md, docs/spec/0300-control-flow.md,
 // docs/spec/0400-match.md, docs/spec/0500-iteration.md,
 // docs/spec/0600-declarations.md, docs/spec/0800-composites.md,
 // docs/spec/1000-interfaces.md, docs/spec/1100-iterables.md,
-// docs/spec/1200-fn-types.md, docs/spec/1700-collections.md) over chapter
+// docs/spec/1200-fn-types.md, docs/spec/1700-collections.md,
+// docs/spec/2000-testing.md) over chapter
 // 1's token stream: the line-joining rule with its two decision points,
 // blocks as expressions, the statement families, the expression skeleton
 // with the closed 12-level precedence table, the module's top-level
@@ -13,7 +14,7 @@
 // 8's composite declarations, construction, update, and tuples,
 // chapter 10's interface and impl declarations with their generic, where,
 // and derives clauses, chapter 12's two closure forms, and chapter 17's
-// list literals. Chapter 7's
+// list literals, chapter 20's test blocks and mock declarations. Chapter 7's
 // type references fill the annotation slots (syntax only — no checking).
 // Parsing is deterministic recursive descent — exactly one tree or
 // rejected — and stops at the first diagnostic (chapter 21: an E-severity
@@ -24,6 +25,8 @@ package parser
 
 import (
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/ltlvtao/welang/internal/ast"
 	"github.com/ltlvtao/welang/internal/diag"
@@ -34,7 +37,6 @@ import (
 // milestone deletes its rows; the list shrinks to zero with the roadmap.
 const (
 	bndFFI    = "chapter 19 (ffi) forms"
-	bndTest   = "chapter 20 (testing) forms"
 	bndMutPar = "mut parameters"
 )
 
@@ -67,6 +69,8 @@ var helps = map[string]string{
 	"E1601": "Write the segment of the chapter 16 spelling: task effect tag1 tag2 ... followed by the block.",
 	"E1611": "Bind the whole yield to a name or discard it with _, and match inside the body if the yield needs splitting.",
 	"E1612": "Call the wait source directly, or add the second case the construct exists to race.",
+	"E1801": "Move the test into a *_test.we file, or delete the block; a test module is otherwise an ordinary module under chapter 15.",
+	"E1802": "Move the mock into the test block whose calls it should intercept.",
 }
 
 // NotImplemented reports a ratified-but-unimplemented form. What names the
@@ -120,6 +124,14 @@ type parser struct {
 	names      map[string]int
 	docs       []lex.DocUnit
 	itemStarts []int
+	// testModule is the file-name fact (chapter 20): a name ending
+	// _test.we makes test blocks legal items. inTestBody tracks the mock
+	// position: parseTestDecl sets 1 around its body, block() promotes
+	// that to 2 for the body's own item loop (the one depth where a mock
+	// declaration is a legal direct item) and clears it inside every
+	// nested block, restoring on exit.
+	testModule bool
+	inTestBody int
 }
 
 // Parse parses one source file. It returns the tree on a clean parse, or
@@ -130,7 +142,7 @@ func Parse(name string, src []byte) (file *ast.File, d *diag.Diagnostic, ni *Not
 	if lexErr != nil {
 		return nil, lexErr, nil
 	}
-	p := &parser{name: name, toks: toks, docs: docs, names: map[string]int{}}
+	p := &parser{name: name, toks: toks, docs: docs, names: map[string]int{}, testModule: strings.HasSuffix(name, "_test.we")}
 	defer func() {
 		if r := recover(); r != nil {
 			switch s := r.(type) {
@@ -253,7 +265,7 @@ func (p *parser) declare(t lex.Token) {
 // parseFile parses the module: top-level items separated by line breaks,
 // then the documentation attachment pass.
 func (p *parser) parseFile() *ast.File {
-	f := &ast.File{}
+	f := &ast.File{IsTestModule: p.testModule}
 	for !p.atEnd() {
 		p.checkStart(true)
 		f.Items = append(f.Items, p.parseItem())
@@ -410,7 +422,10 @@ func (p *parser) parseItem() ast.Item {
 		case "foreign":
 			p.bnd(bndFFI)
 		case "test":
-			p.bnd(bndTest)
+			return p.parseTestDecl(t.Line, t.Col)
+		case "mock":
+			p.failTok(t, "E1802",
+				"mock declaration outside a test block — a mock exists only as a direct item of a test block body; move it into the test block whose calls it should intercept")
 		}
 	}
 	p.failTok(t, "E0105",
@@ -522,10 +537,14 @@ func (p *parser) parseImport() *ast.Import {
 	return imp
 }
 
-// moduleSeg expects one lowercase dotted-path segment.
+// moduleSeg expects one lowercase dotted-path segment. A keyword token
+// whose text passes the charset also serves (design D8): chapter 1's
+// reserved closure governs name positions, and a module path segment is
+// another lexical class — std.test must spell. The charset gate (E0013)
+// judges the text the same either way.
 func (p *parser) moduleSeg() lex.Token {
 	t := p.cur()
-	if t.Kind != lex.KindIdent {
+	if t.Kind != lex.KindIdent && t.Kind != lex.KindKeyword {
 		if t.Kind == lex.KindEOF {
 			p.failTok(t, "E0105", "unexpected end of file — an import wants a lowercase dotted path (and its alias after as)")
 		}
@@ -653,6 +672,208 @@ func (p *parser) annotatedParams() []ast.Param {
 		}
 		p.failTok(p.cur(), "E0105",
 			fmt.Sprintf("unexpected token — %q in a parameter list: parameters are name: type pairs", p.cur().Text))
+	}
+}
+
+// parseTestDecl parses chapter 20's test block: `test "description" {
+// body }`, a top-level item. The body is a function-body context under the
+// display name "(test)" with no declared return — bare return exits it,
+// `return e` is E0402 like any valueless function. The inTestBody handoff
+// (1 around the call) lets block() mark this one block as the test body's
+// own, the single depth where a mock declaration is a legal direct item.
+// E1801 rides the module-identity fact — a file whose name does not end
+// _test.we — once the block has parsed, so the anchor is exact either way
+// and no partial tree escapes the diagnostic.
+func (p *parser) parseTestDecl(line, col int) *ast.TestDecl {
+	p.next() // test
+	t := p.cur()
+	if t.Kind != lex.KindString {
+		if p.atEnd() {
+			p.failTok(t, "E0105", "unexpected end of file — a test block wants its description string")
+		}
+		p.failTok(t, "E0105",
+			fmt.Sprintf("unexpected token — %q where a test block names its description string", t.Text))
+	}
+	d := &ast.TestDecl{Desc: descText(t.Text), DescLine: t.Line, DescCol: t.Col, Line: line, Col: col}
+	p.next()
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a test block wants its body block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a test block's body block opens", p.cur().Text))
+	}
+	saved := p.inTestBody
+	p.inTestBody = 1
+	d.Body = p.block(&fnCtx{name: "(test)", hasRet: false}, true)
+	p.inTestBody = saved
+	if !p.testModule {
+		p.fail(line, col, "E1801",
+			"test block outside a test module — this file's name does not end _test.we; the suffix is the module-identity fact that makes test blocks legal")
+	}
+	return d
+}
+
+// parseMockDecl parses chapter 20's mock declaration: `mock target(params)
+// [-> type] [effect tags] { body }` — the caller has verified the depth (a
+// direct item of a test block body; E1802 holds everywhere else). The
+// target is a bare name or module.name. The signature restates the
+// target's own, and the production orders the declared return before the
+// effect segment — chapter 6's fn declaration reverses the two. The body
+// is a function-body context under the target's display name (E0402's
+// anchor); the module name space gains nothing — a mock binds no module
+// name, its identity is per test block (the checker's E1805 face).
+func (p *parser) parseMockDecl() *ast.MockDecl {
+	kw := p.cur()
+	p.next() // mock
+	m := &ast.MockDecl{Line: kw.Line, Col: kw.Col}
+	t := p.cur()
+	if t.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(t, "E0105", "unexpected end of file — a mock declaration wants its target function's name")
+		}
+		p.failTok(t, "E0105",
+			fmt.Sprintf("unexpected token — %q where a mock declaration names its target function", t.Text))
+	}
+	p.next()
+	if p.cur().Kind == "." {
+		p.next()
+		nt := p.cur()
+		if nt.Kind != lex.KindIdent {
+			if p.atEnd() {
+				p.failTok(nt, "E0105", "unexpected end of file — a mock's qualified target is module.name")
+			}
+			p.failTok(nt, "E0105",
+				fmt.Sprintf("unexpected token — %q where a mock's qualified target names its fn: the target is name or module.name", nt.Text))
+		}
+		m.TargetQual = t.Text
+		m.Target, m.TargetLine, m.TargetCol = nt.Text, nt.Line, nt.Col
+		p.next()
+	} else {
+		m.Target, m.TargetLine, m.TargetCol = t.Text, t.Line, t.Col
+	}
+	if p.cur().Kind != "(" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a mock declaration wants its parameter list")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a mock declaration's parameter list opens", p.cur().Text))
+	}
+	m.Params = p.parseParamList()
+	if p.cur().Kind == "->" {
+		p.next()
+		m.Ret = p.parseTypeRef()
+		m.HasRet = true
+	}
+	if isKw(p.cur(), "effect") {
+		m.EffectTags, m.EffectLine, m.EffectCol = p.parseEffectSegment()
+	}
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a mock declaration wants its body block")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a mock declaration's body block opens", p.cur().Text))
+	}
+	display := m.Target
+	if m.TargetQual != "" {
+		display = m.TargetQual + "." + m.Target
+	}
+	m.Body = p.parseFnBlock(&fnCtx{name: display, hasRet: m.HasRet})
+	return m
+}
+
+// descText carries a test description literal (chapter 20): a plain
+// literal decoded to its bytes, an interpolated one riding its inner text
+// verbatim — the ${} holes make whole-literal decoding impossible and the
+// run tower renders them (M10b). The same split decodeStringLiteral draws
+// in the codegen stage; the escape table's authority is the lexer's
+// validation, so the two readers agree by construction.
+func descText(text string) string {
+	if len(text) < 2 || text[0] != '"' || text[len(text)-1] != '"' {
+		return text
+	}
+	inner := text[1 : len(text)-1]
+	var b strings.Builder
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if c != '\\' {
+			if c == '$' && i+1 < len(inner) && inner[i+1] == '{' {
+				return inner
+			}
+			b.WriteByte(c)
+			continue
+		}
+		i++
+		if i >= len(inner) {
+			return inner
+		}
+		switch inner[i] {
+		case 'n':
+			b.WriteByte('\n')
+		case 't':
+			b.WriteByte('\t')
+		case 'r':
+			b.WriteByte('\r')
+		case '0':
+			b.WriteByte(0)
+		case '\\':
+			b.WriteByte('\\')
+		case '"':
+			b.WriteByte('"')
+		case '\'':
+			b.WriteByte('\'')
+		case 'u':
+			// The lexer has validated the escape syntax; a malformed \u
+			// cannot reach here, and the fallback keeps the contract total.
+			r, end, ok := parseUEscape(inner, i)
+			if !ok || !utf8.ValidRune(r) {
+				return inner
+			}
+			var buf [4]byte
+			b.Write(buf[:utf8.EncodeRune(buf[:], r)])
+			i = end
+		default:
+			return inner
+		}
+	}
+	return b.String()
+}
+
+// parseUEscape reads the `\u{1..6 hex digits}` form starting at the 'u'
+// (index i) of an escape's host string, returning the rune value and the
+// index of the closing brace — the parser-side mirror of the codegen
+// stage's unexported pair (descText's note).
+func parseUEscape(s string, i int) (rune, int, bool) {
+	end := strings.IndexByte(s[i+2:], '}')
+	if end < 0 {
+		return 0, 0, false
+	}
+	hex := s[i+2 : i+2+end]
+	if len(hex) < 1 || len(hex) > 6 {
+		return 0, 0, false
+	}
+	var v rune
+	for j := 0; j < len(hex); j++ {
+		d := hexDigit(hex[j])
+		if d < 0 {
+			return 0, 0, false
+		}
+		v = v*16 + rune(d)
+	}
+	return v, i + 2 + end, true
+}
+
+func hexDigit(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	default:
+		return -1
 	}
 }
 
@@ -1594,11 +1815,22 @@ func (p *parser) block(fctx *fnCtx, direct bool) ast.Block {
 	}
 	savedDirect := p.direct
 	p.direct = direct
+	// The mock depth: a pending 1 (just set by parseTestDecl) marks this
+	// block as the test body's own — its item loop runs at 2, the one
+	// depth where mock is a legal direct item; every nested block runs at
+	// 0 and restores the enclosing depth on exit.
+	savedTest := p.inTestBody
+	if p.inTestBody == 1 {
+		p.inTestBody = 2
+	} else {
+		p.inTestBody = 0
+	}
 	b := ast.Block{Line: open.Line, Col: open.Col}
 	for {
 		if p.cur().Kind == "}" {
 			p.next()
 			p.direct = savedDirect
+			p.inTestBody = savedTest
 			return b
 		}
 		if p.atEnd() {
@@ -1609,6 +1841,7 @@ func (p *parser) block(fctx *fnCtx, direct bool) ast.Block {
 		if p.cur().Kind == "}" {
 			p.next()
 			p.direct = savedDirect
+			p.inTestBody = savedTest
 			return b
 		}
 		if p.atEnd() {
@@ -1654,7 +1887,11 @@ func (p *parser) parseStmt() ast.Stmt {
 				return p.parseScopeRes()
 			}
 		case "mock":
-			p.bnd(bndTest)
+			if p.inTestBody == 2 {
+				return p.parseMockDecl()
+			}
+			p.failTok(t, "E1802",
+				"mock declaration outside a test block — a mock exists only as a direct item of a test block body; move it into the test block whose calls it should intercept")
 		case "pub", "import", "as", "mut", "else", "in", "where", "derives",
 			"with", "resource", "effect", "case", "timeout", "collectAll",
 			"record", "byval", "byres", "newtype", "type", "interface",

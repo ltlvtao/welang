@@ -34,9 +34,13 @@ type NotImplemented struct {
 // wording retired with the concurrent forms. bndErrPayload and the M4
 // rows ride unchanged.
 const (
-	bndMainBody     = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
-	bndErrPayload   = "Err payloads beyond one plain string-literal variant argument"
-	bndOtherFns     = "functions other than main in code generation"
+	bndMainBody   = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
+	bndErrPayload = "Err payloads beyond one plain string-literal variant argument"
+	bndOtherFns   = "functions other than main in code generation"
+	// M10a design D9: the test-module stop — chapter 20's run tower is
+	// M10b's (multi-function widening, the we-test runner, mock
+	// interception, the virtual clock).
+	bndTestModule   = "test modules in code generation (the M10b run tower: test harness, mock interception, virtual clock)"
 	bndTopLets      = "top-level value bindings in code generation"
 	bndTaskBody     = "task bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	bndCallbackBody = "callback bodies beyond straight-line scalar expressions (no control flow, blocking calls, io, or captures of outer bindings)"
@@ -310,6 +314,17 @@ func Emit(f *ast.File, module string) (string, *NotImplemented) {
 			// compile-time discipline — the check stage consumes every
 			// segment, and the tag names reach no IR and no runtime face.
 			continue
+		case *ast.TestDecl:
+			// Chapter 20's test block stops here (M10a design D9): the
+			// run tower — the harness, mock interception, the virtual
+			// clock — is M10b's. An explicit case, never a silent skip.
+			// MockDecl and advanceTime are unreachable below this stop by
+			// construction, so neither needs a walk case: a mock parses
+			// only at a test body's own depth (the parser's E1802 holds
+			// every other position), and advanceTime's legal positions
+			// lie inside the test extent (E1806 outside it) — both live
+			// strictly inside the TestDecl this walk stops at.
+			return "", &NotImplemented{What: bndTestModule}
 		case *ast.Import:
 			// Only the std segment erases (design D4): a std import item
 			// leaves no IR trace and enables the io calls; any other

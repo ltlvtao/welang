@@ -1,0 +1,18 @@
+{
+  "name": "check-e1804-top-let",
+  "args": [
+    "check",
+    "tests/t_test.we"
+  ],
+  "setup": {
+    "files": {
+      "tests/t_test.we": "let size: Int64 = 3\ntest \"target\" {\n    mock size(a: Int64) {\n        return\n    }\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/t_test.we:3:10: error[E1804]: mock target is not a mockable function — size is a top-level binding; only a module-level monomorphic fn is mockable\n",
+  "files": {
+    "tests/t_test.we": "let size: Int64 = 3\ntest \"target\" {\n    mock size(a: Int64) {\n        return\n    }\n}\n"
+  }
+}
