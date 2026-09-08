@@ -15,6 +15,13 @@
 // die lazily — a cancelled task's registrations stay on their source
 // queues flagged dead, and source operations skip and reap them — so no
 // cancel path needs to know which family it interrupts.
+//
+// M10b (design D4) splits the clock in two: a run inside the test extent
+// holds a virtual clock that moves only when a runnable task advances it,
+// so scope deadlines taken there and the sleep waits test.c parks ride
+// that clock, and the idle loop never sleeps toward a virtual deadline —
+// idle with no real wake source under the virtual clock is the test
+// domain's own deadlock, reported with the advanceTime line and exit 1.
 #define _XOPEN_SOURCE 700
 
 #include <stdio.h>
@@ -29,6 +36,7 @@
 #define SCHED_STACK (64 * 1024)
 
 static we_task *ready_head, *ready_tail;
+static we_task *drain_head, *drain_tail; // advanceTime's barrier queue
 static we_task *all_tasks;
 static we_scope *active_scopes;
 static we_task *task0;
@@ -74,9 +82,35 @@ static void all_push(we_task *t) {
     all_tasks = t;
 }
 
+// Take a queued task out of the ready queue (the abandonment sweep's READY
+// face): singly linked, so the walk keeps the predecessor for the tail.
+static void ready_unlink(we_task *t) {
+    we_task *prev = NULL;
+    for (we_task *c = ready_head; c; prev = c, c = c->qnext) {
+        if (c == t) {
+            if (prev) {
+                prev->qnext = c->qnext;
+            } else {
+                ready_head = c->qnext;
+            }
+            if (ready_tail == t) {
+                ready_tail = prev;
+            }
+            t->qnext = NULL;
+            return;
+        }
+    }
+}
+
 we_task *__we_cur_task(void) { return cur_task; }
 
 int __we_cur_cancelled(void) { return cur_task && cur_task->cancel_flag; }
+
+// The test boundary's sweep material (M10b design D4): the whole-task
+// ledger head, and the task-table count a begin records as its baseline.
+we_task *__we_all_tasks(void) { return all_tasks; }
+
+int __we_task_table_count(void) { return ntask_slots; }
 
 // The current task suspends. The caller has already registered its wait
 // links (or is the scope-leave joiner, which registers none).
@@ -133,6 +167,59 @@ static void fail_links(we_task *t) {
     for (we_wait_link *l = t->links; l; l = l->task_next) {
         l->dead = 1;
     }
+}
+
+// The clock-crossing barrier (M10b design D4/D9): advanceTime parks here
+// before it moves the virtual clock, and the scheduler answers it only
+// when the ready queue is empty — every runnable task has run to its next
+// block, so every wait that wants the crossing is registered first. FIFO
+// in park order; nested advances (a task advancing while another waits at
+// its own barrier) drain in the order they arrived. WE_DRAIN keeps the
+// queue disjoint from wake's (a cancelled drain waiter stays queued: the
+// flag rides home with it and the body's next block answers the empty
+// form).
+void __we_sched_drain(void) {
+    cur_task->state = WE_DRAIN;
+    cur_task->qnext = NULL;
+    if (drain_tail) {
+        drain_tail->qnext = cur_task;
+    } else {
+        drain_head = cur_task;
+    }
+    drain_tail = cur_task;
+    swapcontext(&cur_task->ctx, &sched_ctx);
+}
+
+// The test boundary's sweep (M10b design D4): permanently abandon a task
+// the test leaves behind. This is not a cancellation — a cancelled task
+// wakes and answers its empty form, so its body's remaining statements
+// still run; an abandoned one is taken out of scheduling entirely (out of
+// the ready queue if queued, off the barrier queue if parked at one, and
+// a parked one simply never resumes). Its registrations die so no source
+// ever serves it; the task and its stack stay on the ledger (the gc
+// window keeps its roots — the bounded-leak face, follow-up #11).
+void __we_task_abandon(we_task *t) {
+    fail_links(t);
+    if (t->state == WE_READY) {
+        ready_unlink(t);
+    } else if (t->state == WE_DRAIN) {
+        we_task *prev = NULL;
+        for (we_task *c = drain_head; c; prev = c, c = c->qnext) {
+            if (c == t) {
+                if (prev) {
+                    prev->qnext = c->qnext;
+                } else {
+                    drain_head = c->qnext;
+                }
+                if (drain_tail == t) {
+                    drain_tail = prev;
+                }
+                t->qnext = NULL;
+                break;
+            }
+        }
+    }
+    t->state = WE_ABANDONED;
 }
 
 // Wake for cancellation: the cooperative-return path. The woken primitive
@@ -327,7 +414,13 @@ void *__we_scope_enter(long long deadline_ms, long long collect_all) {
     }
     sc->parent = cur_task->scope;
     cur_task->scope = sc;
-    sc->deadline_ms = deadline_ms >= 0 ? now_ms() + deadline_ms : -1;
+    // The deadline rides the clock the run is under (M10b design D4): a
+    // scope entered inside the test extent parks on the virtual clock,
+    // every other scope on the wall.
+    sc->virtual = __we_test_virtual();
+    sc->deadline_ms = deadline_ms >= 0
+        ? (sc->virtual ? __we_test_vnow() : now_ms()) + deadline_ms
+        : -1;
     sc->collect_all = (int)collect_all;
     sc->owner = cur_task;
     sc->next = active_scopes;
@@ -364,9 +457,14 @@ long long __we_scope_leave(void *scope) {
 
 // Expire due scopes: mark, cancel their unfinished tasks (the cooperative
 // returns drain pending), and the joiner wakes when the last one settles.
-static void expire_deadlines(void) {
-    long long now = now_ms();
+// Each scope reads its own clock (M10b design D4): a virtual scope expires
+// against the virtual clock — so an advance can expire it — while every
+// other scope reads the wall. Non-static: the advance face pushes an
+// expiry after it moves the virtual clock, ahead of any scheduling.
+void __we_expire_deadlines(void) {
+    long long wall = now_ms();
     for (we_scope *sc = active_scopes; sc; sc = sc->next) {
+        long long now = sc->virtual ? __we_test_vnow() : wall;
         if (sc->deadline_ms >= 0 && !sc->timed_out && sc->pending > 0 &&
             sc->deadline_ms <= now) {
             sc->timed_out = 1;
@@ -375,10 +473,13 @@ static void expire_deadlines(void) {
     }
 }
 
+// The idle loop's sleep target: real-clock scopes only — a virtual
+// deadline is never slept toward (the virtual clock moves from runnable
+// tasks, never from the wall).
 static long long earliest_deadline(void) {
     long long best = -1;
     for (we_scope *sc = active_scopes; sc; sc = sc->next) {
-        if (sc->deadline_ms >= 0 && !sc->timed_out && sc->pending > 0 &&
+        if (!sc->virtual && sc->deadline_ms >= 0 && !sc->timed_out && sc->pending > 0 &&
             (best < 0 || sc->deadline_ms < best)) {
             best = sc->deadline_ms;
         }
@@ -398,15 +499,51 @@ static long long count_parked(void) {
 
 static void sched_run(void) {
     for (;;) {
-        expire_deadlines();
+        __we_expire_deadlines();
+        __we_sleep_expire(); // due real sleeps release alongside the scopes
         we_task *t = ready_pop();
         if (!t) {
+            if (drain_head) {
+                // The barrier answers only an empty ready queue: the
+                // crossing may proceed (the waiter moves the clock, its
+                // release re-fills this loop).
+                t = drain_head;
+                drain_head = t->qnext;
+                if (!drain_head) {
+                    drain_tail = NULL;
+                }
+                t->qnext = NULL;
+                t->state = WE_READY;
+                ready_push(t);
+                continue;
+            }
             long long ddl = earliest_deadline();
+            long long sd = __we_sleep_earliest_deadline();
+            if (sd >= 0 && (ddl < 0 || sd < ddl)) {
+                ddl = sd;
+            }
             if (ddl < 0) {
-                // Idle with no future event: every remaining task is
-                // parked with nothing that will ever wake it.
+                // Idle with no future event. Under the test's virtual
+                // clock (M10b design D4) no wall deadline exists to sleep
+                // toward — progress needs a runnable task to advance the
+                // clock — so this is the test domain's own deadlock: one
+                // line naming the virtual clock, exit 1 (the count is the
+                // clock-parked tasks; a driver parked on a join is not a
+                // clock wait, and with no clock waiter at all every parked
+                // task counts). Outside that extent this is the honest
+                // M9b face: every remaining task parked with nothing that
+                // will ever wake it, exit 70.
+                long long parked = count_parked();
+                if (__we_test_virtual()) {
+                    long long clocked = __we_virtual_parked();
+                    fprintf(stderr, "we: deadlock: %lld tasks parked with no wake source"
+                                    " (the virtual clock only advances when a runnable task"
+                                    " calls advanceTime)\n",
+                            clocked > 0 ? clocked : parked);
+                    exit(1);
+                }
                 fprintf(stderr, "we: deadlock: %lld tasks parked with no wake source\n",
-                        count_parked());
+                        parked);
                 exit(70);
             }
             struct timespec ts = {ddl / 1000, (ddl % 1000) * 1000000};

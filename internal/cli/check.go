@@ -36,11 +36,11 @@ func (e *env) runCheck(path string, info os.FileInfo) int {
 // and stops at the type stage — check produces no artifact (chapter 21
 // R2), so there is no artifact face to stop at.
 func (e *env) runCheckProject(dir string) int {
-	_, _, modules, code := e.loadProject(dir, false)
+	_, _, mods, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
 	}
-	return e.checkPassed(modules)
+	return e.checkPassed(len(mods) + 1)
 }
 
 // loadFile runs the single-file pipeline: read, parse, and the type stage
@@ -79,8 +79,10 @@ func (e *env) loadFile(path string) (*ast.File, int) {
 // faces), then all modules type-checked in the graph's post-order (the
 // imported before the importing — chapter 15's deterministic
 // initialization order; the main convention binds the root module).
-// It returns the root module, the manifest name, and the module count; a
-// nil file means the failure is already reported, with its exit code.
+// It returns the root module, the manifest name, and the dependency
+// modules in post-order (the std modules among them — the type stage
+// wants the graph whole; the code stage filters its own face); a nil
+// file means the failure is already reported, with its exit code.
 //
 // artifact marks a caller with an artifact face (build/run): a library
 // manifest stops at the library boundary after the manifest validations
@@ -88,13 +90,58 @@ func (e *env) loadFile(path string) (*ast.File, int) {
 // its check-through behavior. The dependency boundary applies to every
 // pipeline command alike (chapter 22 R5) and fires first when both are
 // present.
-func (e *env) loadProject(dir string, artifact bool) (*ast.File, string, int, int) {
+func (e *env) loadProject(dir string, artifact bool) (*ast.File, string, []typecheck.Module, int) {
+	manifest, code := e.loadManifest(dir, artifact)
+	if code != exitOK {
+		return nil, "", nil, code
+	}
+	root := filepath.Join(dir, "src", "main.we")
+	src, err := os.ReadFile(root)
+	if err != nil {
+		e.report(diag.Error("E1305", "main function signature violation — the root module "+root+" does not exist; declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type").
+			At(root, 1, 1).
+			WithHelp("Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type."))
+		return nil, "", nil, exitDiagnostic
+	}
+	file, d, ni := parser.Parse(root, src)
+	if d != nil {
+		e.report(*d)
+		return nil, "", nil, exitDiagnostic
+	}
+	if ni != nil {
+		return nil, "", nil, e.boundary(ni.What)
+	}
+	// The module graph from the root (chapter 15): depth-first over the
+	// imports in source order, then the post-order the type stage takes.
+	mods, code := e.loadGraph(dir, "main", root, file)
+	if code != exitOK {
+		return nil, "", nil, code
+	}
+	td, tni := typecheck.CheckProject(file, root, mods)
+	if td != nil {
+		e.report(*td)
+		return nil, "", nil, exitDiagnostic
+	}
+	if tni != nil {
+		return nil, "", nil, e.boundary(tni.What)
+	}
+	return file, manifest["name"], mods, exitOK
+}
+
+// loadManifest reads and validates the project manifest (design D2's
+// pinned order: the three keys, then the dependency face, then — for a
+// caller with an artifact face — the library boundary). It returns the
+// parsed keys; a non-empty map means the validations passed and the
+// failure is already reported otherwise. The test runner shares the
+// validations but keeps going for a library project (M10b design D6:
+// its executable is the synthesized harness, not the artifact kind's).
+func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
 	raw, err := os.ReadFile(filepath.Join(dir, "we.toml"))
 	if err != nil {
 		e.report(diag.Error("E1905", "project manifest missing or incomplete — no we.toml in the project directory; create we.toml with the name, version, and type keys, or run we new to write the skeleton").
 			At("we.toml", 1, 1).
 			WithHelp("Create we.toml with the name, version, and type keys, or run we new to write the skeleton."))
-		return nil, "", 0, exitDiagnostic
+		return nil, exitDiagnostic
 	}
 	manifest, deps := parseManifest(string(raw))
 	for _, key := range []string{"name", "version", "type"} {
@@ -103,7 +150,7 @@ func (e *env) loadProject(dir string, artifact bool) (*ast.File, string, int, in
 				"project manifest missing or incomplete — the manifest's %q key is missing; create we.toml with the name, version, and type keys, or run we new to write the skeleton", key)).
 				At("we.toml", 1, 1).
 				WithHelp("Create we.toml with the name, version, and type keys, or run we new to write the skeleton."))
-			return nil, "", 0, exitDiagnostic
+			return nil, exitDiagnostic
 		}
 	}
 	if !validProjectName(manifest["name"]) {
@@ -111,64 +158,34 @@ func (e *env) loadProject(dir string, artifact bool) (*ast.File, string, int, in
 			"invalid project name — %q is not lowercase letters, digits, and hyphens; use chapter 1's naming convention", manifest["name"])).
 			At("we.toml", 1, 1).
 			WithHelp("Use lowercase letters, digits, and hyphens per chapter 1's naming convention."))
-		return nil, "", 0, exitDiagnostic
+		return nil, exitDiagnostic
 	}
 	if !validVersion(manifest["version"]) {
 		e.report(diag.Error("E2004", fmt.Sprintf(
 			"invalid version value — %q is not three dot-separated non-negative integers without leading zeros; write the version as major.minor.patch", manifest["version"])).
 			At("we.toml", 1, 1).
 			WithHelp("Write the version as three integers, major.minor.patch, without leading zeros."))
-		return nil, "", 0, exitDiagnostic
+		return nil, exitDiagnostic
 	}
 	if manifest["type"] != "executable" && manifest["type"] != "library" {
 		e.report(diag.Error("E1903", fmt.Sprintf(
 			"invalid toolchain configuration value — the \"type\" key holds %q; its legal values are executable and library", manifest["type"])).
 			At("we.toml", 1, 1).
 			WithHelp("Set the named key to one of the legal values the diagnostic lists."))
-		return nil, "", 0, exitDiagnostic
+		return nil, exitDiagnostic
 	}
 	// Chapter 22 R5: acquisition precedes module resolution, so a non-empty
 	// [dependencies] set stops every pipeline command here — an empty or
 	// absent section is trivially satisfied.
 	if deps > 0 {
-		return nil, "", 0, e.boundary(whatNonEmptyDeps)
+		return nil, e.boundary(whatNonEmptyDeps)
 	}
 	// The artifact kind is the manifest's word: build/run stop before any
 	// source work for a library project (design D2's pinned order).
 	if artifact && manifest["type"] == "library" {
-		return nil, "", 0, e.boundary(whatLibraryArtifacts)
+		return nil, e.boundary(whatLibraryArtifacts)
 	}
-	root := filepath.Join(dir, "src", "main.we")
-	src, err := os.ReadFile(root)
-	if err != nil {
-		e.report(diag.Error("E1305", "main function signature violation — the root module "+root+" does not exist; declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type").
-			At(root, 1, 1).
-			WithHelp("Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type."))
-		return nil, "", 0, exitDiagnostic
-	}
-	file, d, ni := parser.Parse(root, src)
-	if d != nil {
-		e.report(*d)
-		return nil, "", 0, exitDiagnostic
-	}
-	if ni != nil {
-		return nil, "", 0, e.boundary(ni.What)
-	}
-	// The module graph from the root (chapter 15): depth-first over the
-	// imports in source order, then the post-order the type stage takes.
-	mods, code := e.loadGraph(dir, root, file)
-	if code != exitOK {
-		return nil, "", 0, code
-	}
-	td, tni := typecheck.CheckProject(file, root, mods)
-	if td != nil {
-		e.report(*td)
-		return nil, "", 0, exitDiagnostic
-	}
-	if tni != nil {
-		return nil, "", 0, e.boundary(tni.What)
-	}
-	return file, manifest["name"], len(mods) + 1, exitOK
+	return manifest, exitOK
 }
 
 // The loader's diagnostic helps — the registry's remediations, quoted per
@@ -186,11 +203,13 @@ const (
 // std form when nothing maps), a back edge is E1301 (three-color marking;
 // the message renders the cycle), and each first-visited module is read
 // and parsed in discovery order.
-// It returns the dependency modules in post-order — the imported before
-// the importing, chapter 15's deterministic initialization order — with
-// the root excluded (the caller checks it last); a non-zero code means
-// the failure is already reported.
-func (e *env) loadGraph(dir, rootPath string, root *ast.File) ([]typecheck.Module, int) {
+// rootKey names the starting module — "main" for the pipeline root, a
+// test module's own dotted key for M10b's per-test roots. It returns
+// the dependency modules in post-order — the imported before the
+// importing, chapter 15's deterministic initialization order — with the
+// root excluded (the caller checks it last); a non-zero code means the
+// failure is already reported.
+func (e *env) loadGraph(dir, rootKey, rootPath string, root *ast.File) ([]typecheck.Module, int) {
 	const (
 		white = 0
 		gray  = 1
@@ -279,12 +298,12 @@ func (e *env) loadGraph(dir, rootPath string, root *ast.File) ([]typecheck.Modul
 				return code
 			}
 		}
-		if key != "main" {
+		if key != rootKey {
 			order = append(order, typecheck.Module{Key: key, Path: path, File: file})
 		}
 		return exitOK
 	}
-	return order, visit("main", rootPath, root)
+	return order, visit(rootKey, rootPath, root)
 }
 
 // parseManifest reads the manifest's flat string keys — the minimal

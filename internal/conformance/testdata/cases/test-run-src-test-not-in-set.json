@@ -1,0 +1,17 @@
+{
+  "name": "test-run-src-test-not-in-set",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/helpers_test.we": "import std.test as st\n\ntest \"not in set\" {\n    st.assertEqual(1, 2)\n}\n",
+      "tests/ok_test.we": "test \"ok\" {\n    assert(true, \"ok\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/ok_test.we: ok (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

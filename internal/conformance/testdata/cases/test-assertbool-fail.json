@@ -1,0 +1,16 @@
+{
+  "name": "test-assertbool-fail",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\ntest \"true fail\" {\n    st.assertTrue(false)\n}\n\ntest \"false fail\" {\n    st.assertFalse(true)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: true fail (0ms)\n  assertion failed\nfail  tests/m_test.we: false fail (0ms)\n  assertion failed: expected false\ntotal 2, passed 0, failed 2 (0ms)\n",
+  "stderr": ""
+}

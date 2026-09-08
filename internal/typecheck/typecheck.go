@@ -1800,9 +1800,12 @@ type checker struct {
 	// modules holds every ingested module's namespace keyed by its
 	// canonical dotted path (chapter 15, design D9): syms is the live
 	// module's own bucket — one namespace per module is E1303's judgment
-	// base. isRoot gates the main convention to the root module alone.
+	// base. isRoot gates the main convention to the root module alone;
+	// noMain lifts it for a test-module root (M10b design D6 — the entry
+	// point there is the synthesized driver, so E1305 does not bind).
 	modules map[string]map[string]*symbol
 	isRoot  bool
+	noMain  bool
 }
 
 // propCtx is the propagation context of one body (chapter 14, design D7):
@@ -1858,6 +1861,25 @@ type Module struct {
 	Key  string
 	Path string
 	File *ast.File
+}
+
+// CheckTestRoot types one test module as its own graph root (M10b design
+// D6): the same stdlib-first walk and the same provided-before-importing
+// dependency ingest as a project check, but the main convention does not
+// bind — a test module's entry point is the synthesized driver, not
+// src/main.we's fn main. Each test module of a run checks as its own
+// root over its own dependency slice.
+func CheckTestRoot(root *ast.File, rootPath, rootKey string, deps []Module) (d *diag.Diagnostic, ni *NotImplemented) {
+	c := newChecker(Project)
+	defer stopTo(&d, &ni)
+	c.file = stdBodyFile
+	c.checkBuiltinCombinators()
+	for _, m := range deps {
+		c.ingest(m.File, m.Path, m.Key, false)
+	}
+	c.noMain = true
+	c.ingest(root, rootPath, rootKey, true)
+	return nil, nil
 }
 
 // CheckProject runs the type stage over a multi-module project (design
@@ -2033,7 +2055,7 @@ func (c *checker) checkModule(f *ast.File) {
 		}
 	}
 	// The main convention binds the root module alone.
-	if c.mode == Project && c.isRoot {
+	if c.mode == Project && c.isRoot && !c.noMain {
 		c.checkMain(f)
 	}
 	// Pass 2a: resolve every declaration's types under its own clause —
@@ -2286,6 +2308,26 @@ func StdModule(key string) (*ast.File, bool) {
 				Params: []ast.Param{{Name: "cond", Type: &ast.NamedType{Name: "Bool", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}}},
 			&ast.FnDecl{Pub: true, Name: "assertFalse", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
 				Params: []ast.Param{{Name: "cond", Type: &ast.NamedType{Name: "Bool", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}}},
+		}}, true
+	case "std.time":
+		// M10b design D4: the fourth synthetic module — now and sleep as
+		// plain declarations with the time effect segment (the std.io
+		// precedent again; the loading gate keys on the module key, so a
+		// user module named time never disturbs the entry). The bodies are
+		// the We-writable fiction the M8 discipline wants — a tail-produced
+		// Int64 for now, an empty body for sleep — the same checker
+		// machinery walks them, and the run face rides the virtual clock
+		// test.c owns inside the test extent and the wall clock outside it.
+		return &ast.File{Items: []ast.Item{
+			&ast.FnDecl{Pub: true, Name: "now", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+				EffectTags: []string{"time"},
+				Ret:        &ast.NamedType{Name: "Int64", Line: 1, Col: 1},
+				Body: ast.Block{Items: []ast.Stmt{&ast.ExprStmt{
+					Expr: &ast.Literal{Kind: "int", Text: "0"}, Line: 1, Col: 1,
+				}}, Line: 1, Col: 1}},
+			&ast.FnDecl{Pub: true, Name: "sleep", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
+				Params:     []ast.Param{{Name: "ms", Type: &ast.NamedType{Name: "Int64", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}},
+				EffectTags: []string{"time"}},
 		}}, true
 	}
 	return nil, false

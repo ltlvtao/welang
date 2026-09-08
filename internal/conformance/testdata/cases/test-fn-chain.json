@@ -1,0 +1,16 @@
+{
+  "name": "test-fn-chain",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\nfn double(n: Int64) -> Int64 {\n    return n * 2\n}\n\nfn quad(n: Int64) -> Int64 {\n    return double(double(n))\n}\n\ntest \"quad\" {\n    st.assertEqual(quad(2), 8)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: quad (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

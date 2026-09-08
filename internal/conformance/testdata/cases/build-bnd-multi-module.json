@@ -11,7 +11,7 @@
       "src/util.we": "pub fn helper() {\n    return\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: functions other than main in code generation are not implemented in this reference build yet\n"
+  "stderr": ""
 }

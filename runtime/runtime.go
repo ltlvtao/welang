@@ -29,3 +29,6 @@ var SchedSource string
 
 //go:embed c/conc.c
 var ConcSource string
+
+//go:embed c/test.c
+var TestSource string

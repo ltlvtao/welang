@@ -1,0 +1,15 @@
+{
+  "name": "test-single-file-non-test-empty",
+  "args": [
+    "test",
+    "plain.we"
+  ],
+  "setup": {
+    "files": {
+      "plain.we": "fn helper() {\n    return\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "total 0, passed 0, failed 0 (0ms)\n",
+  "stderr": ""
+}

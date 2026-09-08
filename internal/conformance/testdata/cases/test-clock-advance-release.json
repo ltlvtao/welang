@@ -1,0 +1,16 @@
+{
+  "name": "test-clock-advance-release",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/advance_test.we": "import std.io\nimport std.time\n\ntest \"advance\" {\n    scope {\n        let t = task effect io time {\n            let _ = time.sleep(100)\n            io.println(\"slept\")\n        }\n        advanceTime(100)\n        let _ = t.await()\n    }\n    assert(true, \"done\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "slept\npass  tests/advance_test.we: advance (100ms)\ntotal 1, passed 1, failed 0 (100ms)\n",
+  "stderr": ""
+}

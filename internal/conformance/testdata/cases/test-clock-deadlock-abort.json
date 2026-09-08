@@ -1,0 +1,16 @@
+{
+  "name": "test-clock-deadlock-abort",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.time\n\ntest \"stuck\" {\n    let _ = time.sleep(100)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we: deadlock: 1 tasks parked with no wake source (the virtual clock only advances when a runnable task calls advanceTime)\n"
+}

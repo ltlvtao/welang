@@ -1,0 +1,15 @@
+{
+  "name": "test-single-file-pass",
+  "args": [
+    "test",
+    "timer_test.we"
+  ],
+  "setup": {
+    "files": {
+      "timer_test.we": "test \"clock\" {\n    assert(true, \"ok\")\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  timer_test.we: clock (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

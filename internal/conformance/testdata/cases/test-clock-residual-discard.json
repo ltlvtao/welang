@@ -1,0 +1,16 @@
+{
+  "name": "test-clock-residual-discard",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.io\nimport std.test as st\nimport std.time\n\ntest \"quick\" {\n    scope {\n        let t = task effect io time {\n            let _ = time.sleep(5000)\n            io.println(\"late\")\n        }\n        assert(false, \"boom\")\n        return\n    }\n}\n\ntest \"next\" {\n    st.assertEqual(1, 1)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: quick (0ms)\n  boom\npass  tests/m_test.we: next (0ms)\ntotal 2, passed 1, failed 1 (0ms)\n",
+  "stderr": ""
+}

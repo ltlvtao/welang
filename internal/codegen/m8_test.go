@@ -65,15 +65,22 @@ func helloModule(alias string) *ast.File {
 	}}
 }
 
+// M10b slots the io pair (design D3): the call loads the slot global, so
+// a mock can fill it — the bytes the M8 goldens pinned change by exactly
+// that (one slot line, the load, the indirect call), everything else
+// rides byte-identical.
 const m8HelloIR = `; ModuleID = 'demo'
 
 @.s0 = private unnamed_addr constant [2 x i8] c"We"
+
+@slot.io.println = global ptr @__we_println
 
 declare void @__we_println(ptr, i64)
 
 define i32 @__we_main() {
 entry:
-  call void @__we_println(ptr @.s0, i64 2)
+  %v0 = load ptr, ptr @slot.io.println
+  call void %v0(ptr @.s0, i64 2)
   ret i32 0
 }
 `
@@ -112,14 +119,20 @@ func TestM8ImportErasure(t *testing.T) {
 	}
 }
 
-// A local import still stops at the M4 other-functions row: only the std
-// segment erases (D4's unchanged boundary line).
+// A local import erases at the single-module face: the imported name is
+// not part of this program (no module keyed b rides a single-file Emit),
+// the hello body never calls through it, and the import itself emits
+// nothing — the M10b widening made cross-module links call-site facts
+// (the fn table), not module-level stops. The IR equals the plain hello.
 func TestM8LocalImportBoundary(t *testing.T) {
 	f := helloModule("")
 	f.Items[0] = &ast.Import{Path: []string{"b"}}
-	_, ni := Emit(f, "demo")
-	if ni == nil || ni.What != "functions other than main in code generation" {
-		t.Fatalf("want other-fns boundary on local import, got: %v", ni)
+	ir, ni := Emit(f, "demo")
+	if ni != nil {
+		t.Fatalf("unexpected boundary on local import: %s", ni.What)
+	}
+	if ir != m8HelloIR {
+		t.Fatalf("local-import IR should equal the plain hello:\nwant:\n%s\ngot:\n%s", m8HelloIR, ir)
 	}
 }
 
@@ -142,11 +155,14 @@ func TestM8PrintAndDiscardIR(t *testing.T) {
 
 @.s0 = private unnamed_addr constant [2 x i8] c"hi"
 
+@slot.io.print = global ptr @__we_print
+
 declare void @__we_print(ptr, i64)
 
 define i32 @__we_main() {
 entry:
-  call void @__we_print(ptr @.s0, i64 2)
+  %v0 = load ptr, ptr @slot.io.print
+  call void %v0(ptr @.s0, i64 2)
   ret i32 0
 }
 `
@@ -190,11 +206,13 @@ func greeterModule() *ast.File {
 // at the single ret. A String let needs no root: not a gc record.
 const m8RecordIR = `; ModuleID = 'demo'
 
-%struct.Greeter = type { ptr, i64 }
+%struct.main.Greeter = type { ptr, i64 }
 
 @.s0 = private unnamed_addr constant [5 x i8] c"hello"
 
-@.map.Greeter = private unnamed_addr constant [1 x i64] [i64 0]
+@.map.main.Greeter = private unnamed_addr constant [1 x i64] [i64 0]
+
+@slot.io.println = global ptr @__we_println
 
 declare ptr @__we_alloc(i64)
 declare void @__we_root_push(ptr)
@@ -204,7 +222,7 @@ declare void @__we_println(ptr, i64)
 define i32 @__we_main() {
 entry:
   %v0 = call ptr @__we_alloc(i64 32)
-  store ptr @.map.Greeter, ptr %v0
+  store ptr @.map.main.Greeter, ptr %v0
   call void @__we_root_push(ptr %v0)
   %v1 = getelementptr i8, ptr %v0, i64 16
   store ptr @.s0, ptr %v1
@@ -214,7 +232,8 @@ entry:
   %v4 = load ptr, ptr %v3
   %v5 = getelementptr i8, ptr %v0, i64 24
   %v6 = load i64, ptr %v5
-  call void @__we_println(ptr %v4, i64 %v6)
+  %v7 = load ptr, ptr @slot.io.println
+  call void %v7(ptr %v4, i64 %v6)
   call void @__we_root_pop()
   ret i32 0
 }
@@ -275,14 +294,16 @@ func TestM8NestedRecordIR(t *testing.T) {
 	}}
 	want := `; ModuleID = 'demo'
 
-%struct.Point = type { ptr, i64 }
-%struct.Wrapper = type { ptr, ptr, i64 }
+%struct.main.Point = type { ptr, i64 }
+%struct.main.Wrapper = type { ptr, ptr, i64 }
 
 @.s0 = private unnamed_addr constant [1 x i8] c"p"
 @.s1 = private unnamed_addr constant [1 x i8] c"l"
 
-@.map.Point = private unnamed_addr constant [1 x i64] [i64 0]
-@.map.Wrapper = private unnamed_addr constant [1 x i64] [i64 1]
+@.map.main.Point = private unnamed_addr constant [1 x i64] [i64 0]
+@.map.main.Wrapper = private unnamed_addr constant [1 x i64] [i64 1]
+
+@slot.io.println = global ptr @__we_println
 
 declare ptr @__we_alloc(i64)
 declare void @__we_root_push(ptr)
@@ -292,10 +313,10 @@ declare void @__we_println(ptr, i64)
 define i32 @__we_main() {
 entry:
   %v0 = call ptr @__we_alloc(i64 40)
-  store ptr @.map.Wrapper, ptr %v0
+  store ptr @.map.main.Wrapper, ptr %v0
   call void @__we_root_push(ptr %v0)
   %v1 = call ptr @__we_alloc(i64 32)
-  store ptr @.map.Point, ptr %v1
+  store ptr @.map.main.Point, ptr %v1
   call void @__we_root_push(ptr %v1)
   %v2 = getelementptr i8, ptr %v1, i64 16
   store ptr @.s0, ptr %v2
@@ -313,7 +334,8 @@ entry:
   %v10 = load ptr, ptr %v9
   %v11 = getelementptr i8, ptr %v8, i64 24
   %v12 = load i64, ptr %v11
-  call void @__we_println(ptr %v10, i64 %v12)
+  %v13 = load ptr, ptr @slot.io.println
+  call void %v13(ptr %v10, i64 %v12)
   call void @__we_root_pop()
   call void @__we_root_pop()
   ret i32 0
@@ -354,11 +376,11 @@ func TestM8RecordErrIR(t *testing.T) {
 	}}
 	want := `; ModuleID = 'demo'
 
-%struct.Greeter = type { ptr, i64 }
+%struct.main.Greeter = type { ptr, i64 }
 
 @.s0 = private unnamed_addr constant [2 x i8] c"hi"
 
-@.map.Greeter = private unnamed_addr constant [1 x i64] [i64 0]
+@.map.main.Greeter = private unnamed_addr constant [1 x i64] [i64 0]
 
 @.err = private unnamed_addr constant [20 x i8] c"error: Failed: boom\0A"
 
@@ -369,7 +391,7 @@ declare void @__we_fail(ptr, i64) noreturn
 define i32 @__we_main() {
 entry:
   %v0 = call ptr @__we_alloc(i64 32)
-  store ptr @.map.Greeter, ptr %v0
+  store ptr @.map.main.Greeter, ptr %v0
   call void @__we_root_push(ptr %v0)
   %v1 = getelementptr i8, ptr %v0, i64 16
   store ptr @.s0, ptr %v1

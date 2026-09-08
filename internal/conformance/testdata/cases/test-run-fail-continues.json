@@ -1,0 +1,16 @@
+{
+  "name": "test-run-fail-continues",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "test \"bad\" {\n    assert(false, \"first fails\")\n}\n\ntest \"good\" {\n    assert(true, \"ok\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: bad (0ms)\n  first fails\npass  tests/m_test.we: good (0ms)\ntotal 2, passed 1, failed 1 (0ms)\n",
+  "stderr": ""
+}

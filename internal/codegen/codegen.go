@@ -1,15 +1,19 @@
-// Package codegen emits textual LLVM IR for the M8 acceptance set (design
-// D4/D5 of the stdlib-and-gc change, widening M4's native-vertical set):
-// the skeleton module — erased declarations plus one main — with main's
-// body being a straight-line statement sequence of let bindings of String
-// literals and gc-record constructions, io call statements, and a single
-// Ok or Err return tail. Records construct through the gc protocol
-// (alloc, map store, root push, field stores — the outer object rooted
-// before any nested allocation); Strings ride as double-word operands
-// from a constant pool. Everything else that survives type checking
-// stops at a boundary What. Emission is a pure function — no paths, no
-// counters beyond first-appearance ordering, no time — which is chapter
-// 21's same-input-same-output made byte-level.
+// Package codegen emits textual LLVM IR (the M10b program-level face,
+// design D1 of the testing-run change): a whole program — one root
+// module plus its dependency modules — as one module of IR. Every We fn
+// is defined under its module-qualified symbol with a slot global
+// pointing at the real body, and call sites load the slot (design D3:
+// mock interception fills these slots); the root main alone is the
+// build entry (__we_main, no slot), while the synthesized test driver
+// owns the entry in test mode. Bodies are the M9b statement set (scalars,
+// strings, records, primitives, io, task/scope/select, ?, match,
+// while/if, defer, one tail return). Records construct through the gc
+// protocol (alloc, map store, root push, field stores — the outer object
+// rooted before any nested allocation); Strings ride as double-word
+// operands from a constant pool. Everything else that survives type
+// checking stops at a boundary What. Emission is a pure function — no
+// paths, no counters beyond first-appearance ordering, no time — which
+// is chapter 21's same-input-same-output made byte-level.
 package codegen
 
 import (
@@ -32,24 +36,29 @@ type NotImplemented struct {
 // The boundary Whats. bndMainBody is the M9b v2 vocabulary (design D9):
 // the same statement set bndTaskBody names, anchored at main — the M8
 // wording retired with the concurrent forms. bndErrPayload and the M4
-// rows ride unchanged.
+// rows ride unchanged. M10b (design D8) retires bndOtherFns and
+// bndTestModule with the multi-function widening and adds the two rows
+// below.
 const (
-	bndMainBody   = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
-	bndErrPayload = "Err payloads beyond one plain string-literal variant argument"
-	bndOtherFns   = "functions other than main in code generation"
-	// M10a design D9: the test-module stop — chapter 20's run tower is
-	// M10b's (multi-function widening, the we-test runner, mock
-	// interception, the virtual clock).
-	bndTestModule   = "test modules in code generation (the M10b run tower: test harness, mock interception, virtual clock)"
+	bndMainBody     = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
+	bndErrPayload   = "Err payloads beyond one plain string-literal variant argument"
 	bndTopLets      = "top-level value bindings in code generation"
 	bndTaskBody     = "task bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	bndCallbackBody = "callback bodies beyond straight-line scalar expressions (no control flow, blocking calls, io, or captures of outer bindings)"
+	// M10b design D8, verbatim.
+	bndGenericFns = "generic functions in code generation (monomorphization is the B-track codegen-full widening)"
+	bndFnBody     = "function bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
+	// M10b design D7: assertEqual's comparand domain — the Eq-generic
+	// face is the standard library's own widening, not this build's.
+	bndAssertEqDomain = "assertEqual beyond the scalar, Bool, and String domains (the Eq-generic face is the standard library's own widening)"
 )
 
 func bndMain() *NotImplemented     { return &NotImplemented{What: bndMainBody} }
 func bndErrPay() *NotImplemented   { return &NotImplemented{What: bndErrPayload} }
 func bndTask() *NotImplemented     { return &NotImplemented{What: bndTaskBody} }
 func bndCallback() *NotImplemented { return &NotImplemented{What: bndCallbackBody} }
+func bndFn() *NotImplemented       { return &NotImplemented{What: bndFnBody} }
+func bndEqDomain() *NotImplemented { return &NotImplemented{What: bndAssertEqDomain} }
 
 // The runtime symbols emission can reference, in the declare section's
 // fixed order (alloc, the root pair, the io pair, the fail tail). M9b
@@ -107,6 +116,79 @@ var declareLines = []struct{ sym, line string }{
 	{"llvm.sadd.with.overflow.i64", "declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)"},
 	{"llvm.ssub.with.overflow.i64", "declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)"},
 	{"llvm.smul.with.overflow.i64", "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)"},
+	// M10b (design D4/D7): the virtual clock pair and the assertion
+	// pair, appended after every M9b row — a program that references
+	// none of them declares none, so every prior module's bytes ride
+	// unchanged.
+	{"__we_time_now", "declare i64 @__we_time_now()"},
+	{"__we_time_sleep", "declare void @__we_time_sleep(i64)"},
+	{"__we_assert_true", "declare void @__we_assert_true(i64)"},
+	{"__we_assert_false", "declare void @__we_assert_false(i64)"},
+	// M10b (design D5/D7, T5): the equality pair, the crossing face, and
+	// the driver's boundary quartet, after the D4 rows under the same
+	// discipline. The report takes the file and description as explicit
+	// (ptr, i64) pairs — the constant pool carries no NUL — while the
+	// failure reason arrives as a C string the await's Err payload holds.
+	{"__we_assert_eq_i64", "declare void @__we_assert_eq_i64(i64, i64)"},
+	{"__we_assert_eq_str", "declare void @__we_assert_eq_str(ptr, i64, ptr, i64)"},
+	{"__we_advance", "declare void @__we_advance(i64)"},
+	{"__we_test_begin", "declare void @__we_test_begin()"},
+	{"__we_test_end", "declare void @__we_test_end()"},
+	{"__we_test_report", "declare void @__we_test_report(ptr, i64, ptr, i64, i64, ptr)"},
+	{"__we_test_summary", "declare void @__we_test_summary()"},
+}
+
+// ProgModule is one module of a program emission (design D1): the module
+// key its qualified symbols carry, the ModuleID the header line names
+// (the single-file face's module string; the root's manifest name in
+// project builds), the parsed file itself, and — for a test module — the
+// source path the report lines name (the driver's file face; the key's
+// dots cannot invert to slashes without it, T5).
+type ProgModule struct {
+	Key  string
+	ID   string
+	Path string
+	File *ast.File
+}
+
+// ProgramMode selects the entry's owner: ModeBuild makes the root
+// module's main the entry; ModeTest downgrades every main to an ordinary
+// slotted fn and leaves __we_main to the synthesized driver (design D5).
+type ProgramMode int
+
+const (
+	ModeBuild ProgramMode = iota
+	ModeTest
+)
+
+// stdEntry is one std-library fn entry the emitter can call: the runtime
+// symbol the slot holds and whether it yields an i64. The argument
+// shapes are positional per entry (io takes the String pair, test takes
+// one Bool, sleep takes one Int64).
+type stdEntry struct {
+	sym string
+	ret bool // yields i64
+}
+
+// stdFnEntries is the closed std fn-entry table (design D3): entries are
+// slottable call faces — the check face accepts mocks on these literals,
+// so the run face must reach them through slots. assertEqual is not an
+// entry (it routes to the eq helpers directly, T5); std.concurrent has
+// no fn entries (its constructors and methods are primCtor faces, never
+// slottable).
+var stdFnEntries = map[string]map[string]stdEntry{
+	"io": {
+		"println": {sym: "__we_println"},
+		"print":   {sym: "__we_print"},
+	},
+	"test": {
+		"assertTrue":  {sym: "__we_assert_true"},
+		"assertFalse": {sym: "__we_assert_false"},
+	},
+	"time": {
+		"now":   {sym: "__we_time_now", ret: true},
+		"sleep": {sym: "__we_time_sleep"},
+	},
 }
 
 // A record field's emission shape: String is the double word (16 bytes,
@@ -135,9 +217,15 @@ type strConst struct {
 	data string
 }
 
+// strBinding is one String value face: either a literal still holding
+// its decoded bytes (a use interns them lazily — an unused let emits
+// nothing, the M8 discipline), or an operand pair a fn parameter or an
+// aggregate return produced ("%s0"/"%s1" — already live registers).
 type strBinding struct {
 	data   string
 	length int
+	dataOp string // non-empty: the operand form wins over data/length
+	lenOp  string
 }
 
 type gcBinding struct {
@@ -152,9 +240,10 @@ type gcBinding struct {
 // overflow-report side streams (callback bodies and panic reports live
 // outside the main instruction stream, in their own defines and globals).
 type emitter struct {
-	sums    map[string]map[string][]ast.TypeRef
-	records map[string]*ast.RecordDecl
-	order   []*ast.RecordDecl
+	sums    map[string]map[string][]ast.TypeRef // keyed "<module>.<sum>"
+	sumsOrd map[string][]string                 // sum key -> variant names, decl order
+	records map[string]*ast.RecordDecl          // keyed "<module>.<record>"
+	order   []recRef
 	mainRet ast.TypeRef
 
 	strEnv map[string]strBinding
@@ -186,6 +275,97 @@ type emitter struct {
 	chanDescs []string        // channel element-bitmap descriptor globals
 	envMaps   []string        // task environment-block bitmap globals
 	cdsc      int             // fresh channel-element descriptor count
+
+	// M10b program state (design D1/D3). Record and sum tables are
+	// module-keyed above; the fields below carry the module graph, the
+	// fn table, and the slot globals every We fn and every used std
+	// entry gets.
+	mode       ProgramMode
+	rootKey    string                       // the entry-owning module's key ("main")
+	rootID     string                       // the ModuleID header's name
+	modKeys    map[string]bool              // the program's module keys
+	modImports map[string]map[string]string // module key -> qualifier -> module key
+	modStd     map[string]map[string]string // module key -> qualifier -> std key
+	modConc    map[string]map[string]bool   // module key -> concurrent alias set
+	stdQuals   map[string]string            // the walked module's qualifier -> std key
+	fns        []fnDef                      // program fns, module order then source order
+	fnTable    map[string]*fnDef            // "<key>.<name>" -> def
+	fnsDone    []string                     // finished fn define texts
+	slots      []string                     // slot globals, materialization order
+	slotSeen   map[string]bool
+	curKey     string // the module whose body is being walked/emitted
+	curImports map[string]string
+
+	// M10b test state (design D5). tests collects the TestDecls pass one
+	// sees in test mode (module order, source order within); the tower
+	// emitter turns each into a test fn, its mocks, and a wrapper, and
+	// records the driver's step. testBody is set while a test fn's body
+	// is being emitted — the one body a valueless return may leave early
+	// from any depth (the checker's "(test)" context is valueless; a fn
+	// body keeps its one-tail-return discipline).
+	tests    []testRef
+	testBody bool
+	drives   []driveStep
+}
+
+// enterModule loads m's import faces into the working fields — call
+// faces resolve through the importing module's own names (an alias one
+// module binds never reaches another module's body).
+func (e *emitter) enterModule(key string) {
+	e.curKey = key
+	e.curImports = e.modImports[key]
+	e.stdQuals = e.modStd[key]
+	e.concAlias = e.modConc[key]
+}
+
+// resolveQual maps one call qualifier to a target module key: the
+// walked module's imports first (alias or last segment), then the
+// qualifier itself when it names a program module — the no-import form
+// of a cross-module call resolves by module key (the M8 erasure parity:
+// the io qualifier resolves by name without the import too).
+func (e *emitter) resolveQual(name string) string {
+	if k, ok := e.curImports[name]; ok && e.modKeys[k] {
+		return k
+	}
+	if e.modKeys[name] {
+		return name
+	}
+	return ""
+}
+
+// resolveStd maps one call qualifier to a std module key: the walked
+// module's std imports first, then the qualifier itself when it spells
+// a std module name (the M8 fallback that keeps the import-less io form
+// equal to the imported form).
+func (e *emitter) resolveStd(name string) string {
+	if k, ok := e.stdQuals[name]; ok {
+		return k
+	}
+	if _, ok := stdFnEntries[name]; ok {
+		return name
+	}
+	return ""
+}
+
+// recRef pairs a record declaration with its module-qualified name — the
+// symbol tables key by "<key>.<Name>" so same-named records across
+// modules cannot collide (one layout each, their own map descriptors).
+type recRef struct {
+	name string
+	decl *ast.RecordDecl
+}
+
+// fnDef is one program fn: its module key, its source name, and the
+// declaration. The define's symbol is "<key>.<name>". The ABI classifies
+// lazily (at the define or the first call site, whichever comes first —
+// call sites in the entry precede the defines) and caches here, in the
+// callee's own module's tables.
+type fnDef struct {
+	key   string
+	name  string
+	decl  *ast.FnDecl
+	abi   fnAbi
+	abiOK bool
 }
 
 // captureSet is one task block's environment face: the names the body
@@ -213,12 +393,15 @@ func (c *captureSet) slot(name string) (int, bool) {
 // bodyCtx is which straight-line set is being emitted — the boundary
 // word a stop reports depends on it (design D9): the same out-of-set
 // form names the task body inside a task and the main body elsewhere.
+// M10b adds the fn body as a fourth context (design D8) — the same M9b
+// statement set under its own anchor word.
 type bodyCtx int
 
 const (
 	ctxMain bodyCtx = iota
 	ctxTask
 	ctxCallback
+	ctxFn
 )
 
 func (e *emitter) bnd() *NotImplemented {
@@ -227,6 +410,8 @@ func (e *emitter) bnd() *NotImplemented {
 		return bndTask()
 	case ctxCallback:
 		return bndCallback()
+	case ctxFn:
+		return bndFn()
 	default:
 		return bndMain()
 	}
@@ -263,129 +448,286 @@ func (e *emitter) value() string  { v := "v" + strconv.Itoa(e.fresh); e.fresh++;
 func (e *emitter) use(sym string) { e.declUsed[sym] = true }
 
 // Emit renders f as textual LLVM IR under the module name (the manifest
-// name at the call site). A non-nil NotImplemented means f was type-clean
-// but outside the acceptance set; the IR string is then empty.
+// name at the call site) — the single-file face of program emission
+// (design D1): one root module keyed "main". A non-nil NotImplemented
+// means f was type-clean but outside the acceptance set; the IR string
+// is then empty.
 func Emit(f *ast.File, module string) (string, *NotImplemented) {
-	// Pass one: the module's sum table (the Err attribution), the record
-	// table (construction layouts), and main. Declarations that never
-	// reach a runtime value — sums, newtypes, interfaces, impls, effects
-	// — emit zero IR; a record's type and map lines appear only when a
-	// construction in main uses it.
-	sums := make(map[string]map[string][]ast.TypeRef)
-	records := make(map[string]*ast.RecordDecl)
-	var order []*ast.RecordDecl
-	var main *ast.FnDecl
-	concAlias := make(map[string]bool)
-	for _, it := range f.Items {
-		switch d := it.(type) {
-		case *ast.SumDecl:
-			variants := make(map[string][]ast.TypeRef, len(d.Variants))
-			for _, v := range d.Variants {
-				variants[v.Name] = v.Payload
-			}
-			sums[d.Name] = variants
-		case *ast.FnDecl:
-			if d.Name == "main" && main == nil {
-				main = d
+	return EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: module, File: f}})
+}
+
+// EmitProgram renders the whole program — dependency modules in graph
+// order, the root module last — as one module of IR (design D1). Pass one
+// walks every module's declarations: sums and records under module keys
+// (same-named declarations across modules cannot collide), the import
+// faces per module, and the fn table — every We fn; the root build main
+// alone is the entry instead. Declarations that never reach a runtime
+// value — newtypes, interfaces, impls, effects — emit zero IR; a
+// record's type and map lines appear only when a construction uses it.
+// Pass two emits bodies: the entry first (its value numbering starts at
+// v0, so every single-main module rides byte-identical through the
+// widening), then every fn define under its module-qualified symbol,
+// each with its slot global.
+func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) {
+	if len(mods) == 0 {
+		return "", bndMain() // defensive: an empty program
+	}
+	e := &emitter{
+		sums:       make(map[string]map[string][]ast.TypeRef),
+		sumsOrd:    make(map[string][]string),
+		records:    make(map[string]*ast.RecordDecl),
+		strEnv:     make(map[string]strBinding),
+		gcEnv:      make(map[string]gcBinding),
+		strPool:    make(map[string]string),
+		usedRecs:   make(map[string]bool),
+		declUsed:   make(map[string]bool),
+		ctx:        ctxMain,
+		scalars:    make(map[string]scalarSlot),
+		sums2:      make(map[string]sumSlot),
+		prims:      make(map[string]string),
+		modKeys:    make(map[string]bool),
+		modImports: make(map[string]map[string]string),
+		modStd:     make(map[string]map[string]string),
+		modConc:    make(map[string]map[string]bool),
+		fnTable:    make(map[string]*fnDef),
+		slotSeen:   make(map[string]bool),
+		mode:       mode,
+	}
+	root := mods[len(mods)-1]
+	e.rootKey, e.rootID = root.Key, root.ID
+
+	// Pass one: tables. Each module's import faces record under its own
+	// key — a body resolves call qualifiers through its module's names
+	// only (an alias one module binds never reaches another's body).
+	var entry *ast.FnDecl
+	for _, m := range mods {
+		e.modImports[m.Key] = make(map[string]string)
+		e.modStd[m.Key] = make(map[string]string)
+		e.modConc[m.Key] = make(map[string]bool)
+		e.modKeys[m.Key] = true
+		e.enterModule(m.Key)
+		for _, it := range m.File.Items {
+			switch d := it.(type) {
+			case *ast.SumDecl:
+				variants := make(map[string][]ast.TypeRef, len(d.Variants))
+				names := make([]string, len(d.Variants))
+				for i, v := range d.Variants {
+					variants[v.Name] = v.Payload
+					names[i] = v.Name
+				}
+				key := m.Key + "." + d.Name
+				e.sums[key] = variants
+				e.sumsOrd[key] = names
+			case *ast.FnDecl:
+				if len(d.TypeParams) != 0 {
+					return "", &NotImplemented{What: bndGenericFns}
+				}
+				if d.Name == "main" && m.Key == root.Key && mode == ModeBuild && entry == nil {
+					entry = d
+					continue
+				}
+				fd := &fnDef{key: m.Key, name: d.Name, decl: d}
+				e.fns = append(e.fns, *fd)
+				e.fnTable[m.Key+"."+d.Name] = fd
+			case *ast.TopLet:
+				return "", &NotImplemented{What: bndTopLets}
+			case *ast.RecordDecl:
+				key := m.Key + "." + d.Name
+				if _, seen := e.records[key]; !seen {
+					e.order = append(e.order, recRef{name: key, decl: d})
+				}
+				e.records[key] = d
+			case *ast.NewtypeDecl:
+				// Newtypes are zero-cost wrappers (chapter 8): the layout
+				// erases and their value expressions stop at the body
+				// boundary within the accepted shapes.
 				continue
-			}
-			return "", &NotImplemented{What: bndOtherFns}
-		case *ast.TopLet:
-			return "", &NotImplemented{What: bndTopLets}
-		case *ast.RecordDecl:
-			if _, seen := records[d.Name]; !seen {
-				order = append(order, d)
-			}
-			records[d.Name] = d
-		case *ast.NewtypeDecl:
-			// Newtypes are zero-cost wrappers (chapter 8): the layout
-			// erases and their value expressions stop at the body
-			// boundary within the accepted shapes.
-			continue
-		case *ast.InterfaceDecl, *ast.ImplDecl:
-			// Interfaces and impls erase (design D11 of the generics
-			// change): a declaration-level fact only — the member sets
-			// live in the type stage — so neither emits IR. An explicit
-			// case, not a silent fall-through: a future form arriving
-			// here must decide, never vanish.
-			continue
-		case *ast.EffectDecl:
-			// Effect declarations erase (M7 design D10): chapter 16 is a
-			// compile-time discipline — the check stage consumes every
-			// segment, and the tag names reach no IR and no runtime face.
-			continue
-		case *ast.TestDecl:
-			// Chapter 20's test block stops here (M10a design D9): the
-			// run tower — the harness, mock interception, the virtual
-			// clock — is M10b's. An explicit case, never a silent skip.
-			// MockDecl and advanceTime are unreachable below this stop by
-			// construction, so neither needs a walk case: a mock parses
-			// only at a test body's own depth (the parser's E1802 holds
-			// every other position), and advanceTime's legal positions
-			// lie inside the test extent (E1806 outside it) — both live
-			// strictly inside the TestDecl this walk stops at.
-			return "", &NotImplemented{What: bndTestModule}
-		case *ast.Import:
-			// Only the std segment erases (design D4): a std import item
-			// leaves no IR trace and enables the io calls; any other
-			// import means the emitted program would span modules — the
-			// honest stop is the other-functions row. The concurrent
-			// import's alias rides along for the constructor face.
-			if len(d.Path) > 0 && d.Path[0] == "std" {
-				if len(d.Path) == 2 && d.Path[1] == "concurrent" {
-					a := d.Alias
-					if a == "" {
-						a = d.Path[len(d.Path)-1]
+			case *ast.InterfaceDecl, *ast.ImplDecl:
+				// Interfaces and impls erase (design D11 of the generics
+				// change): a declaration-level fact only — the member sets
+				// live in the type stage — so neither emits IR. An
+				// explicit case, not a silent fall-through: a future form
+				// arriving here must decide, never vanish.
+				continue
+			case *ast.EffectDecl:
+				// Effect declarations erase (M7 design D10): chapter 16 is
+				// a compile-time discipline — the check stage consumes
+				// every segment, and the tag names reach no IR and no
+				// runtime face.
+				continue
+			case *ast.TestDecl:
+				// Test declarations are the run tower's own material
+				// (design D5): a test build collects them here (module
+				// order, source order within) and the tower emitter gives
+				// each a test fn, its mocks, and a wrapper; a build mode
+				// contributes its imports and fns and nothing else. An
+				// explicit case, never a silent skip. A mock parses only
+				// at a test body's own depth (the parser's E1802 holds
+				// every other position — it is a statement, not an item),
+				// and advanceTime's legal positions lie inside the test
+				// extent (E1806 outside it) — both live strictly inside
+				// this declaration, so neither needs a walk case of its
+				// own here.
+				if mode == ModeTest {
+					path := m.Path
+					if path == "" {
+						// The direct-EmitProgram face (unit tests): a test
+						// module's key is its path with dots, so the inverse
+						// renders the report's file string.
+						path = strings.ReplaceAll(m.Key, ".", "/") + ".we"
 					}
-					concAlias[a] = true
+					e.tests = append(e.tests, testRef{key: m.Key, path: path, decl: d})
+				}
+				continue
+			case *ast.Import:
+				// Only the std segment erases (design D4): a std import
+				// item leaves no IR trace and brings its call faces. A
+				// local import names a program module — its fns ride the
+				// fn table under the joined path key; the import itself
+				// emits nothing (the link is the call's qualifier, not a
+				// global).
+				if len(d.Path) > 0 && d.Path[0] == "std" {
+					if len(d.Path) == 2 {
+						a := d.Alias
+						if a == "" {
+							a = d.Path[1]
+						}
+						switch d.Path[1] {
+						case "concurrent":
+							e.concAlias[a] = true
+						case "io", "test", "time":
+							e.stdQuals[a] = d.Path[1]
+						default:
+							return "", e.bnd() // an unknown std module is the check stage's to reject; never silent
+						}
+					}
+					continue
+				}
+				a := d.Alias
+				if a == "" {
+					a = d.Path[len(d.Path)-1]
+				}
+				e.curImports[a] = strings.Join(d.Path, ".")
+			}
+		}
+	}
+
+	// Pass two: bodies. The entry emits first — value numbering starts at
+	// v0 there — then every fn define, each under the snapshot protocol
+	// the task thunks use (its own local environments and gc window).
+	if mode == ModeBuild {
+		if entry == nil {
+			// Defensive: Project-mode typecheck rejects a missing main (E1305).
+			return "", bndMain()
+		}
+		e.enterModule(root.Key)
+		e.mainRet = entry.Ret
+		items := entry.Body.Items
+		if len(items) == 0 {
+			return "", bndMain()
+		}
+		for i, st := range items {
+			if i == len(items)-1 {
+				ret, ok := st.(*ast.Return)
+				if !ok || !ret.HasValue {
+					return "", bndMain()
+				}
+				if ni := e.emitTail(ret.Value); ni != nil {
+					return "", ni
 				}
 				continue
 			}
-			return "", &NotImplemented{What: bndOtherFns}
-		}
-	}
-	if main == nil {
-		// Defensive: Project-mode typecheck rejects a missing main (E1305).
-		return "", bndMain()
-	}
-
-	e := &emitter{
-		sums: sums, records: records, order: order, mainRet: main.Ret,
-		strEnv:    make(map[string]strBinding),
-		gcEnv:     make(map[string]gcBinding),
-		strPool:   make(map[string]string),
-		usedRecs:  make(map[string]bool),
-		declUsed:  make(map[string]bool),
-		ctx:       ctxMain,
-		scalars:   make(map[string]scalarSlot),
-		sums2:     make(map[string]sumSlot),
-		prims:     make(map[string]string),
-		concAlias: concAlias,
-	}
-
-	// Pass two: the statement sequence. The single return is the tail;
-	// a return anywhere before the end is a control-flow shape outside
-	// the straight-line set.
-	items := main.Body.Items
-	if len(items) == 0 {
-		return "", bndMain()
-	}
-	for i, st := range items {
-		if i == len(items)-1 {
-			ret, ok := st.(*ast.Return)
-			if !ok || !ret.HasValue {
-				return "", bndMain()
-			}
-			if ni := e.emitTail(ret.Value); ni != nil {
+			if ni := e.emitStmt(st); ni != nil {
 				return "", ni
 			}
-			continue
 		}
-		if ni := e.emitStmt(st); ni != nil {
+	}
+	for i := range e.fns {
+		if ni := e.emitFnDefine(&e.fns[i]); ni != nil {
 			return "", ni
 		}
 	}
-	return e.render(module), nil
+	if mode == ModeTest {
+		// The test tower (design D5): the test and mock defines ride
+		// after the program fns, then the driver's steps land in the
+		// body render emits as __we_main.
+		if ni := e.emitTestTower(); ni != nil {
+			return "", ni
+		}
+	}
+	return e.render(e.rootID), nil
+}
+
+// testRef is one collected TestDecl: its module key (the qualified
+// symbols' prefix), the source path the report lines name, and the
+// declaration itself.
+type testRef struct {
+	key  string
+	path string
+	decl *ast.TestDecl
+}
+
+// mockInstall is one mock the driver installs for a test: the slot it
+// rides, the mock fn's symbol, and the real body's symbol the restore
+// stores back.
+type mockInstall struct {
+	slot    string
+	mock    string
+	restore string
+}
+
+// driveStep is one test's slice of the synthesized driver: the report's
+// file and description strings (raw bytes — the driver interns them at
+// emission), the wrapper the spawn names, and the mock installs in
+// source order.
+type driveStep struct {
+	file  string
+	desc  string
+	wrap  string
+	mocks []mockInstall
+}
+
+// emitTestTower emits every collected test (design D5): per test module,
+// source order — a test fn under "<key>.test.<n>", its mocks under
+// "<key>.mock.<n>" (a per-module counter across the module's tests), and
+// an internal wrapper "<key>.wrap.<n>" carrying the spawn protocol; the
+// driver's steps record here, and emitDriver renders them into the body
+// the entry carries.
+func (e *emitter) emitTestTower() *NotImplemented {
+	testN := map[string]int{}
+	mockN := map[string]int{}
+	for i := range e.tests {
+		tr := &e.tests[i]
+		n := testN[tr.key]
+		testN[tr.key] = n + 1
+		e.enterModule(tr.key)
+		step := driveStep{file: tr.path, desc: tr.decl.Desc, wrap: fmt.Sprintf("@%s.wrap.%d", tr.key, n)}
+		var mocks []*ast.MockDecl
+		for _, st := range tr.decl.Body.Items {
+			if md, ok := st.(*ast.MockDecl); ok {
+				mocks = append(mocks, md)
+			}
+		}
+		for _, md := range mocks {
+			m := mockN[tr.key]
+			mockN[tr.key] = m + 1
+			inst, ni := e.emitMockDefine(md, tr.key, m)
+			if ni != nil {
+				return ni
+			}
+			step.mocks = append(step.mocks, inst)
+		}
+		if ni := e.emitTestDefine(tr.decl, tr.key, n); ni != nil {
+			return ni
+		}
+		e.thunks = append(e.thunks, fmt.Sprintf(
+			"define internal i64 @%s.wrap.%d(ptr %%env) {\nentry:\n  call void @%s.test.%d()\n  ret i64 0\n}\n",
+			tr.key, n, tr.key, n))
+		e.drives = append(e.drives, step)
+	}
+	e.enterModule(e.rootKey)
+	e.emitDriver()
+	return nil
 }
 
 // emitStmt emits one statement of the accepted sequence. The M8 rows ride
@@ -494,12 +836,12 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 		}
 		return e.bnd()
 	case *ast.Construct:
-		reg, ni := e.emitConstruct(init)
+		reg, rkey, ni := e.emitConstruct(init)
 		if ni != nil {
 			return ni
 		}
 		if s.Name != "_" {
-			e.gcEnv[s.Name] = gcBinding{rec: init.Name, reg: reg}
+			e.gcEnv[s.Name] = gcBinding{rec: rkey, reg: reg}
 		}
 		return nil
 	case *ast.Binary:
@@ -575,6 +917,16 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 			e.sums2[name] = res.sum
 		}
 		return nil
+	case ckStr:
+		if name != "_" {
+			e.strEnv[name] = res.strBind
+		}
+		return nil
+	case ckGc:
+		if name != "_" {
+			e.gcEnv[name] = gcBinding{rec: res.recKey, reg: res.gcReg}
+		}
+		return nil
 	}
 	return e.bnd()
 }
@@ -608,21 +960,23 @@ func (e *emitter) emitExprStmt(x ast.Expr) *NotImplemented {
 	}
 }
 
-// emitIoCall emits `qual.println(arg)` / `qual.print(arg)`. The qualifier
-// is any name — resolution happened at the type stage; a qualifier that
-// the body binds locally is a member call on that value instead (a
-// record field call is outside the set).
+// emitIoCall emits `qual.println(arg)` / `qual.print(arg)` with a String
+// argument — through the io slot (design D3: the check face accepts mocks
+// on these literals, so the run face reaches them indirectly). The
+// qualifier is any name — resolution happened at the type stage; a
+// qualifier that the body binds locally is a member call on that value
+// instead (a record field call is outside the set).
 func (e *emitter) emitIoCall(call *ast.Call) *NotImplemented {
 	fn, ok := call.Fn.(*ast.Member)
 	if !ok {
-		return bndMain()
+		return e.bnd()
 	}
 	qual, ok := fn.Recv.(*ast.Ident)
 	if !ok {
-		return bndMain()
+		return e.bnd()
 	}
 	if e.isLocalName(qual.Name) {
-		return bndMain()
+		return e.bnd()
 	}
 	var sym string
 	switch fn.Name {
@@ -631,17 +985,20 @@ func (e *emitter) emitIoCall(call *ast.Call) *NotImplemented {
 	case "print":
 		sym = "__we_print"
 	default:
-		return bndMain()
+		return e.bnd()
 	}
 	if len(call.Args) != 1 {
-		return bndMain()
+		return e.bnd()
 	}
 	p, l, ni := e.emitStringExpr(call.Args[0])
 	if ni != nil {
 		return ni
 	}
+	slot := e.slotFor("io."+fn.Name, "@"+sym)
 	e.use(sym)
-	e.inst(fmt.Sprintf("call void @%s(ptr %s, i64 %s)", sym, p, l))
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", v, slot))
+	e.inst(fmt.Sprintf("call void %%%s(ptr %s, i64 %s)", v, p, l))
 	return nil
 }
 
@@ -656,13 +1013,18 @@ const (
 	ckI64                  // a scalar value in the i64 domain (or a double)
 	ckPrim                 // a primitive pointer (gc-rooted at construction)
 	ckSum                  // an Option/Result two-slot value
+	ckStr                  // a String double word (M10b fn returns)
+	ckGc                   // a record pointer (M10b fn returns and ctors)
 )
 
 type callResult struct {
 	kind    callKind
 	i64     string // the ckI64/ckPrim operand
 	isFloat bool
-	sum     sumSlot // the ckSum slots
+	sum     sumSlot    // the ckSum slots
+	strBind strBinding // the ckStr operand pair
+	gcReg   string     // the ckGc pointer operand
+	recKey  string     // the ckGc record's module-qualified key
 }
 
 // isLocalName reports whether name is bound in the current body — locals
@@ -688,7 +1050,11 @@ func (e *emitter) isLocalName(name string) bool {
 }
 
 // numImmediate renders a numeric literal as an IR operand: ints and bools
-// as i64 immediates, floats as the exact double hex form.
+// as i64 immediates, floats as the exact double hex bits — the bare hex
+// form, the consumer spells the type (every use site knows the domain
+// from the isFloat flag; a prefixed operand here would double the type
+// spelling there. Found while pinning the M10b float call face — no
+// prior golden reached a float path).
 func (e *emitter) numImmediate(l *ast.Literal) (string, bool, bool) {
 	if l.Kind == "float" {
 		text := l.Text
@@ -702,7 +1068,7 @@ func (e *emitter) numImmediate(l *ast.Literal) (string, bool, bool) {
 		if err != nil {
 			return "", false, false
 		}
-		return fmt.Sprintf("double 0x%016X", math.Float64bits(f)), true, true
+		return fmt.Sprintf("0x%016X", math.Float64bits(f)), true, true
 	}
 	imm, ok := scalarImmediate(l)
 	return imm, false, ok
@@ -958,7 +1324,7 @@ func (e *emitter) emitPrimCtor(spec primCtorSpec, args []ast.Expr, typ ast.TypeR
 			return "", e.bnd()
 		}
 		desc := "null"
-		if ref := chanElemRecord(typ, e.records); ref != "" {
+		if ref := e.chanElemRecord(typ); ref != "" {
 			e.usedRecs[ref] = true
 			// The element bitmap: one traced slot per element word — a
 			// gc-record element rides the buffer as a pointer, so the
@@ -979,9 +1345,9 @@ func (e *emitter) emitPrimCtor(spec primCtorSpec, args []ast.Expr, typ ast.TypeR
 }
 
 // chanElemRecord resolves a channel annotation `alias.Channel<T>` to the
-// gc record T names, or "" when the element domain is not a traced
-// record reference.
-func chanElemRecord(typ ast.TypeRef, records map[string]*ast.RecordDecl) string {
+// gc record T names in the walked module (its module-qualified key), or
+// "" when the element domain is not a traced record reference.
+func (e *emitter) chanElemRecord(typ ast.TypeRef) string {
 	n, ok := typ.(*ast.NamedType)
 	if !ok || n.Name != "Channel" || len(n.Args) != 1 {
 		return ""
@@ -990,11 +1356,11 @@ func chanElemRecord(typ ast.TypeRef, records map[string]*ast.RecordDecl) string 
 	if !ok || elem.Qual != "" || len(elem.Args) != 0 {
 		return ""
 	}
-	r, ok := records[elem.Name]
+	r, ok := e.records[e.curKey+"."+elem.Name]
 	if !ok || r.Cat != "gc" || len(r.TypeParams) != 0 {
 		return ""
 	}
-	return elem.Name
+	return e.curKey + "." + elem.Name
 }
 
 // argIsScalar is the static probe deciding println's argument domain
@@ -1015,11 +1381,14 @@ func (e *emitter) argIsScalar(x ast.Expr) bool {
 }
 
 // emitCall dispatches one call: the bare panic and cancel-signal forms,
-// the concurrent constructors (alias-qualified; a channel's element
-// domain rides the binding's annotation), the primitive methods, and the
-// io pair (scalar argument through the i64 renderer, String argument
-// through the M8 path). typ is the enclosing let's annotation, nil at
-// statement position.
+// the bare record constructors and program fns of the walked module
+// (M10b: every fn call site loads the callee's slot — design D3), the
+// concurrent constructors (alias-qualified; a channel's element domain
+// rides the binding's annotation), the primitive methods, and the std
+// fn entries — the io pair (scalar argument through the direct i64
+// renderer, the design's exception; String argument through the slot),
+// the test assertions and the time pair through their slots. typ is the
+// enclosing let's annotation, nil at statement position.
 func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImplemented) {
 	if id, ok := call.Fn.(*ast.Ident); ok {
 		switch id.Name {
@@ -1028,6 +1397,37 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 				return callResult{}, e.bnd()
 			}
 			return e.emitPanic(call.Args[0])
+		case "todo":
+			// The panic family's other message face (chapter 14): the
+			// same literal discipline, the same task-fail tail.
+			if len(call.Args) != 1 {
+				return callResult{}, e.bnd()
+			}
+			return e.emitPanic(call.Args[0])
+		case "assert":
+			// The prelude's two-argument face (chapter 14's signature,
+			// design D7): the condition runs, the failure tail rides the
+			// task-fail ABI with the message.
+			if len(call.Args) != 2 {
+				return callResult{}, e.bnd()
+			}
+			return e.emitAssert(call.Args[0], call.Args[1])
+		case "advanceTime":
+			// The clock control's runtime face (chapter 20, design D4) —
+			// a language-level name, no slot (design D3).
+			if len(call.Args) != 1 {
+				return callResult{}, e.bnd()
+			}
+			op, isF, ni := e.emitNumExpr(call.Args[0])
+			if ni != nil {
+				return callResult{}, ni
+			}
+			if isF {
+				return callResult{}, e.bnd()
+			}
+			e.use("__we_advance")
+			e.inst(fmt.Sprintf("call void @__we_advance(i64 %s)", op))
+			return callResult{kind: ckVoid}, nil
 		case "currentCancelSignal":
 			if len(call.Args) != 0 {
 				return callResult{}, e.bnd()
@@ -1037,6 +1437,17 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			e.inst(fmt.Sprintf("%%%s = call ptr @__we_sig_current()", v))
 			return callResult{kind: ckPrim, i64: "%" + v}, nil
 		}
+		// The bare record constructor: the positional face (the check
+		// stage accepts both); a parsed program constructs through the
+		// named-field form. Both land in the same protocol.
+		if _, ok := e.records[e.curKey+"."+id.Name]; ok {
+			return e.emitCtorCall(id.Name, call.Args)
+		}
+		// A program fn of the walked module, through its slot.
+		if fd, ok := e.fnTable[e.curKey+"."+id.Name]; ok {
+			return e.emitFnCall(fd, call.Args)
+		}
+		return callResult{}, e.bnd()
 	}
 	fn, ok := call.Fn.(*ast.Member)
 	if !ok {
@@ -1066,29 +1477,117 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			return e.emitPrimCall("%"+v, fn.Name, call.Args)
 		}
 	}
-	if recv, ok := fn.Recv.(*ast.Ident); ok && !e.isLocalName(recv.Name) && (fn.Name == "println" || fn.Name == "print") {
-		if len(call.Args) == 1 && e.argIsScalar(call.Args[0]) {
-			op, isF, ni := e.emitNumExpr(call.Args[0])
-			if ni == nil && !isF {
-				sym := "__we_println_i64"
-				if fn.Name == "print" {
-					sym = "__we_print_i64"
+	if recv, ok := fn.Recv.(*ast.Ident); ok && !e.isLocalName(recv.Name) {
+		// A program module's fn: the qualifier resolves through the walked
+		// module's imports first, then by the module's own key (the
+		// no-import form of a cross-module call resolves by key).
+		if k := e.resolveQual(recv.Name); k != "" {
+			fd, ok := e.fnTable[k+"."+fn.Name]
+			if !ok {
+				return callResult{}, e.bnd()
+			}
+			return e.emitFnCall(fd, call.Args)
+		}
+		// A std fn entry — slottable call faces, one row per entry.
+		if sk := e.resolveStd(recv.Name); sk != "" {
+			// assertEqual is a call face, not an entry (M10a's ruling, D3):
+			// the two comparanda route straight to the equality pair.
+			if sk == "test" && fn.Name == "assertEqual" {
+				return e.emitAssertEqual(call.Args)
+			}
+			if ent, ok := stdFnEntries[sk][fn.Name]; ok {
+				if sk == "io" {
+					// The scalar shortcut stays a direct call: the i64
+					// pair has no String bytes and no mock face (design
+					// D3's exception).
+					if len(call.Args) == 1 && e.argIsScalar(call.Args[0]) {
+						op, isF, ni := e.emitNumExpr(call.Args[0])
+						if ni != nil {
+							return callResult{}, ni
+						}
+						if !isF {
+							sym := "__we_println_i64"
+							if fn.Name == "print" {
+								sym = "__we_print_i64"
+							}
+							e.use(sym)
+							e.inst(fmt.Sprintf("call void @%s(i64 %s)", sym, op))
+							return callResult{kind: ckVoid}, nil
+						}
+					}
+					ni := e.emitIoCall(call)
+					if ni != nil {
+						return callResult{}, ni
+					}
+					return callResult{kind: ckIo}, nil
 				}
-				e.use(sym)
-				e.inst(fmt.Sprintf("call void @%s(i64 %s)", sym, op))
-				return callResult{kind: ckVoid}, nil
-			}
-			if ni != nil {
-				return callResult{}, ni
+				return e.emitStdEntryCall(sk+"."+fn.Name, ent, call.Args)
 			}
 		}
-		ni := e.emitIoCall(call)
-		if ni != nil {
-			return callResult{}, ni
-		}
-		return callResult{kind: ckIo}, nil
 	}
 	return callResult{}, e.bnd()
+}
+
+// emitStdEntryCall emits one test/time entry call through its slot: the
+// argument shapes are positional per entry (Bool rides the i64 domain,
+// the sleep duration one Int64), and now yields its i64.
+func (e *emitter) emitStdEntryCall(name string, ent stdEntry, args []ast.Expr) (callResult, *NotImplemented) {
+	slot := e.slotFor(name, "@"+ent.sym)
+	e.use(ent.sym)
+	fp := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
+	if ent.ret {
+		if len(args) != 0 {
+			return callResult{}, e.bnd()
+		}
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 %%%s()", v, fp))
+		return callResult{kind: ckI64, i64: "%" + v}, nil
+	}
+	if len(args) != 1 {
+		return callResult{}, e.bnd()
+	}
+	op, isF, ni := e.emitNumExpr(args[0])
+	if ni != nil {
+		return callResult{}, ni
+	}
+	if isF {
+		return callResult{}, e.bnd()
+	}
+	e.inst(fmt.Sprintf("call void %%%s(i64 %s)", fp, op))
+	return callResult{kind: ckVoid}, nil
+}
+
+// emitCtorCall is the bare record-constructor face: positional arguments
+// map onto the declaration's field order, then the named-field protocol
+// takes over (one construction path, two source shapes).
+func (e *emitter) emitCtorCall(name string, args []ast.Expr) (callResult, *NotImplemented) {
+	rec, ok := e.records[e.curKey+"."+name]
+	if !ok || len(rec.TypeParams) != 0 || len(args) != len(rec.Fields) {
+		return callResult{}, e.bnd()
+	}
+	fs := make([]ast.FieldInit, len(args))
+	for i, fd := range rec.Fields {
+		fs[i] = ast.FieldInit{Name: fd.Name, Value: args[i]}
+	}
+	reg, rkey, ni := e.emitConstruct(&ast.Construct{Name: name, Fields: fs})
+	if ni != nil {
+		return callResult{}, ni
+	}
+	return callResult{kind: ckGc, gcReg: reg, recKey: rkey}, nil
+}
+
+// slotFor materializes one slot global at its first call site (mirroring
+// the constant pool's first-appearance naming): every used fn face gets
+// exactly one slot, in first-call order. The root build main never
+// passes through here — the entry is not mockable (design D3's
+// exception).
+func (e *emitter) slotFor(name, target string) string {
+	if !e.slotSeen[name] {
+		e.slotSeen[name] = true
+		e.slots = append(e.slots, "@slot."+name+" = global ptr "+target)
+	}
+	return "@slot." + name
 }
 
 // emitSumCall3 is trySend's value-argument shape: the discriminant is
@@ -1238,7 +1737,7 @@ func (e *emitter) emitValOrRef(x ast.Expr) (string, *NotImplemented) {
 		return op, nil
 	}
 	if c, ok := x.(*ast.Construct); ok {
-		reg, ni := e.emitConstruct(c)
+		reg, _, ni := e.emitConstruct(c)
 		if ni != nil {
 			return "", ni
 		}
@@ -1314,13 +1813,37 @@ func (e *emitter) condI64(x ast.Expr) (string, *NotImplemented) {
 // no boundary of its own — the M9b set is flat).
 func (e *emitter) emitBlockStmts(items []ast.Stmt) *NotImplemented {
 	for _, st := range items {
-		if _, ok := st.(*ast.Return); ok {
-			return e.bnd() // returns sit at the body tail only
+		if r, ok := st.(*ast.Return); ok {
+			// Returns sit at the body tail only — the one widening is the
+			// test context's valueless early exit (a failed test's source
+			// discharges its scope handles through a return the runtime
+			// never reaches past the task-fail tail).
+			if !e.testBody {
+				return e.bnd()
+			}
+			if ni := e.emitTestReturn(r); ni != nil {
+				return ni
+			}
+			continue
 		}
 		if ni := e.emitStmt(st); ni != nil {
 			return ni
 		}
 	}
+	return nil
+}
+
+// emitTestReturn emits the test context's valueless early exit: ret void
+// plus the never-reached continuation label that keeps the block
+// structure well-formed for whatever lexically follows.
+func (e *emitter) emitTestReturn(r *ast.Return) *NotImplemented {
+	if r.HasValue {
+		return e.bnd()
+	}
+	e.inst("ret void")
+	n := e.blocks
+	e.blocks++
+	e.label(fmt.Sprintf("tr%d", n))
 	return nil
 }
 
@@ -1501,12 +2024,159 @@ func (e *emitter) emitPanic(x ast.Expr) (callResult, *NotImplemented) {
 	return callResult{kind: ckVoid}, nil
 }
 
+// emitAssert emits the prelude's two-argument assert (design D7): the
+// condition under the i1 branch, the failure tail riding the task-fail
+// ABI with the message literal (the same NUL-terminated constant face
+// emitPanic interns), the passing face simply continuing. The message
+// keeps the literal discipline (a non-literal stops at the body word).
+func (e *emitter) emitAssert(cond, msg ast.Expr) (callResult, *NotImplemented) {
+	lit, ok := msg.(*ast.Literal)
+	if !ok || lit.Kind != "string" {
+		return callResult{}, e.bnd()
+	}
+	data, ok := decodeStringLiteral(lit.Text)
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	c, ni := e.condI64(cond)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	n := e.blocks
+	e.blocks++
+	pass := fmt.Sprintf("asp%d", n)
+	fail := fmt.Sprintf("asf%d", n)
+	e.inst(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", c, pass, fail))
+	e.label(fail)
+	e.use("__we_task_fail")
+	cn := fmt.Sprintf("@.p%d", len(e.panics))
+	e.panics = append(e.panics, fmt.Sprintf("%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"", cn, len(data)+1, irEscape(data)))
+	e.inst(fmt.Sprintf("call void @__we_task_fail(ptr %s)", cn))
+	e.inst("unreachable")
+	e.label(pass)
+	return callResult{kind: ckVoid}, nil
+}
+
+// emitAssertEqual routes the two comparanda to the equality pair (design
+// D7): the integer widths and Bool ride the i64 domain, String pairs the
+// four-word face. The family is decided by shape before any emission —
+// a trial emission could leave a call twice in the stream. The domain
+// itself is the check stage's face (bndAssertEqDomain); a shape outside
+// both families here is defensive only.
+func (e *emitter) emitAssertEqual(args []ast.Expr) (callResult, *NotImplemented) {
+	if len(args) != 2 {
+		return callResult{}, e.bnd()
+	}
+	strFace := func(x ast.Expr) bool {
+		switch v := x.(type) {
+		case *ast.Literal:
+			return v.Kind == "string"
+		case *ast.Ident:
+			_, ok := e.strEnv[v.Name]
+			return ok
+		case *ast.Member:
+			return true // the String field-chain face
+		}
+		return false
+	}
+	// Records and sums sit beyond the comparand domain: their equality
+	// is the Eq-generic face, the standard library's own widening.
+	domainFace := func(x ast.Expr) bool {
+		switch v := x.(type) {
+		case *ast.Ident:
+			_, g := e.gcEnv[v.Name]
+			_, s := e.sums2[v.Name]
+			return g || s
+		case *ast.Construct:
+			return true
+		}
+		return false
+	}
+	if domainFace(args[0]) || domainFace(args[1]) {
+		return callResult{}, bndEqDomain()
+	}
+	// A call comparand contributes its own result's face: an
+	// Int64-returning call rides the numeric route, a String-returning
+	// one the string route. The M9b expression emitters take no direct
+	// calls (a call enters through a let binding); the comparand
+	// position is the one widened face — the goldens pass calls straight
+	// in — so the resolution lives here, not in those sets.
+	var ops [2]string       // a numeric call's operand
+	var strs [2]*strBinding // a string call's operand pair
+	isCall, isStr := [2]bool{}, [2]bool{}
+	for i, x := range args {
+		c, ok := x.(*ast.Call)
+		if !ok {
+			isStr[i] = strFace(x)
+			continue
+		}
+		res, ni := e.emitCall(c, nil)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		isCall[i] = true
+		switch res.kind {
+		case ckI64:
+			if res.isFloat {
+				return callResult{}, bndEqDomain()
+			}
+			ops[i] = res.i64
+		case ckStr:
+			b := res.strBind
+			strs[i] = &b
+			isStr[i] = true
+		default:
+			return callResult{}, bndEqDomain()
+		}
+	}
+	if isStr[0] || isStr[1] {
+		var sp, sl [2]string
+		for i, x := range args {
+			if isCall[i] {
+				sp[i], sl[i] = strs[i].dataOp, strs[i].lenOp
+				continue
+			}
+			p, l, ni := e.emitStringExpr(x)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			sp[i], sl[i] = p, l
+		}
+		e.use("__we_assert_eq_str")
+		e.inst(fmt.Sprintf("call void @__we_assert_eq_str(ptr %s, i64 %s, ptr %s, i64 %s)", sp[0], sl[0], sp[1], sl[1]))
+		return callResult{kind: ckVoid}, nil
+	}
+	var np [2]string
+	for i, x := range args {
+		if isCall[i] {
+			np[i] = ops[i]
+			continue
+		}
+		op, isF, ni := e.emitNumExpr(x)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		if isF {
+			return callResult{}, bndEqDomain()
+		}
+		np[i] = op
+	}
+	e.use("__we_assert_eq_i64")
+	e.inst(fmt.Sprintf("call void @__we_assert_eq_i64(i64 %s, i64 %s)", np[0], np[1]))
+	return callResult{kind: ckVoid}, nil
+}
+
 // emitQuestion emits `expr?`: the sum's Err branch runs the error tail —
 // a panic-message payload (an await's TaskPanic) hands the C string to
 // the task-fail ABI, a static report line (a timeout scope) writes the
 // M8 fail constant — and the Ok branch continues with the payload as
-// the expression's value.
+// the expression's value. The two tails are the entry's faces (the
+// scheduler settles the report and the exit); inside a fn a `?` stops —
+// a fn returns its Result, the B-track widens the propagation.
 func (e *emitter) emitQuestion(p *ast.Prop) (callResult, *NotImplemented) {
+	if e.ctx == ctxFn {
+		return callResult{}, bndFn()
+	}
 	res, ni := e.emitSumSource(p.X)
 	if ni != nil {
 		return callResult{}, ni
@@ -1826,8 +2496,17 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 		}
 	}
 	for _, st := range items {
-		if _, ok := st.(*ast.Return); ok {
-			return callResult{}, e.bnd()
+		if r, ok := st.(*ast.Return); ok {
+			// A nested block's Return discipline: fn bodies take returns
+			// at the tail only; the test context's valueless early exit
+			// rides through the scope the same way.
+			if !e.testBody {
+				return callResult{}, e.bnd()
+			}
+			if ni := e.emitTestReturn(r); ni != nil {
+				return callResult{}, ni
+			}
+			continue
 		}
 		if ni := e.emitStmt(st); ni != nil {
 			return callResult{}, ni
@@ -1952,29 +2631,33 @@ func (e *emitter) sourcePtr(name string) string {
 
 // emitStringExpr emits one String operand — the (ptr, len) pair — from a
 // plain literal, a let-bound name, or a field chain ending at a String
-// field. The pair may be a constant global plus immediate, or two loaded
-// registers.
+// field. The pair may be a constant global plus immediate, two loaded
+// registers, or — for a name an fn parameter or an aggregate return
+// produced — the operand pair already live in registers.
 func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 	switch v := x.(type) {
 	case *ast.Literal:
 		if v.Kind != "string" {
-			return "", "", bndMain()
+			return "", "", e.bnd()
 		}
 		data, ok := decodeStringLiteral(v.Text)
 		if !ok {
-			return "", "", bndMain()
+			return "", "", e.bnd()
 		}
 		return e.intern(data), strconv.Itoa(len(data)), nil
 	case *ast.Ident:
 		b, ok := e.strEnv[v.Name]
 		if !ok {
-			return "", "", bndMain()
+			return "", "", e.bnd()
+		}
+		if b.dataOp != "" {
+			return b.dataOp, b.lenOp, nil
 		}
 		return e.intern(b.data), strconv.Itoa(b.length), nil
 	case *ast.Member:
 		return e.emitFieldChainString(v)
 	default:
-		return "", "", bndMain()
+		return "", "", e.bnd()
 	}
 }
 
@@ -1990,39 +2673,42 @@ func (e *emitter) emitFieldChainString(m *ast.Member) (string, string, *NotImple
 		case *ast.Ident:
 			g, ok := e.gcEnv[r.Name]
 			if !ok {
-				return "", "", bndMain()
+				return "", "", e.bnd()
 			}
 			return e.walkChain(g.reg, g.rec, hops)
 		case *ast.Member:
 			x = r
 		default:
-			return "", "", bndMain()
+			return "", "", e.bnd()
 		}
 	}
 }
 
-// walkChain emits the loads for hops over base (a record pointer of type
-// recName); the last hop must land on a String field.
-func (e *emitter) walkChain(base, recName string, hops []string) (string, string, *NotImplemented) {
+// walkChain emits the loads for hops over base (a record pointer of the
+// type recKey names); the last hop must land on a String field.
+func (e *emitter) walkChain(base, recKey string, hops []string) (string, string, *NotImplemented) {
 	for _, h := range hops[:len(hops)-1] {
-		slot, ok := e.fieldSlotOf(recName, h)
+		slot, ok := e.fieldSlotOf(recKey, h)
 		if !ok || slot.kind != fkRef {
-			return "", "", bndMain()
+			return "", "", e.bnd()
 		}
 		base = e.gepLoadPtr(base, slot.off)
-		recName = slot.typ
+		recKey = slot.typ
 	}
-	slot, ok := e.fieldSlotOf(recName, hops[len(hops)-1])
+	slot, ok := e.fieldSlotOf(recKey, hops[len(hops)-1])
 	if !ok || slot.kind != fkStr {
-		return "", "", bndMain()
+		return "", "", e.bnd()
 	}
 	return e.gepLoadPtr(base, slot.off), e.gepLoadI64(base, slot.off+8), nil
 }
 
 // layout computes a record's field slots: offsets from 16 (the frozen
 // header {map@0, size@8} of design D6), sizes, and the reference bitmap
-// derived kinds. A field outside the M8 shape fails the whole emission.
-func (e *emitter) layout(rec *ast.RecordDecl) ([]fieldSlot, int, bool) {
+// derived kinds. key is the module the record declares in — a reference
+// field resolves in the record's own module, so fkRef targets carry
+// key+"."+FieldName. A field outside the M8 shape fails the whole
+// emission.
+func (e *emitter) layout(key string, rec *ast.RecordDecl) ([]fieldSlot, int, bool) {
 	slots := make([]fieldSlot, len(rec.Fields))
 	off := 16
 	for i, fd := range rec.Fields {
@@ -2039,12 +2725,12 @@ func (e *emitter) layout(rec *ast.RecordDecl) ([]fieldSlot, int, bool) {
 			slots[i].kind = fkScalar
 			off += 8
 		default:
-			r, ok := e.records[n.Name]
+			r, ok := e.records[key+"."+n.Name]
 			if !ok || r.Cat != "gc" || len(r.TypeParams) != 0 {
 				return nil, 0, false
 			}
 			slots[i].kind = fkRef
-			slots[i].typ = n.Name
+			slots[i].typ = key + "." + n.Name
 			slots[i].isRef = true
 			off += 8
 		}
@@ -2052,13 +2738,25 @@ func (e *emitter) layout(rec *ast.RecordDecl) ([]fieldSlot, int, bool) {
 	return slots, off, true
 }
 
-// fieldSlotOf finds one field's slot by name.
-func (e *emitter) fieldSlotOf(recName, field string) (fieldSlot, bool) {
-	rec, ok := e.records[recName]
+// recModKey splits a record's module-qualified key into the module key it
+// declares in. Record names are identifiers (no '.'), so the last
+// separator divides — a module key of a nested path may carry earlier
+// separators of its own.
+func recModKey(recKey string) string {
+	if i := strings.LastIndex(recKey, "."); i >= 0 {
+		return recKey[:i]
+	}
+	return recKey
+}
+
+// fieldSlotOf finds one field's slot by name; recKey is the record's
+// module-qualified name.
+func (e *emitter) fieldSlotOf(recKey, field string) (fieldSlot, bool) {
+	rec, ok := e.records[recKey]
 	if !ok {
 		return fieldSlot{}, false
 	}
-	slots, _, ok := e.layout(rec)
+	slots, _, ok := e.layout(recModKey(recKey), rec)
 	if !ok {
 		return fieldSlot{}, false
 	}
@@ -2073,23 +2771,35 @@ func (e *emitter) fieldSlotOf(recName, field string) (fieldSlot, bool) {
 // emitConstruct emits the gc construction protocol of design D4: alloc,
 // map store, root push — the object is rooted before any field value
 // evaluates, so a nested allocation never races a collection with its
-// parent unrooted — then the field stores in source order.
-func (e *emitter) emitConstruct(c *ast.Construct) (string, *NotImplemented) {
-	rec, ok := e.records[c.Name]
-	if !ok || rec.Cat != "gc" || len(rec.TypeParams) != 0 {
-		return "", bndMain()
+// parent unrooted — then the field stores in source order. The record
+// resolves in the walked module (a qualified head resolves its module
+// first — cross-module records construct the same way, each under its
+// own module's symbols); the return pairs the pointer with the record's
+// module-qualified key, the name every later field walk keys by.
+func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplemented) {
+	key := e.curKey
+	if c.Qual != "" {
+		key = e.resolveQual(c.Qual)
+		if key == "" {
+			return "", "", e.bnd()
+		}
 	}
-	slots, total, ok := e.layout(rec)
+	rec, ok := e.records[key+"."+c.Name]
+	if !ok || rec.Cat != "gc" || len(rec.TypeParams) != 0 || len(c.TypeArgs) != 0 {
+		return "", "", e.bnd()
+	}
+	slots, total, ok := e.layout(key, rec)
 	if !ok {
-		return "", bndMain()
+		return "", "", e.bnd()
 	}
-	e.usedRecs[rec.Name] = true
+	rkey := key + "." + rec.Name
+	e.usedRecs[rkey] = true
 	e.use("__we_alloc")
 	e.use("__we_root_push")
 	e.pushes++
 	reg := "%" + e.value()
 	e.inst(fmt.Sprintf("%s = call ptr @__we_alloc(i64 %d)", reg, total))
-	e.inst(fmt.Sprintf("store ptr @.map.%s, ptr %s", rec.Name, reg))
+	e.inst(fmt.Sprintf("store ptr @.map.%s, ptr %s", rkey, reg))
 	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
 	byName := make(map[string]int, len(rec.Fields))
 	for i, fd := range rec.Fields {
@@ -2098,40 +2808,40 @@ func (e *emitter) emitConstruct(c *ast.Construct) (string, *NotImplemented) {
 	for _, fi := range c.Fields {
 		idx, ok := byName[fi.Name]
 		if !ok {
-			return "", bndMain()
+			return "", "", e.bnd()
 		}
 		slot := slots[idx]
 		switch slot.kind {
 		case fkStr:
 			lit, ok := fi.Value.(*ast.Literal)
 			if !ok || lit.Kind != "string" {
-				return "", bndMain()
+				return "", "", e.bnd()
 			}
 			data, ok := decodeStringLiteral(lit.Text)
 			if !ok {
-				return "", bndMain()
+				return "", "", e.bnd()
 			}
 			e.gepStore(reg, slot.off, "ptr "+e.intern(data))
 			e.gepStore(reg, slot.off+8, "i64 "+strconv.Itoa(len(data)))
 		case fkRef:
 			nc, ok := fi.Value.(*ast.Construct)
 			if !ok {
-				return "", bndMain()
+				return "", "", e.bnd()
 			}
-			child, ni := e.emitConstruct(nc)
+			child, _, ni := e.emitConstruct(nc)
 			if ni != nil {
-				return "", ni
+				return "", "", ni
 			}
 			e.gepStore(reg, slot.off, "ptr "+child)
 		case fkScalar:
 			imm, ok := scalarImmediate(fi.Value)
 			if !ok {
-				return "", bndMain()
+				return "", "", e.bnd()
 			}
 			e.gepStore(reg, slot.off, "i64 "+imm)
 		}
 	}
-	return reg, nil
+	return reg, rkey, nil
 }
 
 // scalarImmediate renders an int or bool literal as the i64 stored into a
@@ -2224,7 +2934,7 @@ func (e *emitter) emitTail(v ast.Expr) *NotImplemented {
 		if !ok {
 			return bndErrPay()
 		}
-		if !isStringPayloadVariant(e.sums, e.mainRet, vfn.Name) {
+		if !isStringPayloadVariant(e.sums, e.rootKey, e.mainRet, vfn.Name) {
 			return bndErrPay()
 		}
 		// The report line is the runtime-written byte sequence: the
@@ -2239,6 +2949,795 @@ func (e *emitter) emitTail(v ast.Expr) *NotImplemented {
 	default:
 		return bndMain()
 	}
+}
+
+// --- the M10b fn defines and calls (design D1/D2/D3) --------------------------
+
+// fnAbiKind is one family of the D2 table — the six calling shapes a
+// value or parameter can ride. Value records share the gc record's ptr
+// family (this reference build has one heap representation, so the
+// design's sret row stays unused).
+type fnAbiKind int
+
+const (
+	abiVoid fnAbiKind = iota
+	abiI64
+	abiDouble
+	abiStr // { ptr, i64 }
+	abiGc  // ptr
+	abiSum // { i64, i64 }
+)
+
+type fnParamAbi struct {
+	kind fnAbiKind
+	key  string // the record/sum's module-qualified key (abiGc/abiSum)
+}
+
+// fnAbi is one fn's calling shape: the return family plus one entry per
+// source parameter (a String or sum parameter takes two IR words).
+type fnAbi struct {
+	ret      fnAbiKind
+	retTyp   string   // the define's result type spelling
+	retKey   string   // the ret record/sum's key ("Result" for the prelude sum)
+	variants []string // the ret sum's variant names, decl order (abiSum)
+	params   []fnParamAbi
+}
+
+// fnAbiOf classifies one fn's signature against the walked module's
+// tables (enter the fn's module first). A type the families cannot name —
+// a qualified reference, a generic application, an unknown name —
+// reports false and the caller stops at the fn body word.
+func (e *emitter) fnAbiOf(d *ast.FnDecl) (fnAbi, bool) {
+	class := func(t ast.TypeRef) (fnAbiKind, string, bool) {
+		n, ok := t.(*ast.NamedType)
+		if !ok || n.Qual != "" {
+			return abiVoid, "", false
+		}
+		if n.Name == "Result" && len(n.Args) == 2 {
+			return abiSum, "Result", true // the prelude sum — Ok/Err
+		}
+		if len(n.Args) != 0 {
+			return abiVoid, "", false
+		}
+		switch n.Name {
+		case "String":
+			return abiStr, "", true
+		case "Float64":
+			return abiDouble, "", true
+		case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool":
+			return abiI64, "", true
+		}
+		key := e.curKey + "." + n.Name
+		if _, ok := e.records[key]; ok {
+			return abiGc, key, true
+		}
+		if _, ok := e.sums[key]; ok {
+			return abiSum, key, true
+		}
+		return abiVoid, "", false
+	}
+	var abi fnAbi
+	switch t := d.Ret.(type) {
+	case nil:
+		abi.ret = abiVoid
+		abi.retTyp = "void"
+	case *ast.NamedType:
+		k, key, ok := class(t)
+		if !ok {
+			return abi, false
+		}
+		abi.ret, abi.retKey = k, key
+		switch k {
+		case abiI64:
+			abi.retTyp = "i64"
+		case abiDouble:
+			abi.retTyp = "double"
+		case abiStr:
+			abi.retTyp = "{ ptr, i64 }"
+		case abiGc:
+			abi.retTyp = "ptr"
+		case abiSum:
+			abi.retTyp = "{ i64, i64 }"
+			if key == "Result" {
+				abi.variants = []string{"Ok", "Err"}
+			} else {
+				abi.variants = e.sumsOrd[key]
+			}
+		}
+	default:
+		return abi, false
+	}
+	for _, p := range d.Params {
+		k, key, ok := class(p.Type)
+		if !ok {
+			return abi, false
+		}
+		abi.params = append(abi.params, fnParamAbi{kind: k, key: key})
+	}
+	return abi, true
+}
+
+// classify resolves fd's ABI lazily — in fd's own module's tables — and
+// caches it on the def (the fnTable and the fns slice share the object).
+func (e *emitter) classify(fd *fnDef) (fnAbi, bool) {
+	if !fd.abiOK {
+		caller := e.curKey
+		e.enterModule(fd.key)
+		fd.abi, fd.abiOK = e.fnAbiOf(fd.decl)
+		e.enterModule(caller)
+	}
+	return fd.abi, fd.abiOK
+}
+
+// emitFnDefine emits one program fn: the define under its
+// module-qualified symbol, the parameter environments (scalars, the
+// String double word, record pointers, the sum pair re-housed in two
+// allocas), the body under the fn context — its own local environments
+// and gc window, the snapshot protocol the task thunks use — and the
+// family's return. The fn's gc window is its own: its pushes balance
+// inside (return value, defers inverted, pops, ret), and a record return
+// is rooted by its caller after the call — nothing may allocate between
+// the callee's last pop and the caller's push. The slot global follows
+// the define: every We fn is defined and slotted, called or not (design
+// D1 — dead slots are dead weight, never a correctness face).
+func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
+	abi, ok := e.classify(fd)
+	if !ok {
+		return bndFn()
+	}
+	e.enterModule(fd.key)
+
+	savedCtx, savedBody := e.ctx, e.body
+	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	restore := func() {
+		e.ctx, e.body = savedCtx, savedBody
+		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+	}
+	e.ctx = ctxFn
+	e.body = strings.Builder{}
+	e.scalars = make(map[string]scalarSlot)
+	e.sums2 = make(map[string]sumSlot)
+	e.prims = make(map[string]string)
+	e.strEnv = make(map[string]strBinding)
+	e.gcEnv = make(map[string]gcBinding)
+	e.defers = nil
+	e.caps = nil
+	e.pushes = 0
+
+	// The parameter list and environments (the shared define face).
+	ps := e.bindDefineParams(fd.decl.Params, abi)
+
+	// The statements; a return anywhere but the tail is a control-flow
+	// shape outside the set.
+	items := fd.decl.Body.Items
+	var tail *ast.Return
+	if len(items) > 0 {
+		if r, ok := items[len(items)-1].(*ast.Return); ok {
+			tail = r
+			items = items[:len(items)-1]
+		}
+	}
+	for _, st := range items {
+		if _, ok := st.(*ast.Return); ok {
+			restore()
+			return bndFn()
+		}
+		if ni := e.emitStmt(st); ni != nil {
+			restore()
+			return ni
+		}
+	}
+	ret, ni := e.fnRetVal(abi, tail)
+	if ni != nil {
+		restore()
+		return ni
+	}
+	for i := len(e.defers) - 1; i >= 0; i-- {
+		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
+			restore()
+			return ni
+		}
+	}
+	for i := 0; i < e.pushes; i++ {
+		e.use("__we_root_pop")
+		e.inst("call void @__we_root_pop()")
+	}
+	body := e.body.String()
+	restore()
+	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
+		"define %s @%s.%s(%s) {\nentry:\n%s  ret %s\n}\n",
+		abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body, ret))
+	e.slotFor(fd.key+"."+fd.name, "@"+fd.key+"."+fd.name)
+	return nil
+}
+
+// bindDefineParams renders one define's IR parameter list and binds the
+// parameter environments — the shared face of the fn, mock, and test
+// defines (a String or sum parameter takes two IR words, name0/name1;
+// the source name keeps its spelling — a parameter literally named v0 or
+// s0 collides with the fresh counter's registers, a B-track cleanup owns
+// that).
+func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
+	var ps []string
+	for i, p := range params {
+		pa := abi.params[i]
+		switch pa.kind {
+		case abiI64:
+			ps = append(ps, "i64 %"+p.Name)
+			if p.Name != "_" {
+				e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name}
+			}
+		case abiDouble:
+			ps = append(ps, "double %"+p.Name)
+			if p.Name != "_" {
+				e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, isFloat: true}
+			}
+		case abiStr:
+			ps = append(ps, "ptr %"+p.Name+"0", "i64 %"+p.Name+"1")
+			if p.Name != "_" {
+				e.strEnv[p.Name] = strBinding{dataOp: "%" + p.Name + "0", lenOp: "%" + p.Name + "1"}
+			}
+		case abiGc:
+			ps = append(ps, "ptr %"+p.Name)
+			if p.Name != "_" {
+				e.gcEnv[p.Name] = gcBinding{rec: pa.key, reg: "%" + p.Name}
+			}
+		case abiSum:
+			ps = append(ps, "i64 %"+p.Name+"0", "i64 %"+p.Name+"1")
+			if p.Name != "_" {
+				ts := e.value()
+				e.inst(fmt.Sprintf("%%%s = alloca i64", ts))
+				e.inst(fmt.Sprintf("store i64 %%%s0, ptr %%%s", p.Name, ts))
+				pp := e.value()
+				e.inst(fmt.Sprintf("%%%s = alloca i64", pp))
+				e.inst(fmt.Sprintf("store i64 %%%s1, ptr %%%s", p.Name, pp))
+				e.sums2[p.Name] = sumSlot{tag: "%" + ts, pay: "%" + pp, variants: e.sumsOrd[pa.key]}
+			}
+		}
+	}
+	return ps
+}
+
+// mockTarget resolves one mock's target to the faces the install and the
+// restore need: the ABI the mock fn carries (a program fn's own classi-
+// fication, in its own module's tables — a restated record or sum type
+// would not resolve under the test module's key), the slot the calls
+// ride, and the real body's symbol the restore stores back. A std entry
+// classifies by its restated signature — the entries' types are the base
+// scalars and String, which classify under any module's tables.
+func (e *emitter) mockTarget(md *ast.MockDecl) (fnAbi, string, string, *NotImplemented) {
+	if md.TargetQual != "" {
+		if k := e.resolveQual(md.TargetQual); k != "" {
+			fd, ok := e.fnTable[k+"."+md.Target]
+			if !ok {
+				return fnAbi{}, "", "", e.bnd()
+			}
+			abi, ok := e.classify(fd)
+			if !ok {
+				return fnAbi{}, "", "", bndFn()
+			}
+			slot := fd.key + "." + fd.name
+			return abi, slot, "@" + slot, nil
+		}
+		if sk := e.resolveStd(md.TargetQual); sk != "" {
+			ent, ok := stdFnEntries[sk][md.Target]
+			if !ok {
+				return fnAbi{}, "", "", e.bnd()
+			}
+			abi, ok := e.fnAbiOf(&ast.FnDecl{Params: md.Params, Ret: md.Ret})
+			if !ok {
+				return fnAbi{}, "", "", bndFn()
+			}
+			return abi, sk + "." + md.Target, "@" + ent.sym, nil
+		}
+		return fnAbi{}, "", "", e.bnd()
+	}
+	fd, ok := e.fnTable[e.curKey+"."+md.Target]
+	if !ok {
+		return fnAbi{}, "", "", e.bnd()
+	}
+	abi, ok := e.classify(fd)
+	if !ok {
+		return fnAbi{}, "", "", bndFn()
+	}
+	slot := fd.key + "." + fd.name
+	return abi, slot, "@" + slot, nil
+}
+
+// emitMockDefine emits one mock fn under "<key>.mock.<n>" with the
+// target's ABI (design D3: the interception is transparent to callers,
+// so the mock carries the target's own calling shape) and the mock's
+// parameter names, the body walking as a fn body — the one-tail-return
+// discipline and the family's return through fnRetVal. No slot: the mock
+// is never itself a call face, only a value a slot holds.
+func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInstall, *NotImplemented) {
+	abi, slot, restore, ni := e.mockTarget(md)
+	if ni != nil {
+		return mockInstall{}, ni
+	}
+
+	savedCtx, savedBody := e.ctx, e.body
+	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	restoreState := func() {
+		e.ctx, e.body = savedCtx, savedBody
+		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+	}
+	e.ctx = ctxFn
+	e.body = strings.Builder{}
+	e.scalars = make(map[string]scalarSlot)
+	e.sums2 = make(map[string]sumSlot)
+	e.prims = make(map[string]string)
+	e.strEnv = make(map[string]strBinding)
+	e.gcEnv = make(map[string]gcBinding)
+	e.defers = nil
+	e.caps = nil
+	e.pushes = 0
+
+	ps := e.bindDefineParams(md.Params, abi)
+	items := md.Body.Items
+	var tail *ast.Return
+	if len(items) > 0 {
+		if r, ok := items[len(items)-1].(*ast.Return); ok {
+			tail = r
+			items = items[:len(items)-1]
+		}
+	}
+	for _, st := range items {
+		if _, ok := st.(*ast.Return); ok {
+			restoreState()
+			return mockInstall{}, bndFn()
+		}
+		if ni := e.emitStmt(st); ni != nil {
+			restoreState()
+			return mockInstall{}, ni
+		}
+	}
+	ret, ni := e.fnRetVal(abi, tail)
+	if ni != nil {
+		restoreState()
+		return mockInstall{}, ni
+	}
+	for i := len(e.defers) - 1; i >= 0; i-- {
+		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
+			restoreState()
+			return mockInstall{}, ni
+		}
+	}
+	for i := 0; i < e.pushes; i++ {
+		e.use("__we_root_pop")
+		e.inst("call void @__we_root_pop()")
+	}
+	body := e.body.String()
+	restoreState()
+	sym := fmt.Sprintf("%s.mock.%d", key, n)
+	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
+		"define %s @%s(%s) {\nentry:\n%s  ret %s\n}\n",
+		abi.retTyp, sym, strings.Join(ps, ", "), body, ret))
+	return mockInstall{slot: slot, mock: "@" + sym, restore: restore}, nil
+}
+
+// emitTestDefine emits one test fn under "<key>.test.<n>" — void, no
+// parameters, the body walking as a fn body under the one widening the
+// test context owns: a valueless return may leave the body from any
+// depth (the checker's "(test)" context is valueless; each emits ret
+// void and opens the never-reached continuation that keeps the block
+// structure well-formed for the statements that lexically follow). The
+// mock declarations ride ahead of this as their own defines.
+func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplemented {
+	savedCtx, savedBody := e.ctx, e.body
+	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedTestBody := e.testBody
+	restore := func() {
+		e.ctx, e.body = savedCtx, savedBody
+		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.testBody = savedTestBody
+	}
+	e.ctx = ctxFn
+	e.testBody = true
+	e.body = strings.Builder{}
+	e.scalars = make(map[string]scalarSlot)
+	e.sums2 = make(map[string]sumSlot)
+	e.prims = make(map[string]string)
+	e.strEnv = make(map[string]strBinding)
+	e.gcEnv = make(map[string]gcBinding)
+	e.defers = nil
+	e.caps = nil
+	e.pushes = 0
+
+	for _, st := range td.Body.Items {
+		if _, ok := st.(*ast.MockDecl); ok {
+			continue // its define rode ahead of this walk
+		}
+		if r, ok := st.(*ast.Return); ok {
+			if ni := e.emitTestReturn(r); ni != nil {
+				restore()
+				return ni
+			}
+			continue
+		}
+		if ni := e.emitStmt(st); ni != nil {
+			restore()
+			return ni
+		}
+	}
+	for i := len(e.defers) - 1; i >= 0; i-- {
+		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
+			restore()
+			return ni
+		}
+	}
+	for i := 0; i < e.pushes; i++ {
+		e.use("__we_root_pop")
+		e.inst("call void @__we_root_pop()")
+	}
+	body := e.body.String()
+	restore()
+	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
+		"define void @%s.test.%d() {\nentry:\n%s  ret void\n}\n",
+		key, n, body))
+	return nil
+}
+
+// emitDriver renders the recorded steps into the entry's body (design
+// D5): per test — the mock installs in source order, begin, one spawned
+// wrapper task awaited at the task boundary (the M9b handle ABI: tag 0
+// is Ok, tag 1's payload the panic-message C string), end, the restores,
+// then the report under a branch (the passing face hands a null reason);
+// the summary closes and owns the process's exit code.
+func (e *emitter) emitDriver() {
+	for i := range e.drives {
+		st := &e.drives[i]
+		for _, m := range st.mocks {
+			// The install materializes the slot even when no call site
+			// referenced it this build (a mocked-but-never-called target
+			// still needs its global to exist).
+			slot := e.slotFor(m.slot, m.restore)
+			e.inst(fmt.Sprintf("store ptr %s, ptr %s", m.mock, slot))
+		}
+		e.use("__we_test_begin")
+		e.inst("call void @__we_test_begin()")
+		e.use("__we_task_new")
+		h := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr @__we_task_new(ptr %s, ptr null)", h, st.wrap))
+		e.use("__we_handle_await")
+		pay := e.value()
+		e.inst(fmt.Sprintf("%%%s = alloca i64", pay))
+		tag := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 @__we_handle_await(ptr %%%s, ptr %%%s)", tag, h, pay))
+		e.use("__we_test_end")
+		e.inst("call void @__we_test_end()")
+		for _, m := range st.mocks {
+			e.inst(fmt.Sprintf("store ptr %s, ptr @slot.%s", m.restore, m.slot))
+		}
+		f := e.intern(st.file)
+		d := e.intern(st.desc)
+		n := e.blocks
+		e.blocks++
+		c := e.value()
+		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %%%s, 0", c, tag))
+		e.inst(fmt.Sprintf("br i1 %%%s, label %%tk%dp, label %%tk%df", c, n, n))
+		e.label(fmt.Sprintf("tk%dp", n))
+		e.use("__we_test_report")
+		e.inst(fmt.Sprintf("call void @__we_test_report(ptr %s, i64 %d, ptr %s, i64 %d, i64 0, ptr null)",
+			f, len(st.file), d, len(st.desc)))
+		e.inst(fmt.Sprintf("br label %%tk%dq", n))
+		e.label(fmt.Sprintf("tk%df", n))
+		r := e.value()
+		e.inst(fmt.Sprintf("%%%s = load i64, ptr %%%s", r, pay))
+		p := e.value()
+		e.inst(fmt.Sprintf("%%%s = inttoptr i64 %%%s to ptr", p, r))
+		e.use("__we_test_report")
+		e.inst(fmt.Sprintf("call void @__we_test_report(ptr %s, i64 %d, ptr %s, i64 %d, i64 1, ptr %%%s)",
+			f, len(st.file), d, len(st.desc), p))
+		e.inst(fmt.Sprintf("br label %%tk%dq", n))
+		e.label(fmt.Sprintf("tk%dq", n))
+	}
+	e.use("__we_test_summary")
+	e.inst("call void @__we_test_summary()")
+	e.inst("ret i32 0")
+}
+
+// fnRetVal emits the family's return and yields the instruction's tail
+// (everything after "ret "). A value-shaped fn must end in a return of
+// the family's shape; a void fn's tail return is optional and carries no
+// value. The value computes before the defers and the pops — nothing
+// between the last pop and the ret may allocate.
+func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented) {
+	switch abi.ret {
+	case abiVoid:
+		if tail != nil && tail.HasValue {
+			return "", bndFn()
+		}
+		return "void", nil
+	case abiI64, abiDouble:
+		if tail == nil || !tail.HasValue {
+			return "", bndFn()
+		}
+		// The tail return's value face includes a direct call of the
+		// family's own ABI (the M10b goldens return fn results straight
+		// through: return double(double(n))). The M9b expression
+		// emitters stay call-free; the call resolves here, computing at
+		// the same pre-defer position any other value face does.
+		if c, ok := tail.Value.(*ast.Call); ok {
+			res, ni := e.emitCall(c, nil)
+			if ni != nil {
+				return "", ni
+			}
+			if res.kind != ckI64 || res.isFloat != (abi.ret == abiDouble) {
+				return "", bndFn()
+			}
+			if abi.ret == abiDouble {
+				return "double " + res.i64, nil
+			}
+			return "i64 " + res.i64, nil
+		}
+		op, isF, ni := e.emitNumExpr(tail.Value)
+		if ni != nil {
+			return "", ni
+		}
+		if (abi.ret == abiDouble) != isF {
+			return "", bndFn()
+		}
+		if isF {
+			return "double " + op, nil
+		}
+		return "i64 " + op, nil
+	case abiStr:
+		if tail == nil || !tail.HasValue {
+			return "", bndFn()
+		}
+		// An SSA double word cannot ride inside a ret's aggregate
+		// constant — LLVM takes constant structs there, so the pair
+		// builds through insertvalue (register-level, no allocation:
+		// the pre-pop position stays legal).
+		strPair := func(dataOp, lenOp string) string {
+			v0 := e.value()
+			e.inst(fmt.Sprintf("%%%s = insertvalue { ptr, i64 } undef, ptr %s, 0", v0, dataOp))
+			v1 := e.value()
+			e.inst(fmt.Sprintf("%%%s = insertvalue { ptr, i64 } %%%s, i64 %s, 1", v1, v0, lenOp))
+			return "{ ptr, i64 } %" + v1
+		}
+		switch v := tail.Value.(type) {
+		case *ast.Ident:
+			b, ok := e.strEnv[v.Name]
+			if !ok || b.dataOp == "" {
+				return "", bndFn()
+			}
+			return strPair(b.dataOp, b.lenOp), nil
+		case *ast.Literal:
+			if v.Kind != "string" {
+				return "", bndFn()
+			}
+			data, ok := decodeStringLiteral(v.Text)
+			if !ok {
+				return "", bndFn()
+			}
+			return fmt.Sprintf("{ ptr, i64 } { ptr %s, i64 %d }", e.intern(data), len(data)), nil
+		case *ast.Call:
+			res, ni := e.emitCall(v, nil)
+			if ni != nil {
+				return "", ni
+			}
+			if res.kind != ckStr {
+				return "", bndFn()
+			}
+			return strPair(res.strBind.dataOp, res.strBind.lenOp), nil
+		}
+		return "", bndFn()
+	case abiGc:
+		if tail == nil || !tail.HasValue {
+			return "", bndFn()
+		}
+		switch v := tail.Value.(type) {
+		case *ast.Ident:
+			g, ok := e.gcEnv[v.Name]
+			if !ok {
+				return "", bndFn()
+			}
+			return "ptr " + g.reg, nil
+		case *ast.Construct:
+			reg, _, ni := e.emitConstruct(v)
+			if ni != nil {
+				return "", ni
+			}
+			return "ptr " + reg, nil
+		}
+		return "", bndFn()
+	case abiSum:
+		if tail == nil || !tail.HasValue {
+			return "", bndFn()
+		}
+		c, ok := tail.Value.(*ast.Call)
+		if !ok {
+			return "", bndFn()
+		}
+		id, ok := c.Fn.(*ast.Ident)
+		if !ok {
+			return "", bndFn()
+		}
+		// Ok(unit) on a Result return is the zero pair; every Err shape
+		// and every payload-bearing return stops (the B-track widens).
+		if abi.retKey == "Result" {
+			if id.Name != "Ok" || len(c.Args) != 1 {
+				return "", bndFn()
+			}
+			if _, ok := c.Args[0].(*ast.Unit); !ok {
+				return "", bndFn()
+			}
+			return "{ i64, i64 } { i64 0, i64 0 }", nil
+		}
+		if len(c.Args) != 0 {
+			return "", bndFn()
+		}
+		for i, n := range abi.variants {
+			if n == id.Name {
+				return fmt.Sprintf("{ i64, i64 } { i64 %d, i64 0 }", i), nil
+			}
+		}
+		return "", bndFn()
+	}
+	return "", bndFn()
+}
+
+// emitFnCall emits one program-fn call through its slot (design D3): the
+// slot load, the argument list per the callee's families, and the result
+// per the return family — a String return extracts its two words into
+// the binding's operand pair, a record return is rooted by the caller,
+// a sum return lands in the two-slot environment.
+func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplemented) {
+	abi, ok := e.classify(fd)
+	if !ok {
+		return callResult{}, bndFn()
+	}
+	if len(args) != len(fd.decl.Params) {
+		return callResult{}, e.bnd()
+	}
+	slot := e.slotFor(fd.key+"."+fd.name, "@"+fd.key+"."+fd.name)
+	fp := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
+	var ops []string
+	for i, a := range args {
+		// A call argument of the family's own ABI rides its result
+		// directly (the M10b goldens nest fn results: double(double(n))).
+		// The M9b expression emitters stay call-free — the resolution is
+		// this argument position's, not those sets'.
+		if c, ok := a.(*ast.Call); ok {
+			res, ni := e.emitCall(c, nil)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			switch abi.params[i].kind {
+			case abiI64:
+				if res.kind != ckI64 || res.isFloat {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "i64 "+res.i64)
+			case abiDouble:
+				if res.kind != ckI64 || !res.isFloat {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "double "+res.i64)
+			case abiStr:
+				if res.kind != ckStr {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "ptr "+res.strBind.dataOp, "i64 "+res.strBind.lenOp)
+			default:
+				return callResult{}, e.bnd()
+			}
+			continue
+		}
+		switch abi.params[i].kind {
+		case abiI64:
+			op, isF, ni := e.emitNumExpr(a)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			if isF {
+				return callResult{}, e.bnd()
+			}
+			ops = append(ops, "i64 "+op)
+		case abiDouble:
+			op, isF, ni := e.emitNumExpr(a)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			if !isF {
+				return callResult{}, e.bnd()
+			}
+			ops = append(ops, "double "+op)
+		case abiStr:
+			p, l, ni := e.emitStringExpr(a)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			ops = append(ops, "ptr "+p, "i64 "+l)
+		case abiGc:
+			switch v := a.(type) {
+			case *ast.Ident:
+				g, ok := e.gcEnv[v.Name]
+				if !ok {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "ptr "+g.reg)
+			case *ast.Construct:
+				reg, _, ni := e.emitConstruct(v)
+				if ni != nil {
+					return callResult{}, ni
+				}
+				ops = append(ops, "ptr "+reg)
+			default:
+				return callResult{}, e.bnd()
+			}
+		case abiSum:
+			id, ok := a.(*ast.Ident)
+			if !ok {
+				return callResult{}, e.bnd()
+			}
+			s, ok := e.sums2[id.Name]
+			if !ok {
+				return callResult{}, e.bnd()
+			}
+			ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false))
+		}
+	}
+	join := strings.Join(ops, ", ")
+	switch abi.ret {
+	case abiVoid:
+		e.inst(fmt.Sprintf("call void %%%s(%s)", fp, join))
+		return callResult{kind: ckVoid}, nil
+	case abiI64:
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 %%%s(%s)", v, fp, join))
+		return callResult{kind: ckI64, i64: "%" + v}, nil
+	case abiDouble:
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call double %%%s(%s)", v, fp, join))
+		return callResult{kind: ckI64, i64: "%" + v, isFloat: true}, nil
+	case abiStr:
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call { ptr, i64 } %%%s(%s)", v, fp, join))
+		p := e.value()
+		e.inst(fmt.Sprintf("%%%s = extractvalue { ptr, i64 } %%%s, 0", p, v))
+		l := e.value()
+		e.inst(fmt.Sprintf("%%%s = extractvalue { ptr, i64 } %%%s, 1", l, v))
+		return callResult{kind: ckStr, strBind: strBinding{dataOp: "%" + p, lenOp: "%" + l}}, nil
+	case abiGc:
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr %%%s(%s)", v, fp, join))
+		reg := "%" + v
+		e.use("__we_root_push")
+		e.pushes++
+		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
+		return callResult{kind: ckGc, gcReg: reg, recKey: abi.retKey}, nil
+	case abiSum:
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call { i64, i64 } %%%s(%s)", v, fp, join))
+		t := e.value()
+		e.inst(fmt.Sprintf("%%%s = extractvalue { i64, i64 } %%%s, 0", t, v))
+		p := e.value()
+		e.inst(fmt.Sprintf("%%%s = extractvalue { i64, i64 } %%%s, 1", p, v))
+		ts := e.value()
+		e.inst(fmt.Sprintf("%%%s = alloca i64", ts))
+		e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", t, ts))
+		pp := e.value()
+		e.inst(fmt.Sprintf("%%%s = alloca i64", pp))
+		e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", p, pp))
+		return callResult{kind: ckSum, sum: sumSlot{tag: "%" + ts, pay: "%" + pp, variants: abi.variants}}, nil
+	}
+	return callResult{}, e.bnd()
 }
 
 // --- the IR operand helpers ---------------------------------------------------
@@ -2300,9 +3799,12 @@ func mapLiteral(bitmap []uint64, nslots int) string {
 }
 
 // render assembles the module: header, the global groups (struct type
-// lines and map descriptors in declaration order over the used records,
-// the constant pool, the report line), the declares in fixed order, and
-// the one function.
+// lines and map descriptors in declaration order over the used records —
+// module-qualified names; the constant pool, the report line, the slot
+// globals in first-use order), the declares in fixed order, the fn
+// defines and the thunk defines, and the entry. In test mode the entry is
+// the synthesized driver's (design D5); in build mode the root main is
+// the entry.
 func (e *emitter) render(module string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "; ModuleID = '%s'\n\n", module)
@@ -2310,10 +3812,10 @@ func (e *emitter) render(module string) string {
 	var groups [][]string
 	var structs, maps []string
 	for _, r := range e.order {
-		if !e.usedRecs[r.Name] {
+		if !e.usedRecs[r.name] {
 			continue
 		}
-		slots, _, ok := e.layout(r)
+		slots, _, ok := e.layout(recModKey(r.name), r.decl)
 		if !ok {
 			continue // unreachable: a construction walked this layout already
 		}
@@ -2337,11 +3839,11 @@ func (e *emitter) render(module string) string {
 			}
 		}
 		if len(parts) == 0 {
-			structs = append(structs, fmt.Sprintf("%%struct.%s = type {}", r.Name))
+			structs = append(structs, fmt.Sprintf("%%struct.%s = type {}", r.name))
 		} else {
-			structs = append(structs, fmt.Sprintf("%%struct.%s = type { %s }", r.Name, strings.Join(parts, ", ")))
+			structs = append(structs, fmt.Sprintf("%%struct.%s = type { %s }", r.name, strings.Join(parts, ", ")))
 		}
-		maps = append(maps, fmt.Sprintf("@.map.%s = private unnamed_addr constant %s", r.Name, mapLiteral(bitmap, len(slots))))
+		maps = append(maps, fmt.Sprintf("@.map.%s = private unnamed_addr constant %s", r.name, mapLiteral(bitmap, len(slots))))
 	}
 	if len(structs) > 0 {
 		groups = append(groups, structs)
@@ -2371,6 +3873,9 @@ func (e *emitter) render(module string) string {
 	if len(e.chanDescs) > 0 {
 		groups = append(groups, e.chanDescs)
 	}
+	if len(e.slots) > 0 {
+		groups = append(groups, e.slots)
+	}
 	var decls []string
 	for _, d := range declareLines {
 		if e.declUsed[d.sym] {
@@ -2386,9 +3891,15 @@ func (e *emitter) render(module string) string {
 		}
 		sb.WriteString("\n")
 	}
+	for _, f := range e.fnsDone {
+		sb.WriteString(f + "\n")
+	}
 	for _, th := range e.thunks {
 		sb.WriteString(th + "\n")
 	}
+	// The synthesized test driver owns the entry in test mode (design
+	// D5) — its steps rendered into the body ahead of this; in build mode
+	// the root main is the entry.
 	sb.WriteString("define i32 @__we_main() {\nentry:\n")
 	sb.WriteString(e.body.String())
 	sb.WriteString("}\n")
@@ -2396,11 +3907,13 @@ func (e *emitter) render(module string) string {
 }
 
 // isStringPayloadVariant is the variant-attribution back-check of design
-// D3: name must be a variant of the E in main's `Result<(), E>` return
-// annotation, carrying exactly one String payload. Typecheck already
-// established the semantics; this only confirms the attribution from the
-// module's own declarations, without leaning on typecheck internals.
-func isStringPayloadVariant(sums map[string]map[string][]ast.TypeRef, ret ast.TypeRef, name string) bool {
+// D3: name must be a variant of the E in the entry main's `Result<(), E>`
+// return annotation, carrying exactly one String payload. key is the
+// entry module's — the error type resolves in its own module's table.
+// Typecheck already established the semantics; this only confirms the
+// attribution from the module's own declarations, without leaning on
+// typecheck internals.
+func isStringPayloadVariant(sums map[string]map[string][]ast.TypeRef, key string, ret ast.TypeRef, name string) bool {
 	res, ok := ret.(*ast.NamedType)
 	if !ok || res.Qual != "" || res.Name != "Result" || len(res.Args) != 2 {
 		return false
@@ -2409,7 +3922,7 @@ func isStringPayloadVariant(sums map[string]map[string][]ast.TypeRef, ret ast.Ty
 	if !ok || errTy.Qual != "" {
 		return false
 	}
-	payload, ok := sums[errTy.Name][name]
+	payload, ok := sums[key+"."+errTy.Name][name]
 	if !ok || len(payload) != 1 {
 		return false
 	}

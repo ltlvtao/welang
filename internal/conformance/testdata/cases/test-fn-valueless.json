@@ -1,0 +1,16 @@
+{
+  "name": "test-fn-valueless",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.io\n\nfn note() effect io {\n    io.println(\"called\")\n    return\n}\n\ntest \"note\" {\n    note()\n    assert(true, \"done\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "called\npass  tests/m_test.we: note (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

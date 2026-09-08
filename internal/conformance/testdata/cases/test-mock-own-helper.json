@@ -1,0 +1,16 @@
+{
+  "name": "test-mock-own-helper",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/cache_test.we": "import std.io\nimport std.test as st\n\nfn read() effect io -> Int64 {\n    io.println(\"REAL\")\n    return 1\n}\n\nfn load() effect io -> Int64 {\n    return read()\n}\n\ntest \"cache\" {\n    mock read() -> Int64 effect io {\n        return 7\n    }\n    st.assertEqual(load(), 7)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/cache_test.we: cache (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

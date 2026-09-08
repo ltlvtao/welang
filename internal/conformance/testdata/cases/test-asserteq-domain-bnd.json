@@ -1,0 +1,16 @@
+{
+  "name": "test-asserteq-domain-bnd",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/dom_test.we": "import std.test as st\n\nrecord Point { x: Int64, y: Int64 }\n\ntest \"domain\" {\n    let a = Point { x: 1, y: 2 }\n    let b = Point { x: 1, y: 2 }\n    st.assertEqual(a, b)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: assertEqual beyond the scalar, Bool, and String domains (the Eq-generic face is the standard library's own widening) are not implemented in this reference build yet\n"
+}

@@ -11,7 +11,7 @@
   },
   "exit": 70,
   "stdout": "",
-  "stderr": "we: test modules in code generation (the M10b run tower: test harness, mock interception, virtual clock) are not implemented in this reference build yet\n",
+  "stderr": "we: single-file builds (spec gap; roadmap follow-up) are not implemented in this reference build yet\n",
   "files": {
     "tests/t_test.we": "test \"only\" {\n    assert(true, \"x\")\n}\n"
   }

@@ -26,7 +26,7 @@
 | M9a | `concurrency-check` | 第 18 章检查塔：std.concurrent 装载、内建类型面、Shareable、task 块与捕获纪律、scope/句柄纪律、select 定型 | done 2026-09-07 |
 | M9b | `concurrency-run` | 第 18 章运行塔：单线程协作调度器、共享状态与 channel 原语运行时、真实时钟 timeout（虚拟钟随 M10 落地） | done 2026-09-07 |
 | M10a | `testing-check` | 第 20 章检查塔：test 模块与 test 块、mock 声明、advanceTime 定型与位置、std.test 装载 | done 2026-09-08 |
-| M10b | `testing-run` | 第 20/21 章运行塔：codegen 多函数发射拓宽、we test runner、虚拟钟、确定性测试调度、test 边界、mock 拦截 | pending |
+| M10b | `testing-run` | 第 20/21 章运行塔：codegen 多函数发射拓宽、we test runner、虚拟钟、确定性测试调度、test 边界、mock 拦截 | done 2026-09-08 |
 | M10c | `testing-explore` | 第 21 章探索：交错探针、E1901/E1902 守卫、偏序归约 | pending |
 | M11 | `fmt-vet-doc` | 第 21 章格式化器、vet、文档生成 | pending |
 | M12 | `ffi` | 第 19 章 foreign 块与构建时链接（E1906） | pending |
@@ -60,3 +60,4 @@
 11. **运行时结构无回收。** 第 18 章未定运行时自有结构——调度器任务与栈、scope 帧、等待链节点（含留待源操作懒回收的 select 落选者）、panic 报文、运行时生成位图——的析构或 finalizer 语义，M9b 运行塔以 malloc 族分配且不回收：泄漏有界于任务数与登记数，存活于进程生命周期。未来运行时变更（回收通路或 finalizer 机制——并过 ADR-0003 并行门）应认领。M9b（`concurrency-run` design D7、D13 披露 2）发现。
 12. **test 模块可导入性与模块路径字符集。** 第 21 章场景称 `src/helpers_test.we`「随项目编译、可导入」——但第 15 章的导入→文件映射以 `[a-z][a-z0-9]` 形段拼写模块路径（实现为 E0013），下划线词干不可拼写；项目编译自 src/main.we 走导入图，图外的 test 模块在 `we check .` 下永不编译。或字符集收下划线词干、或场景的可导入性需要自己的映射——规范修订应定夺。M10a（`testing-check` design D10、Q1 切分的装载边界披露）发现。
 13. **test 关键字与 std.test 模块段。** 第 1 章保留字闭集使 `test` 成为关键字（它领 test 块产生式），该段无法按标识符取词；第 15 章的限定触及恰为「经导入名的 `name.item` 形」，而第 20 章示例调 `std.test.assertEqual(...)`——第 15 章未定型的两级点形。M10a 使已批面可拼写（模块路径段收过字符集检查的关键字 token）、调用走别名形（`import std.test as st; st.assertEqual(...)`）；裸导入绑定关键字名且惰性。规范修订应定夺真实调用面：两级 std 限定符、仅别名示例、或非关键字模块名。M10a（`testing-check` design D8、实现准备期披露）发现。
+14. **并发构造面为 mock 目标。** 第 20 章「不可 mock 目标」Requirement 以 `E1804:` 拒绝泛型 fn、impl 方法、「构造器如 `User`」——未点名并发构造器。M10a 的字面读在检查面接受 `mock conc.channel`（名字解析为模块级 fn 条目、无特判触发，`m10a_test.go:178`），但运行面是原始构造面：channel 构造的期望类型派生自调用实参、非声明签名可复述，唯一可复述的签名（无参、unit 返回）在运行时无从拦截。M10b 维持检查面零改、channel 不入槽表——检查过的 `mock conc.channel` 运行时跑真构造器。规范修订应裁决重分类：或 E1804 集点名原始构造器（检查面拒绝运行面无法兑现的目标）、或章文为其固定拦截面。M10a（`testing-check` 审查 F1）发现，M10b（`testing-run` design D3）登记。

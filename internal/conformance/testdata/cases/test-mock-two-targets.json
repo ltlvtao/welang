@@ -1,0 +1,16 @@
+{
+  "name": "test-mock-two-targets",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\nfn f() -> Int64 {\n    return 1\n}\n\nfn g() -> Int64 {\n    return 2\n}\n\ntest \"both\" {\n    mock f() -> Int64 {\n        return 7\n    }\n    mock g() -> Int64 {\n        return 8\n    }\n    st.assertEqual(f(), 7)\n    st.assertEqual(g(), 8)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: both (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

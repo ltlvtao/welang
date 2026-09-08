@@ -10,11 +10,7 @@
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: functions other than main in code generation are not implemented in this reference build yet\n",
-  "files": {
-    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn go() effect net {\n    scope {\n        let t = task effect net { 1 }\n        let _ = t.await()\n    }\n    return\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
-    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
-  }
+  "stderr": ""
 }

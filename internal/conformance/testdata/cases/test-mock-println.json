@@ -1,0 +1,16 @@
+{
+  "name": "test-mock-println",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.io\nimport std.test as st\n\ntest \"silenced\" {\n    mock io.println(s: String) effect io {\n        return\n    }\n    io.println(\"HIDDEN\")\n    assert(true, \"done\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: silenced (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

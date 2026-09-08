@@ -1,0 +1,17 @@
+{
+  "name": "test-run-nested-cross-file",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/a_test.we": "test \"a\" {\n    assert(true, \"a\")\n}\n",
+      "tests/unit/b_test.we": "test \"b\" {\n    assert(true, \"b\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/a_test.we: a (0ms)\npass  tests/unit/b_test.we: b (0ms)\ntotal 2, passed 2, failed 0 (0ms)\n",
+  "stderr": ""
+}

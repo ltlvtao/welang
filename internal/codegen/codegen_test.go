@@ -198,9 +198,14 @@ func TestBoundaryWhats(t *testing.T) {
 			"Err payloads beyond one plain string-literal variant argument",
 		},
 		{
+			// The M10b multi-function widening (design D8): a valueless
+			// helper defines under its module-qualified symbol with its
+			// slot and rides clean — the old other-fns row retired. The
+			// define and slot land in the fn groups; main's bytes are
+			// untouched.
 			"extra module function",
 			appendItem(okModule(), &ast.FnDecl{Name: "helper"}),
-			"functions other than main in code generation",
+			"",
 		},
 		{
 			"top-level binding",

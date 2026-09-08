@@ -12,6 +12,8 @@ typedef enum {
     WE_RUNNING = 2,
     WE_PARKED = 3,
     WE_DONE = 4,
+    WE_DRAIN = 5,     // parked at advanceTime's barrier (test.c's clock face)
+    WE_ABANDONED = 6, // the test boundary's sweep: never scheduled again
 } we_task_state;
 
 struct we_scope;
@@ -62,12 +64,16 @@ typedef struct we_wait_link {
     void (*complete)(struct we_wait_link *);
 } we_wait_link;
 
-// One scope frame (chapter 18's scope forms). deadline_ms is absolute
-// CLOCK_MONOTONIC milliseconds, -1 without a timeout clause.
+// One scope frame (chapter 18's scope forms). deadline_ms is an absolute
+// millisecond reading in its own clock's domain, -1 without a timeout
+// clause: scopes entered under the test's virtual clock (the virtual flag)
+// carry their deadline on that clock — it moves only when a runnable task
+// advances it — while every other scope rides CLOCK_MONOTONIC.
 typedef struct we_scope {
     struct we_scope *parent;
     long long deadline_ms;
     long long pending;  // unfinished tasks created inside
+    int virtual;        // the deadline rides the test's virtual clock
     int timed_out;
     int collect_all;    // join across panics instead of fail-fast
     int panicked;       // a plain-scope task failed: propagate to the owner
@@ -94,6 +100,28 @@ int __we_cur_cancelled(void);
 we_wait_link *__we_link_new(void);
 void __we_link_attach(we_wait_link *l); // init a family's extended link onto the ledger
 void __we_link_free(we_wait_link *l);
+
+// The face test.c builds on (M10b design D4): the task ledger and table
+// count for the boundary's leftover sweep, the deadline expiry advance
+// pushes for the virtual scopes, the clock-crossing barrier advance parks
+// at (every ready task runs to its next block before the clock moves, so
+// every wait wanting the crossing is registered first), and the sweep's
+// abandonment — a leftover task is never cancelled back into the run, it
+// is taken out of scheduling entirely.
+we_task *__we_all_tasks(void);
+int __we_task_table_count(void);
+void __we_expire_deadlines(void);
+void __we_sched_drain(void);
+void __we_task_abandon(we_task *t);
+
+// The clock face test.c owns and the scheduler reads: which clock the run
+// is under, its reading, the clock-parked count for the abort line, and
+// the real-clock sleep waits folded into the idle loop.
+int __we_test_virtual(void);
+long long __we_test_vnow(void);
+long long __we_virtual_parked(void);
+long long __we_sleep_earliest_deadline(void);
+void __we_sleep_expire(void);
 
 // The root-window face gc.c provides (design D7).
 struct we_gc_window *__we_gc_window_new(void);

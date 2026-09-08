@@ -1,0 +1,16 @@
+{
+  "name": "test-run-source-order",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "test \"first\" {\n    assert(true, \"1\")\n}\n\ntest \"second\" {\n    assert(true, \"2\")\n}\n\ntest \"third\" {\n    assert(true, \"3\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: first (0ms)\npass  tests/m_test.we: second (0ms)\npass  tests/m_test.we: third (0ms)\ntotal 3, passed 3, failed 0 (0ms)\n",
+  "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+  "name": "test-clock-same-tick-fifo",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/fifo_test.we": "import std.io\nimport std.time\n\ntest \"release order\" {\n    scope {\n        let a = task effect io time {\n            let _ = time.sleep(50)\n            io.println(\"a\")\n        }\n        let b = task effect io time {\n            let _ = time.sleep(50)\n            io.println(\"b\")\n        }\n        advanceTime(50)\n        let _ = a.await()\n        let _ = b.await()\n    }\n    assert(true, \"done\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "a\nb\npass  tests/fifo_test.we: release order (50ms)\ntotal 1, passed 1, failed 0 (50ms)\n",
+  "stderr": ""
+}

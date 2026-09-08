@@ -1,0 +1,17 @@
+{
+  "name": "test-run-json-events",
+  "args": [
+    "test",
+    ".",
+    "--json"
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "test \"good\" {\n    assert(true, \"ok\")\n}\n\ntest \"bad\" {\n    assert(false, \"nope\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "{\"type\":\"test-result\",\"file\":\"tests/m_test.we\",\"name\":\"good\",\"status\":\"pass\",\"duration_ms\":0}\n{\"type\":\"test-result\",\"file\":\"tests/m_test.we\",\"name\":\"bad\",\"status\":\"fail\",\"duration_ms\":0}\n{\"type\":\"test-summary\",\"total\":2,\"passed\":1,\"failed\":1,\"duration_ms\":0}\n",
+  "stderr": "tests/m_test.we: bad: nope\n"
+}

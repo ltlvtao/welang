@@ -1,0 +1,18 @@
+{
+  "name": "test-run-filter-subset",
+  "args": [
+    "test",
+    ".",
+    "--filter",
+    "beta"
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "test \"alpha\" {\n    assert(true, \"a\")\n}\n\ntest \"beta\" {\n    assert(true, \"b\")\n}\n\ntest \"gamma\" {\n    assert(true, \"g\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: beta (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

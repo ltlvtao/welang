@@ -1,0 +1,17 @@
+{
+  "name": "test-mock-cross-module",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/util.we": "import std.io\n\npub fn base() effect io -> Int64 {\n    io.println(\"REAL\")\n    return 1\n}\n\npub fn wrapped() effect io -> Int64 {\n    return base()\n}\n",
+      "tests/x_test.we": "import std.test as st\nimport util\n\ntest \"cross\" {\n    mock util.base() -> Int64 effect io {\n        return 7\n    }\n    st.assertEqual(util.wrapped(), 7)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/x_test.we: cross (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

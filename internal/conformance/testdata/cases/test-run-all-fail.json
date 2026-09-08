@@ -1,0 +1,16 @@
+{
+  "name": "test-run-all-fail",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "test \"one\" {\n    assert(false, \"a\")\n}\n\ntest \"two\" {\n    assert(false, \"b\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: one (0ms)\n  a\nfail  tests/m_test.we: two (0ms)\n  b\ntotal 2, passed 0, failed 2 (0ms)\n",
+  "stderr": ""
+}

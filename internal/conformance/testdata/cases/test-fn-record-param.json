@@ -1,0 +1,16 @@
+{
+  "name": "test-fn-record-param",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.io\nimport std.test as st\n\nrecord User { name: String }\n\nfn same(u: User) -> User {\n    return u\n}\n\ntest \"record param\" {\n    let a = User { name: \"we\" }\n    let b = same(a)\n    io.println(b.name)\n    st.assertEqual(b.name, \"we\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "we\npass  tests/m_test.we: record param (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

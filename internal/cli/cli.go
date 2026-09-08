@@ -27,6 +27,11 @@ const (
 	exitDiagnostic     = 1
 	exitUsage          = 2
 	exitNotImplemented = 70
+	// exitCompileFailure is we test's own third exit (chapter 21 R5):
+	// the test compilation itself failed — the diagnostic is already
+	// rendered and no test ran. The number is exitUsage's 2 (both are
+	// never-ran classes); the runner's protocol earns it its own name.
+	exitCompileFailure = 2
 )
 
 // subcommands is the closed set chapter 21 fixes. takesPath marks the
@@ -40,7 +45,7 @@ var subcommands = map[string]struct {
 	"build":   {takesPath: true, implemented: true},
 	"check":   {takesPath: true, implemented: true},
 	"run":     {takesPath: true, implemented: true},
-	"test":    {takesPath: true},
+	"test":    {takesPath: true, implemented: true},
 	"fmt":     {takesPath: true},
 	"vet":     {takesPath: true},
 	"doc":     {takesPath: true},
@@ -56,6 +61,9 @@ type env struct {
 	json    bool
 	color   string
 	verbose bool
+	// filter is we test's --filter pattern (M10b design D6): matched
+	// CLI-side, the kept tests alone ride into the harness synthesis.
+	filter string
 }
 
 // Run parses args (the argv after the program name), dispatches one
@@ -71,7 +79,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	if !known {
 		return e.usageErr("unknown subcommand %q", name)
 	}
-	positional, code := e.parseOptions(rest)
+	positional, code := e.parseOptions(name, rest)
 	if code != exitOK {
 		return code
 	}
@@ -118,6 +126,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		default:
 			return e.runClean(path, info)
 		}
+	case "test":
+		path := "."
+		if len(positional) == 1 {
+			path = positional[0]
+		}
+		return e.runTest(path, info)
 	}
 	// Unreachable: every implemented subcommand is handled above.
 	return e.usageErr("unknown subcommand %q", name)
@@ -125,8 +139,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // parseOptions splits flags from positional arguments. Global options are
 // accepted anywhere after the subcommand, per `we <subcommand> [path]
-// [options]`.
-func (e *env) parseOptions(args []string) ([]string, int) {
+// [options]`. The subcommand's own flags — we test's --filter (M10b
+// design D6) — parse only under their subcommand; elsewhere they stay
+// unknown options.
+func (e *env) parseOptions(sub string, args []string) ([]string, int) {
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -147,6 +163,14 @@ func (e *env) parseOptions(args []string) ([]string, int) {
 			if code := e.setColor(strings.TrimPrefix(a, "--color=")); code != exitOK {
 				return nil, code
 			}
+		case sub == "test" && a == "--filter":
+			if i+1 >= len(args) {
+				return nil, e.usageErr("--filter wants a pattern")
+			}
+			i++
+			e.filter = args[i]
+		case sub == "test" && strings.HasPrefix(a, "--filter="):
+			e.filter = strings.TrimPrefix(a, "--filter=")
 		case strings.HasPrefix(a, "--"):
 			return nil, e.usageErr("unknown option %q", a)
 		default:

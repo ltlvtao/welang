@@ -29,24 +29,12 @@ func (e *env) runBuild(path string, info os.FileInfo) int {
 		return code
 	}
 	if !info.IsDir() {
-		file, code := e.loadFile(path)
-		if file == nil {
+		if file, code := e.loadFile(path); file == nil {
 			return code
 		}
-		if file.IsTestModule {
-			// A test module's build story is the test tower (M10a design
-			// D9): the artifact-naming boundary below is the executable's
-			// own, and a single-file test module has no artifact face
-			// until M10b's runner — so the file proceeds to code
-			// generation, whose item walk is the honest stop (the
-			// test-module row, or the other-functions row when a helper
-			// fn precedes the first test in source order). A test module
-			// that emits cleanly (a main and no test block) keeps the
-			// naming boundary: it is still a single-file build.
-			if _, ni := codegen.Emit(file, "test"); ni != nil {
-				return e.boundary(ni.What)
-			}
-		}
+		// A single-file build has no manifest and so no artifact name —
+		// the naming boundary is the executable's own face, a test module
+		// included (its run tower is `we test`, M10b design D6).
 		return e.boundary(whatSingleFileBuild)
 	}
 	_, code := e.buildProject(path)
@@ -179,11 +167,23 @@ func checkClangVersion(path string) error {
 // inspection. On success it returns the artifact path and prints the
 // success faces; a failure is already reported, with its exit code.
 func (e *env) buildProject(dir string) (string, int) {
-	file, name, _, code := e.loadProject(dir, true)
+	file, name, mods, code := e.loadProject(dir, true)
 	if file == nil {
 		return "", code
 	}
-	ir, ni := codegen.Emit(file, name)
+	// The program face of design D1: dependency modules in graph order,
+	// the root last. The std modules drop out here — their call faces
+	// ride the emitter's own std table, their module bodies are the
+	// check stage's material, never IR.
+	prog := make([]codegen.ProgModule, 0, len(mods)+1)
+	for _, m := range mods {
+		if m.Key == "std" || strings.HasPrefix(m.Key, "std.") {
+			continue
+		}
+		prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File})
+	}
+	prog = append(prog, codegen.ProgModule{Key: "main", ID: name, File: file})
+	ir, ni := codegen.EmitProgram(codegen.ModeBuild, prog)
 	if ni != nil {
 		return "", e.boundary(ni.What)
 	}
@@ -191,12 +191,33 @@ func (e *env) buildProject(dir string) (string, int) {
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		return "", e.fsError(err)
 	}
+	artifact, code := e.compileProgram(buildDir, name, ir)
+	if code != exitOK {
+		return "", code
+	}
+	if e.verbose {
+		rel, err := filepath.Rel(dir, artifact)
+		if err != nil {
+			return "", e.fsError(err)
+		}
+		fmt.Fprintf(e.stdout, "we: built %s\n", filepath.ToSlash(rel))
+	}
+	return artifact, exitOK
+}
+
+// compileProgram writes one program's IR and the runtime sources into
+// build/ and runs the pinned clang sequence (design D6's three-step
+// order), leaving the intermediates for inspection. base names both the
+// IR file (<base>.ll) and the linked artifact (<base>); a failure is
+// already reported, with its exit code.
+func (e *env) compileProgram(buildDir, base, ir string) (string, int) {
 	for _, f := range []struct{ path, content string }{
-		{filepath.Join(buildDir, name+".ll"), ir},
+		{filepath.Join(buildDir, base+".ll"), ir},
 		{filepath.Join(buildDir, "rt-startup.c"), weruntime.StartupSource},
 		{filepath.Join(buildDir, "sched.h"), weruntime.SchedHeader},
 		{filepath.Join(buildDir, "rt-sched.c"), weruntime.SchedSource},
 		{filepath.Join(buildDir, "rt-conc.c"), weruntime.ConcSource},
+		{filepath.Join(buildDir, "rt-test.c"), weruntime.TestSource},
 		{filepath.Join(buildDir, "rt-gc.c"), weruntime.GCSource},
 		{filepath.Join(buildDir, "rt-io.c"), weruntime.IOSource},
 	} {
@@ -208,9 +229,10 @@ func (e *env) buildProject(dir string) (string, int) {
 	// objects, then one driver call that compiles the .ll and links.
 	// M9b inserts the scheduler and the wait-machine sources ahead of
 	// the collector — startup enters __we_sched_boot, so the link needs
-	// them even for a plain M8 body. -Wno-override-module keeps the
-	// no-triple IR (D4) from warning on stderr — the success faces are
-	// silent, and a warning is output.
+	// them even for a plain M8 body. M10b adds the clock face test.c owns
+	// (the scheduler reads it, so every sched link carries it).
+	// -Wno-override-module keeps the no-triple IR (D4) from warning on
+	// stderr — the success faces are silent, and a warning is output.
 	for _, c := range []struct {
 		name string
 		args []string
@@ -218,30 +240,24 @@ func (e *env) buildProject(dir string) (string, int) {
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-startup.c"), "-o", filepath.Join(buildDir, "rt-startup.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-sched.c"), "-o", filepath.Join(buildDir, "rt-sched.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-conc.c"), "-o", filepath.Join(buildDir, "rt-conc.o")}},
+		{"clang", []string{"-c", filepath.Join(buildDir, "rt-test.c"), "-o", filepath.Join(buildDir, "rt-test.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-gc.c"), "-o", filepath.Join(buildDir, "rt-gc.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-io.c"), "-o", filepath.Join(buildDir, "rt-io.o")}},
 		{"clang", []string{"-Wno-override-module",
-			filepath.Join(buildDir, name+".ll"),
+			filepath.Join(buildDir, base+".ll"),
 			filepath.Join(buildDir, "rt-startup.o"),
 			filepath.Join(buildDir, "rt-sched.o"),
 			filepath.Join(buildDir, "rt-conc.o"),
+			filepath.Join(buildDir, "rt-test.o"),
 			filepath.Join(buildDir, "rt-gc.o"),
 			filepath.Join(buildDir, "rt-io.o"),
-			"-o", filepath.Join(buildDir, name)}},
+			"-o", filepath.Join(buildDir, base)}},
 	} {
 		if code := e.runClang(c.name, c.args...); code != exitOK {
 			return "", code
 		}
 	}
-	artifact := filepath.Join(buildDir, name)
-	if e.verbose {
-		rel, err := filepath.Rel(dir, artifact)
-		if err != nil {
-			return "", e.fsError(err)
-		}
-		fmt.Fprintf(e.stdout, "we: built %s\n", filepath.ToSlash(rel))
-	}
-	return artifact, exitOK
+	return filepath.Join(buildDir, base), exitOK
 }
 
 // runClang runs one clang invocation; a non-zero exit reports one line —

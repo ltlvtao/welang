@@ -1,0 +1,16 @@
+{
+  "name": "test-boundary-panic-continues",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "test \"boom\" {\n    panic(\"kaboom\")\n}\n\ntest \"after\" {\n    assert(true, \"ok\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: boom (0ms)\n  kaboom\npass  tests/m_test.we: after (0ms)\ntotal 2, passed 1, failed 1 (0ms)\n",
+  "stderr": ""
+}

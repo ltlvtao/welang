@@ -1,0 +1,17 @@
+{
+  "name": "test-fn-cross-module",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/util.we": "pub fn three() -> Int64 {\n    return 3\n}\n",
+      "tests/x_test.we": "import std.test as st\nimport util\n\ntest \"cross call\" {\n    st.assertEqual(util.three(), 3)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/x_test.we: cross call (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

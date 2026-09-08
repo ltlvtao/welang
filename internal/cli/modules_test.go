@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -242,10 +244,11 @@ func TestLoadGraphVisibilityGate(t *testing.T) {
 	}
 }
 
-// A multi-module build stops at code generation's other-functions row: the
-// root module's import item reaches Emit's pass one now that the graph
-// checks clean (the exit-70 face, not a check failure).
-func TestLoadGraphBuildBoundary(t *testing.T) {
+// A multi-module build rides the M10b program face end to end: the
+// dependency's helper fn defines under its module-qualified symbol with
+// its slot, the root main is the entry, and the artifact lands — the
+// other-functions row this pinned retired with the widening.
+func TestLoadGraphBuild(t *testing.T) {
 	if err := checkClangVersion("clang"); err != nil {
 		t.Skipf("pinned clang unavailable: %v", err)
 	}
@@ -257,11 +260,26 @@ func TestLoadGraphBuildBoundary(t *testing.T) {
 	})
 	var out, errb bytes.Buffer
 	chdir(t, dir)
-	if code := Run([]string{"build", "."}, &out, &errb); code != exitNotImplemented {
-		t.Fatalf("want exit 70, got %d (stderr %q)", code, errb.String())
+	if code := Run([]string{"build", "."}, &out, &errb); code != exitOK {
+		t.Fatalf("want exit 0, got %d (stderr %q)", code, errb.String())
 	}
-	want := "we: functions other than main in code generation are not implemented in this reference build yet\n"
-	if errb.String() != want {
-		t.Fatalf("stderr mismatch:\nwant %q\ngot  %q", want, errb.String())
+	if errb.String() != "" {
+		t.Fatalf("clean build carries no stderr, got %q", errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build", "demo")); err != nil {
+		t.Fatalf("artifact missing: %v", err)
+	}
+	ll, err := os.ReadFile(filepath.Join(dir, "build", "demo.ll"))
+	if err != nil {
+		t.Fatalf("intermediate .ll missing: %v", err)
+	}
+	for _, want := range []string{
+		"define void @util.helper()",
+		"@slot.util.helper = global ptr @util.helper",
+		"define i32 @__we_main()",
+	} {
+		if !strings.Contains(string(ll), want) {
+			t.Fatalf("IR missing %q:\n%s", want, ll)
+		}
 	}
 }

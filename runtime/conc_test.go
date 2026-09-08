@@ -281,42 +281,42 @@ int main(void) { __we_sched_boot(we_main); return 0; }
 
 func TestM9bConcSemaphore(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "main.c": concSemHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "main.c"},
+		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": concSemHarness},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
 		"acquire=0\ntry=1\ntry2=1\ncount=0\ngreedy=1 msg=semaphore released past its constructed count\n")
 }
 
 func TestM9bConcRendezvous(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "main.c": concRendezvousHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "main.c"},
+		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": concRendezvousHarness},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
 		"sent=0\nrecv=1\nval=9\n")
 }
 
 func TestM9bConcCloseDrain(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "main.c": concCloseDrainHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "main.c"},
+		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": concCloseDrainHarness},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
 		"close=0\ndrain=1,7\nempty=0\nlate=1 msg=send on a closed channel\n")
 }
 
 func TestM9bConcCondWaitSignal(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "main.c": concCondHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "main.c"},
+		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": concCondHarness},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
 		"set\nw1\nw2\n")
 }
 
 func TestM9bConcCells(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "main.c": concCellHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "main.c"},
+		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": concCellHarness},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
 		"u1=11\nu2=12\nget=7\nread=6\natom=1\n")
 }
 
 func TestM9bConcSelect(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "main.c": concSelectHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "main.c"},
+		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": concSelectHarness},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
 		"fast-arm=1 v=2\nfed\npark-arm=0 v=9\nafter=1,8\n")
 }

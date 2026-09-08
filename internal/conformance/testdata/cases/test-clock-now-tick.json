@@ -1,0 +1,16 @@
+{
+  "name": "test-clock-now-tick",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\nimport std.time\n\ntest \"ticks\" {\n    let a = time.now()\n    advanceTime(50)\n    let b = time.now()\n    st.assertEqual(b - a, 50)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: ticks (50ms)\ntotal 1, passed 1, failed 0 (50ms)\n",
+  "stderr": ""
+}

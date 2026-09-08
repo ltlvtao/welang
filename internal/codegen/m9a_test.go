@@ -114,7 +114,7 @@ func TestM9aBodyBoundaryWhats(t *testing.T) {
 				Body: ast.Block{Items: []ast.Stmt{&ast.ExprStmt{Expr: scopeExpr(false, unit)}}},
 			},
 			mainDecl(okReturn()),
-		}}, bndOtherFns, ""},
+		}}, bndFnBody, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

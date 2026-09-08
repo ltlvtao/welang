@@ -1,0 +1,16 @@
+{
+  "name": "test-fn-args-return",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\nfn add(a: Int64, b: Int64) -> Int64 {\n    return a + b\n}\n\ntest \"add\" {\n    st.assertEqual(add(2, 3), 5)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: add (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}
