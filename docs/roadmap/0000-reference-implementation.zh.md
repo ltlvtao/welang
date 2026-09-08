@@ -7,6 +7,7 @@
 - **薄垂直优先**（用户裁决，2026-09-04）：尽早打通最小端到端 `we new` → `we check` → `we build` → `we run`——最小前端子集、LLVM IR 发射、最小 C 运行时——再按章加宽每个管线阶段。这以执行次序兑现 ADR-0002 的「从第一天起产 LLVM IR」与第 0 章完成度闭环，并换来最早的诚实端到端信号。
 - **规范先行**：每个切片实现已批准章节；无规范依据的编译器行为不存在（研发流程不变量）。
 - **一里程碑一变更**：每个里程碑是一个小而可垂直验证的 openspec 变更；其状态行由归档它的变更翻写。
+- **自举闭环**（用户裁决，2026-09-08）：bootstrap 轨（B1–B3）跟随参考里程碑之后，也可与未落的 M 行交错——B1 是关键路径，由 M10b 的多函数发射拓宽生长而来；B2 是 B1 的调试基建（fs 与 process 面先行）；LLVM 访问沿用 .ll 文本 + 子进程 clang 的既有架构，路径上没有 LLVM C API 绑定。决策载体为 ADR-0002。
 
 ## 里程碑
 
@@ -32,6 +33,9 @@
 | M13 | `dependencies` | 第 22 章 MVS 解析、`we.lock`、依赖缓存、本地 registry 夹具 | pending |
 | M14 | `lsp` | LSP 文档与 `we lsp` | pending |
 | M15 | `benchmarks` | 评测套件（First-Pass Compile Rate 等） | pending |
+| B1 | `codegen-full` | 全量代码生成：所有已批准的表达式与声明形式皆可发射——任意位置的函数（M10b 起的拓宽）、泛型单态化、闭包捕获、Dyn 派发、record 运行时布局、非字面量 String、集合内建面；codegen 未实现集合收缩至零 | pending |
+| B2 | `stdlib-real` | 编译器所需的标准库实库面：文件与目录 I/O、子进程 spawn（钉版 clang）、字符串构建、集合面背后的真数据结构 | pending |
+| B3 | `bootstrap` | 自举：编译器从 Go 移植到 We，以三段式闭环验收——Go 宿主构建编译 We 编译器，其产物再编译编译器一次，两段产物逐字节一致；conformance 套件在 We 宿主编译器下全绿 | pending |
 
 ## 执行状态规则
 

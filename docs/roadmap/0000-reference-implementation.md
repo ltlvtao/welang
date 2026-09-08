@@ -7,6 +7,7 @@ This document is the single authority for reference-toolchain execution state: t
 - **Thin vertical first** (user adjudication, 2026-09-04): reach the minimal end-to-end `we new` → `we check` → `we build` → `we run` early — a minimal front-end subset, LLVM IR emission, a minimal C runtime — then widen every pipeline stage chapter by chapter. This honors ADR-0002's "LLVM IR from day one" and chapter 0's completeness closure in execution order, and buys the earliest honest end-to-end signal.
 - **Spec first**: every slice implements ratified chapters; no compiler behavior without a spec basis (development process, invariant list).
 - **One change per milestone**: each milestone is one small, vertically verifiable openspec change; its state row below flips in the change that archives it.
+- **Self-hosting closes the loop** (user adjudication, 2026-09-08): the bootstrap track (B1–B3) follows the reference milestones and may interleave with the pending M rows — B1 is the critical path and grows out of M10b's multi-function widening; B2 is B1's debugging infrastructure (fs and process faces first); LLVM access rides the existing .ll-text-plus-subprocess-clang architecture, so no LLVM C-API binding sits on the path. ADR-0002 carries the decision.
 
 ## Milestones
 
@@ -32,6 +33,9 @@ This document is the single authority for reference-toolchain execution state: t
 | M13 | `dependencies` | Chapter 22 MVS resolution, `we.lock`, the dependency cache, a local registry fixture | pending |
 | M14 | `lsp` | The LSP document and `we lsp` | pending |
 | M15 | `benchmarks` | The evaluation suite (First-Pass Compile Rate and its siblings) | pending |
+| B1 | `codegen-full` | Full code generation: every ratified expression and declaration form emits — functions in every position (the widening M10b starts), generics monomorphization, closure captures, Dyn dispatch, runtime layouts for records, Strings beyond literals, and the collection builtin faces; the codegen not-implemented set reaches zero | pending |
+| B2 | `stdlib-real` | The standard-library breadth a compiler needs: file and directory I/O, process spawning (the pinned clang), string building, and real data structures behind the collection faces | pending |
+| B3 | `bootstrap` | Self-hosting: the compiler ported from Go to We, accepted by the three-stage closure — the Go-hosted build compiles the We compiler, its output compiles the compiler again, and the two outputs are byte-identical; the conformance suite is green under the We-hosted compiler | pending |
 
 ## Execution state rules
 
