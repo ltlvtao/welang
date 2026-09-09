@@ -101,3 +101,5 @@
   验证：记忆回写；提交草案就绪；未提交状态确认
 
   完成记录（2026-09-09）：project-overview.md 增 M12 全量条（四裁决、四塔机制、13 披露总账、七探针、conformance 641→674）+ MEMORY.md 索引行更新（M0–M12 已归档、M12 提交候用户明示、下一里程碑 M13 dependencies）。提交信息草案呈报（`Land M12 ffi: chapter 19 foreign blocks and native linkage`），**候用户明示**。未提交状态确认：git status = 12 M + untracked（ffi 黄金 33 + m12_test/ffi_test + 本归档目录）；refr/ 零触碰。M11 归档件提交对账追加句（2026-09-09-fmt-vet-doc/tasks.md）随本变更提交带走（M10c 先例形）。
+
+  提交对账：**b26f385** `Land M12 ffi: chapter 19 foreign blocks and native linkage`——53 文件 +2363/−81；`git log -1 --format='%(trailers)'` 空（无署名 trailer）；staged 集零 refr/ 命中（pre-commit 钩子同拦）；push origin main `4bc15e3..b26f385`、fetch 后 local/remote 一致。本句归档后追加，随 M13 变更提交带走（M10c/M11 先例形）。

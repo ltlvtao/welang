@@ -1,0 +1,34 @@
+{
+  "name": "check-deps-e2005-cache",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nsome = \"^1.2.0\"\n",
+      "src/main.we": "import some.lib.util\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let _ = util.answer()\n    return Ok(())\n}\n",
+      "we.lock": "# We lockfile — machine-written by resolution; commit it, do not edit.\n\n[[package]]\nname = \"some\"\nversion = \"1.2.0\"\ndigest = \"sha256-c941aa369df38186d84ac9515bbf67a7c2694ca29594e111778254a5618413b3\"\n",
+      "registry/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+      "registry/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 42\n}\n",
+      "cache/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+      "cache/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 99\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry"
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.lock:1:1: error[E2005]: lockfile integrity mismatch — cached \"some\" 1.2.0 hashes to sha256-433688e99b4c77269e4dad54c9720cec73a3b189af9ed5582e64461a9d91d85f, we.lock records sha256-c941aa369df38186d84ac9515bbf67a7c2694ca29594e111778254a5618413b3\n",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nsome = \"^1.2.0\"\n",
+    "src/main.we": "import some.lib.util\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let _ = util.answer()\n    return Ok(())\n}\n",
+    "we.lock": "# We lockfile — machine-written by resolution; commit it, do not edit.\n\n[[package]]\nname = \"some\"\nversion = \"1.2.0\"\ndigest = \"sha256-c941aa369df38186d84ac9515bbf67a7c2694ca29594e111778254a5618413b3\"\n",
+    "registry/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+    "registry/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 42\n}\n",
+    "cache/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+    "cache/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 99\n}\n"
+  }
+}

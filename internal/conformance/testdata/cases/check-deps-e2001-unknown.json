@@ -1,0 +1,22 @@
+{
+  "name": "check-deps-e2001-unknown",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nleft-pad = \"^1.0.0\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "registry/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+      "registry/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 42\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry"
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E2001]: unknown dependency — \"left-pad\" answers to no package in any source\n"
+}

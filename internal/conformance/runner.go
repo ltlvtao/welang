@@ -23,11 +23,13 @@ type Setup struct {
 	Files map[string]string `json:"files,omitempty"`
 }
 
-// Case is one golden CLI case.
+// Case is one golden CLI case. Env sets environment variables for the run
+// (restored afterwards); relative values resolve against the workdir.
 type Case struct {
 	Name   string            `json:"name"`
 	Args   []string          `json:"args"`
 	Setup  *Setup            `json:"setup,omitempty"`
+	Env    map[string]string `json:"env,omitempty"`
 	Exit   int               `json:"exit"`
 	Stdout string            `json:"stdout"`
 	Stderr string            `json:"stderr"`
@@ -53,6 +55,8 @@ func Execute(c *Case, workdir string) Result {
 	if err := os.Chdir(workdir); err != nil {
 		panic(err)
 	}
+	prevEnv := applyEnv(c.Env)
+	defer restoreEnv(prevEnv)
 	for _, d := range c.Setup.GetDirs() {
 		if err := os.MkdirAll(filepath.FromSlash(d), 0o755); err != nil {
 			panic(err)
@@ -110,6 +114,51 @@ func (s *Setup) SortedFiles() []SetupFile {
 		files = append(files, SetupFile{Path: p, Content: s.Files[p]})
 	}
 	return files
+}
+
+// envPrev remembers one variable's prior state, absent included.
+type envPrev struct {
+	key string
+	val string
+	had bool
+}
+
+// applyEnv sets the case's environment variables in sorted key order and
+// returns what to restore.
+func applyEnv(env map[string]string) []envPrev {
+	if len(env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	prev := make([]envPrev, 0, len(keys))
+	for _, k := range keys {
+		old, had := os.LookupEnv(k)
+		prev = append(prev, envPrev{key: k, val: old, had: had})
+		if err := os.Setenv(k, env[k]); err != nil {
+			panic(err)
+		}
+	}
+	return prev
+}
+
+// restoreEnv puts every remembered variable back, unsetting ones that were
+// absent before the run.
+func restoreEnv(prev []envPrev) {
+	for _, p := range prev {
+		var err error
+		if p.had {
+			err = os.Setenv(p.key, p.val)
+		} else {
+			err = os.Unsetenv(p.key)
+		}
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 // LoadCases reads every case file in dir, sorted by name.

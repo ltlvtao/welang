@@ -104,7 +104,7 @@ func TestM10cManifestTestTable(t *testing.T) {
 			writeTree(t, dir, map[string]string{"we.toml": base + tc.toml})
 			chdir(t, dir)
 			e, _, errb := newCliEnv()
-			m, code := e.loadManifest(".", false)
+			m, _, code := e.loadManifest(".", false)
 			if tc.wantErr != "" {
 				if code != exitDiagnostic {
 					t.Fatalf("want diagnostic exit, got %d", code)

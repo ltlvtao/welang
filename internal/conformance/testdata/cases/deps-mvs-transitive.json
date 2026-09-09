@@ -1,0 +1,41 @@
+{
+  "name": "deps-mvs-transitive",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\na = \"^1.0.0\"\nb = \"~1.2.0\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "registry/a/1.0.0/we.toml": "name = \"a\"\nversion = \"1.0.0\"\ntype = \"library\"\n\n[dependencies]\nb = \">=1.1.0\"\n",
+      "registry/a/1.0.0/src/lib/a.we": "pub fn mark() -> Int64 {\n    return 1\n}\n",
+      "registry/b/1.1.0/we.toml": "name = \"b\"\nversion = \"1.1.0\"\ntype = \"library\"\n",
+      "registry/b/1.1.0/src/lib/b.we": "pub fn mark() -> Int64 {\n    return 11\n}\n",
+      "registry/b/1.2.0/we.toml": "name = \"b\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+      "registry/b/1.2.0/src/lib/b.we": "pub fn mark() -> Int64 {\n    return 12\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry"
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\na = \"^1.0.0\"\nb = \"~1.2.0\"\n",
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "registry/a/1.0.0/we.toml": "name = \"a\"\nversion = \"1.0.0\"\ntype = \"library\"\n\n[dependencies]\nb = \">=1.1.0\"\n",
+    "registry/a/1.0.0/src/lib/a.we": "pub fn mark() -> Int64 {\n    return 1\n}\n",
+    "registry/b/1.1.0/we.toml": "name = \"b\"\nversion = \"1.1.0\"\ntype = \"library\"\n",
+    "registry/b/1.1.0/src/lib/b.we": "pub fn mark() -> Int64 {\n    return 11\n}\n",
+    "registry/b/1.2.0/we.toml": "name = \"b\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+    "registry/b/1.2.0/src/lib/b.we": "pub fn mark() -> Int64 {\n    return 12\n}\n",
+    "we.lock": "# We lockfile — machine-written by resolution; commit it, do not edit.\n\n[[package]]\nname = \"a\"\nversion = \"1.0.0\"\ndigest = \"sha256-d76986cafcc1cd086a44aec1beea45162d86c67c4a13abd877aeddc77bad325c\"\n\n[[package]]\nname = \"b\"\nversion = \"1.2.0\"\ndigest = \"sha256-9e4a476d79cbf2dc6d86008710966802d52eca3524e58f7e9c24e4c6c9607255\"\n",
+    "cache/a/1.0.0/we.toml": "name = \"a\"\nversion = \"1.0.0\"\ntype = \"library\"\n\n[dependencies]\nb = \">=1.1.0\"\n",
+    "cache/a/1.0.0/src/lib/a.we": "pub fn mark() -> Int64 {\n    return 1\n}\n",
+    "cache/b/1.2.0/we.toml": "name = \"b\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+    "cache/b/1.2.0/src/lib/b.we": "pub fn mark() -> Int64 {\n    return 12\n}\n"
+  }
+}

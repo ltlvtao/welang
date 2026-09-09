@@ -1,0 +1,24 @@
+{
+  "name": "check-deps-e2002-ceiling",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\na = \"^1.0.0\"\nb = \"=1.0.0\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "registry/a/1.0.0/we.toml": "name = \"a\"\nversion = \"1.0.0\"\ntype = \"library\"\n\n[dependencies]\nb = \"^2.0.0\"\n",
+      "registry/a/1.0.0/src/lib/a.we": "pub fn mark() -> Int64 {\n    return 1\n}\n",
+      "registry/b/2.0.0/we.toml": "name = \"b\"\nversion = \"2.0.0\"\ntype = \"library\"\n",
+      "registry/b/2.0.0/src/lib/b.we": "pub fn mark() -> Int64 {\n    return 20\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry"
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E2002]: unsatisfiable dependency constraint — package \"b\" resolves to 2.0.0, violating \"=1.0.0\" required along root; the pick was raised by \"^2.0.0\" from a@1.0.0\n"
+}

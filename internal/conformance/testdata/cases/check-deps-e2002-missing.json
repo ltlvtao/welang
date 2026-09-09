@@ -1,0 +1,22 @@
+{
+  "name": "check-deps-e2002-missing",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nc = \">=1.5.0\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "registry/c/1.4.0/we.toml": "name = \"c\"\nversion = \"1.4.0\"\ntype = \"library\"\n",
+      "registry/c/1.4.0/src/lib/c.we": "pub fn mark() -> Int64 {\n    return 1\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry"
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E2002]: unsatisfiable dependency constraint — package \"c\" resolves to 1.5.0, which no source holds (demanded by \">=1.5.0\" from root)\n"
+}

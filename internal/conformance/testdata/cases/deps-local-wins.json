@@ -1,0 +1,23 @@
+{
+  "name": "deps-local-wins",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nutil = \"^1.0.0\"\n",
+      "src/main.we": "import std.io\nimport util.helper\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = helper.who()\n    if n == 1 {\n        io.println(\"local\")\n    } else {\n        io.println(\"cache\")\n    }\n    return Ok(())\n}\n",
+      "src/util/helper.we": "pub fn who() -> Int64 {\n    return 1\n}\n",
+      "registry/util/1.0.0/we.toml": "name = \"util\"\nversion = \"1.0.0\"\ntype = \"library\"\n",
+      "registry/util/1.0.0/src/helper.we": "pub fn who() -> Int64 {\n    return 2\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry"
+  },
+  "exit": 0,
+  "stdout": "local\n",
+  "stderr": ""
+}

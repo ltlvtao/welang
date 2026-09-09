@@ -50,12 +50,12 @@ type docModule struct {
 // module plus the root graph's non-std modules (the build face's own
 // filter — std.* documents nothing of the project).
 func (e *env) runDocProject(dir string) int {
-	manifest, file, _, mods, code := e.loadProject(dir, false)
+	manifest, file, _, mods, depRoots, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
 	}
 	rootPath := filepath.Join(dir, "src", "main.we")
-	found, code := e.projectAdvisories(dir, rootPath, file, mods)
+	found, code := e.projectAdvisories(dir, rootPath, file, mods, depRoots)
 	if code != exitOK {
 		return code
 	}

@@ -10,7 +10,7 @@
       "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 1,
   "stdout": "",
-  "stderr": "we: pipeline commands with a non-empty dependency set (chapter 22) are not implemented in this reference build yet\n"
+  "stderr": "we.toml:1:1: error[E2003]: invalid version constraint — \"1.2.3\" for \"foo\" is not one of the four forms ^ ~ >= = with a three-part version operand\n"
 }

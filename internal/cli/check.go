@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ltlvtao/welang/internal/ast"
+	"github.com/ltlvtao/welang/internal/deps"
 	"github.com/ltlvtao/welang/internal/diag"
 	"github.com/ltlvtao/welang/internal/parser"
 	"github.com/ltlvtao/welang/internal/typecheck"
@@ -44,11 +45,11 @@ func (e *env) runCheck(path string, info os.FileInfo) int {
 // layer after the clean check (M11 design D5): warnings report and the
 // check still passes; a promoted finding stops exactly as an error does.
 func (e *env) runCheckProject(dir string) int {
-	manifest, file, _, mods, code := e.loadProject(dir, false)
+	manifest, file, _, mods, depRoots, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
 	}
-	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods)
+	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods, depRoots)
 	if code != exitOK {
 		return code
 	}
@@ -106,11 +107,20 @@ func (e *env) loadFile(path string) (*ast.File, int) {
 // and before any source work (design D2). check passes false and keeps
 // its check-through behavior. The dependency boundary applies to every
 // pipeline command alike (chapter 22 R5) and fires first when both are
-// present.
-func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.File, string, []typecheck.Module, int) {
-	manifest, code := e.loadManifest(dir, artifact)
+// present. The dependency roots (package name -> acquired cache
+// directory) come back for the advisory layer's own graph walks.
+func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.File, string, []typecheck.Module, map[string]string, int) {
+	manifest, table, code := e.loadManifest(dir, artifact)
 	if code != exitOK {
-		return nil, nil, "", nil, code
+		return nil, nil, "", nil, nil, code
+	}
+	// The dependency face (chapter 22 R5): every pipeline command resolves
+	// and acquires after the manifest's validations and before any source
+	// work. fmt and clean never reach here — fmt validates the declared
+	// form but never resolves (design D6), clean reads no manifest.
+	depRoots, code := e.prepareDeps(dir, table)
+	if code != exitOK {
+		return nil, nil, "", nil, nil, code
 	}
 	root := filepath.Join(dir, "src", "main.we")
 	src, err := os.ReadFile(root)
@@ -118,56 +128,57 @@ func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.Fi
 		e.report(diag.Error("E1305", "main function signature violation — the root module "+root+" does not exist; declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type").
 			At(root, 1, 1).
 			WithHelp("Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type."))
-		return nil, nil, "", nil, exitDiagnostic
+		return nil, nil, "", nil, nil, exitDiagnostic
 	}
 	file, d, ni := parser.Parse(root, src)
 	if d != nil {
 		e.report(*d)
-		return nil, nil, "", nil, exitDiagnostic
+		return nil, nil, "", nil, nil, exitDiagnostic
 	}
 	if ni != nil {
-		return nil, nil, "", nil, e.boundary(ni.What)
+		return nil, nil, "", nil, nil, e.boundary(ni.What)
 	}
 	// The module graph from the root (chapter 15): depth-first over the
 	// imports in source order, then the post-order the type stage takes.
-	mods, code := e.loadGraph(dir, "main", root, file)
+	mods, code := e.loadGraph(dir, "main", root, file, depRoots)
 	if code != exitOK {
-		return nil, nil, "", nil, code
+		return nil, nil, "", nil, nil, code
 	}
 	td, tni := typecheck.CheckProject(file, root, mods)
 	if td != nil {
 		e.report(*td)
-		return nil, nil, "", nil, exitDiagnostic
+		return nil, nil, "", nil, nil, exitDiagnostic
 	}
 	if tni != nil {
-		return nil, nil, "", nil, e.boundary(tni.What)
+		return nil, nil, "", nil, nil, e.boundary(tni.What)
 	}
-	return manifest, file, manifest["name"], mods, exitOK
+	return manifest, file, manifest["name"], mods, depRoots, exitOK
 }
 
 // loadManifest reads and validates the project manifest (design D2's
 // pinned order: the three keys, then the dependency face, then — for a
 // caller with an artifact face — the library boundary). It returns the
-// parsed keys; a non-empty map means the validations passed and the
-// failure is already reported otherwise. The test runner shares the
-// validations but keeps going for a library project (M10b design D6:
-// its executable is the synthesized harness, not the artifact kind's).
-func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
+// parsed keys and the validated dependency table; a non-empty map means
+// the validations passed and the failure is already reported otherwise.
+// The test runner shares the validations but keeps going for a library
+// project (M10b design D6: its executable is the synthesized harness,
+// not the artifact kind's).
+func (e *env) loadManifest(dir string, artifact bool) (map[string]string, deps.Table, int) {
 	raw, err := os.ReadFile(filepath.Join(dir, "we.toml"))
 	if err != nil {
 		e.report(diag.Error("E1905", "project manifest missing or incomplete — no we.toml in the project directory; create we.toml with the name, version, and type keys, or run we new to write the skeleton").
 			At("we.toml", 1, 1).
 			WithHelp("Create we.toml with the name, version, and type keys, or run we new to write the skeleton."))
-		return nil, exitDiagnostic
+		return nil, nil, exitDiagnostic
 	}
-	manifest, deps, bare := parseManifest(string(raw))
+	manifest, bare := parseManifest(string(raw))
 	for _, key := range []string{"name", "version", "type"} {
 		if manifest[key] == "" {
 			e.report(diag.Error("E1905", fmt.Sprintf(
 				"project manifest missing or incomplete — the manifest's %q key is missing; create we.toml with the name, version, and type keys, or run we new to write the skeleton", key)).
 				At("we.toml", 1, 1).
 				WithHelp("Create we.toml with the name, version, and type keys, or run we new to write the skeleton."))
-			return nil, exitDiagnostic
+			return nil, nil, exitDiagnostic
 		}
 	}
 	if !validProjectName(manifest["name"]) {
@@ -175,21 +186,21 @@ func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
 			"invalid project name — %q is not lowercase letters, digits, and hyphens; use chapter 1's naming convention", manifest["name"])).
 			At("we.toml", 1, 1).
 			WithHelp("Use lowercase letters, digits, and hyphens per chapter 1's naming convention."))
-		return nil, exitDiagnostic
+		return nil, nil, exitDiagnostic
 	}
 	if !validVersion(manifest["version"]) {
 		e.report(diag.Error("E2004", fmt.Sprintf(
 			"invalid version value — %q is not three dot-separated non-negative integers without leading zeros; write the version as major.minor.patch", manifest["version"])).
 			At("we.toml", 1, 1).
 			WithHelp("Write the version as three integers, major.minor.patch, without leading zeros."))
-		return nil, exitDiagnostic
+		return nil, nil, exitDiagnostic
 	}
 	if manifest["type"] != "executable" && manifest["type"] != "library" {
 		e.report(diag.Error("E1903", fmt.Sprintf(
 			"invalid toolchain configuration value — the \"type\" key holds %q; its legal values are executable and library", manifest["type"])).
 			At("we.toml", 1, 1).
 			WithHelp("Set the named key to one of the legal values the diagnostic lists."))
-		return nil, exitDiagnostic
+		return nil, nil, exitDiagnostic
 	}
 	// The [test] table's one pinned key (M10c design D9): a present
 	// explore-iterations must be a positive integer or the run is E1903 —
@@ -204,7 +215,7 @@ func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
 				"invalid toolchain configuration value — explore-iterations must be a positive integer, got %s", v)).
 				At("we.toml", 1, 1).
 				WithHelp("Set explore-iterations to a positive integer."))
-			return nil, exitDiagnostic
+			return nil, nil, exitDiagnostic
 		}
 	}
 	// The [vet] table's three pinned keys (M11 design D5): W1910, W1911,
@@ -226,21 +237,37 @@ func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
 				"invalid toolchain configuration value — vet.%s must be \"warning\", \"error\", or \"ignore\", got %s", vetCode, v)).
 				At("we.toml", 1, 1).
 				WithHelp("Set the named key to one of the legal values the diagnostic lists."))
-			return nil, exitDiagnostic
+			return nil, nil, exitDiagnostic
 		}
 	}
-	// Chapter 22 R5: acquisition precedes module resolution, so a non-empty
-	// [dependencies] set stops every pipeline command here — an empty or
-	// absent section is trivially satisfied.
-	if deps > 0 {
-		return nil, e.boundary(whatNonEmptyDeps)
+	// Chapter 22 R1: every [dependencies] entry is a legal package name
+	// (E2006) and its value one of the four constraint forms (E2003) — the
+	// declared form holds for every reader of the manifest, fmt included.
+	// Resolution and acquisition (R3–R5) are the pipeline loader's face.
+	table, fault := deps.ReadDeps(manifest)
+	if fault != nil {
+		if fault.Code == "E2006" {
+			detail := fmt.Sprintf("%q is not lowercase letters, digits, and hyphens; use chapter 1's package-name convention", fault.Key)
+			if fault.Key == "std" {
+				detail = `"std" is reserved; the standard library is built in and never a dependency`
+			}
+			e.report(diag.Error("E2006", "invalid dependency name — "+detail).
+				At("we.toml", 1, 1).
+				WithHelp("Use a lowercase-hyphenated package name; import the standard library directly, for std needs no declaration."))
+		} else {
+			e.report(diag.Error("E2003", fmt.Sprintf(
+				"invalid version constraint — %q for %q is not one of the four forms ^ ~ >= = with a three-part version operand", fault.Val, fault.Key)).
+				At("we.toml", 1, 1).
+				WithHelp("Write the constraint in one of the four forms with a three-part version operand, such as ^1.4.0."))
+		}
+		return nil, nil, exitDiagnostic
 	}
 	// The artifact kind is the manifest's word: build/run stop before any
 	// source work for a library project (design D2's pinned order).
 	if artifact && manifest["type"] == "library" {
-		return nil, e.boundary(whatLibraryArtifacts)
+		return nil, nil, e.boundary(whatLibraryArtifacts)
 	}
-	return manifest, exitOK
+	return manifest, table, exitOK
 }
 
 // The loader's diagnostic helps — the registry's remediations, quoted per
@@ -253,18 +280,23 @@ const (
 // loadGraph walks the project's import graph depth-first from the root
 // (design D9): every import resolves by the path mapping (a.b.c to
 // src/a/b/c.we) or, for the std segment, from the compiler-provided
-// registry (never the file system — chapter 15 R1); a missing file or
-// unknown std path is E1302 (the message names the expected path, or the
-// std form when nothing maps), a back edge is E1301 (three-color marking;
-// the message renders the cycle), and each first-visited module is read
-// and parsed in discovery order.
+// registry (never the file system — chapter 15 R1); a package segment
+// that names an acquired dependency resolves from its cache root when no
+// local file holds (chapter 22 R4's cache leg — the local src/ tree wins
+// where both hold); a missing file or unknown std path is E1302 (the
+// message names the expected path, whichever leg it is, or the std form
+// when nothing maps), a back edge is E1301 (three-color marking; the
+// message renders the cycle), and each first-visited module is read and
+// parsed in discovery order.
 // rootKey names the starting module — "main" for the pipeline root, a
-// test module's own dotted key for M10b's per-test roots. It returns
-// the dependency modules in post-order — the imported before the
-// importing, chapter 15's deterministic initialization order — with the
-// root excluded (the caller checks it last); a non-zero code means the
-// failure is already reported.
-func (e *env) loadGraph(dir, rootKey, rootPath string, root *ast.File) ([]typecheck.Module, int) {
+// test module's own dotted key for M10b's per-test roots. depDirs maps
+// the manifest's declared packages to their acquired cache roots
+// (prepareDeps's answer; nil when the manifest declared no dependencies).
+// It returns the dependency modules in post-order — the imported before
+// the importing, chapter 15's deterministic initialization order — with
+// the root excluded (the caller checks it last); a non-zero code means
+// the failure is already reported.
+func (e *env) loadGraph(dir, rootKey, rootPath string, root *ast.File, depDirs map[string]string) ([]typecheck.Module, int) {
 	const (
 		white = 0
 		gray  = 1
@@ -329,10 +361,26 @@ func (e *env) loadGraph(dir, rootKey, rootPath string, root *ast.File) ([]typech
 			}
 			rel := filepath.ToSlash(filepath.Join(imp.Path...) + ".we")
 			depPath := filepath.Join(dir, "src", rel)
+			want := "src/" + rel
+			found := true
 			if _, err := os.Stat(depPath); err != nil {
+				// Chapter 22 R4's cache leg: an import whose first segment
+				// names an acquired dependency resolves from its cache root
+				// — only on the local miss, so the local src/ tree wins
+				// where both hold. The E1302 message names the expected
+				// path, whichever leg it is.
+				found = false
+				if cachePath, ok := depModulePath(depDirs, depKey); ok {
+					depPath, want = cachePath, cachePath
+					if _, err := os.Stat(depPath); err == nil {
+						found = true
+					}
+				}
+			}
+			if !found {
 				e.report(diag.Error("E1302", fmt.Sprintf(
-					"module not found — the import %q expects the module at src/%s and no file is there; create the file at the expected path, fix the path spelling, or add the dependency to the cache",
-					depKey, rel)).
+					"module not found — the import %q expects the module at %s and no file is there; create the file at the expected path, fix the path spelling, or add the dependency to the cache",
+					depKey, want)).
 					At(path, imp.PathLine, imp.PathCol).
 					WithHelp(helpE1302))
 				return exitDiagnostic
@@ -368,14 +416,11 @@ func (e *env) loadGraph(dir, rootKey, rootPath string, root *ast.File) ([]typech
 // with top-level ones. Values render bare in the map whether quoted or
 // not (the M10c face: `5` and `"5"` read alike); bare marks the keys
 // whose value carried no surrounding quotes, for gates that want the
-// TOML string face — a bare token is no TOML scalar at all. It also
-// counts the keys inside a [dependencies] section (chapter 22 R5's face:
-// any key there is a non-empty dependency set). Richer TOML shapes
-// arrive with the project chapter's own milestone.
-func parseManifest(raw string) (map[string]string, int, map[string]bool) {
+// TOML string face — a bare token is no TOML scalar at all. Richer TOML
+// shapes arrive with the project chapter's own milestone.
+func parseManifest(raw string) (map[string]string, map[string]bool) {
 	m := map[string]string{}
 	bare := map[string]bool{}
-	deps := 0
 	section := ""
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
@@ -400,12 +445,9 @@ func parseManifest(raw string) (map[string]string, int, map[string]bool) {
 			if !quoted {
 				bare[key] = true
 			}
-			if section == "dependencies" {
-				deps++
-			}
 		}
 	}
-	return m, deps, bare
+	return m, bare
 }
 
 // validVersion reports whether v is three dot-separated non-negative

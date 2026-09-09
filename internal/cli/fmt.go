@@ -23,7 +23,10 @@ import (
 func (e *env) runFmt(path string, info os.FileInfo) int {
 	var files []string
 	if info.IsDir() {
-		if _, code := e.loadManifest(path, false); code != exitOK {
+		// The manifest gate carries the dependency face's declared-form
+		// validations (they hold for every reader) — but fmt never
+		// resolves: the table comes back unread (design D6).
+		if _, _, code := e.loadManifest(path, false); code != exitOK {
 			return code
 		}
 		var err error

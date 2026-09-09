@@ -1,0 +1,16 @@
+{
+  "name": "check-deps-e2006-std",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nstd = \"^1.0.0\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E2006]: invalid dependency name — \"std\" is reserved; the standard library is built in and never a dependency\n"
+}

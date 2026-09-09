@@ -1,0 +1,30 @@
+{
+  "name": "lock-satisfies-offline",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nsome = \"^1.2.0\"\n",
+      "src/main.we": "import some.lib.util\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let _ = util.answer()\n    return Ok(())\n}\n",
+      "we.lock": "# We lockfile — machine-written by resolution; commit it, do not edit.\n\n[[package]]\nname = \"some\"\nversion = \"1.2.0\"\ndigest = \"sha256-c941aa369df38186d84ac9515bbf67a7c2694ca29594e111778254a5618413b3\"\n",
+      "cache/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+      "cache/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 42\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry-missing"
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nsome = \"^1.2.0\"\n",
+    "src/main.we": "import some.lib.util\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let _ = util.answer()\n    return Ok(())\n}\n",
+    "we.lock": "# We lockfile — machine-written by resolution; commit it, do not edit.\n\n[[package]]\nname = \"some\"\nversion = \"1.2.0\"\ndigest = \"sha256-c941aa369df38186d84ac9515bbf67a7c2694ca29594e111778254a5618413b3\"\n",
+    "cache/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+    "cache/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 42\n}\n"
+  }
+}

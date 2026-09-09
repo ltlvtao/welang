@@ -1,0 +1,22 @@
+{
+  "name": "build-deps-run",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nsome = \"^1.2.0\"\n",
+      "src/main.we": "import std.io\nimport some.lib.util\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = util.answer()\n    if n == 42 {\n        io.println(\"dep\")\n    } else {\n        io.println(\"other\")\n    }\n    return Ok(())\n}\n",
+      "registry/some/1.2.0/we.toml": "name = \"some\"\nversion = \"1.2.0\"\ntype = \"library\"\n",
+      "registry/some/1.2.0/src/lib/util.we": "pub fn answer() -> Int64 {\n    return 42\n}\n"
+    }
+  },
+  "env": {
+    "WE_CACHE": "cache",
+    "WE_REGISTRY": "registry"
+  },
+  "exit": 0,
+  "stdout": "dep\n",
+  "stderr": ""
+}

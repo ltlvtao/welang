@@ -177,12 +177,22 @@ func (e *env) runTest(path string, info os.FileInfo) int {
 // once across the roots. Any diagnostic the compile chain reports is
 // the test compile's own exit 2 — a compile failure never runs a test.
 func (e *env) runTestProject(dir string) int {
-	manifestKeys, code := e.loadManifest(dir, false)
+	manifestKeys, table, code := e.loadManifest(dir, false)
 	if code != exitOK {
 		if code == exitDiagnostic {
 			return exitCompileFailure
 		}
 		return code // the dependency boundary (chapter 22 R5) passes through
+	}
+	// The dependency face resolves here too, before any source work
+	// (chapter 22 R5, design D6); its diagnostic is the test compile's
+	// own exit 2 — a compile failure never runs a test.
+	depRoots, code := e.prepareDeps(dir, table)
+	if code != exitOK {
+		if code == exitDiagnostic {
+			return exitCompileFailure
+		}
+		return code
 	}
 	// The exploration count resolves once the manifest face has spoken
 	// (M10c design D9): flag > [test].explore-iterations > 100.
@@ -214,7 +224,7 @@ func (e *env) runTestProject(dir string) int {
 	for _, f := range files {
 		key := strings.ReplaceAll(strings.TrimSuffix(f.Path, ".we"), "/", ".")
 		rootPath := filepath.Join(dir, filepath.FromSlash(f.Path))
-		deps, code := e.loadGraph(dir, key, rootPath, f.File)
+		deps, code := e.loadGraph(dir, key, rootPath, f.File, depRoots)
 		if code != exitOK {
 			if code == exitDiagnostic {
 				return exitCompileFailure

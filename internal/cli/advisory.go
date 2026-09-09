@@ -48,7 +48,7 @@ func (e *env) advise(manifest map[string]string, found []diag.Diagnostic) (promo
 // golden pins; disclosed). A test module that fails to parse or load
 // reports and stops the stage: the advisory layer never widens a
 // project's green face silently.
-func (e *env) projectAdvisories(dir, rootPath string, root *ast.File, mods []typecheck.Module) ([]diag.Diagnostic, int) {
+func (e *env) projectAdvisories(dir, rootPath string, root *ast.File, mods []typecheck.Module, depDirs map[string]string) ([]diag.Diagnostic, int) {
 	found := typecheck.AdvisoriesProject(root, rootPath, mods)
 	files, d, what, werr := collectTests(dir)
 	if d != nil {
@@ -64,7 +64,7 @@ func (e *env) projectAdvisories(dir, rootPath string, root *ast.File, mods []typ
 	for _, f := range files {
 		key := strings.ReplaceAll(strings.TrimSuffix(f.Path, ".we"), "/", ".")
 		testPath := filepath.Join(dir, filepath.FromSlash(f.Path))
-		deps, code := e.loadGraph(dir, key, testPath, f.File)
+		deps, code := e.loadGraph(dir, key, testPath, f.File, depDirs)
 		if code != exitOK {
 			return nil, code
 		}

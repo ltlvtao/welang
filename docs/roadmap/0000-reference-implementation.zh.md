@@ -30,7 +30,7 @@
 | M10c | `testing-explore` | 第 21 章探索：交错探针、E1901/E1902 守卫、偏序归约 | done 2026-09-09 |
 | M11 | `fmt-vet-doc` | 第 21 章格式化器（行保结构重排、项目面 = 项目下全部 .we 排除 build/）、advisory 层（W1910–W1912、[vet] 姿态全管线）、we vet、we doc（pub-only 页面、--check） | done 2026-09-09 |
 | M12 | `ffi` | 第 19 章 foreign 块端到端：parser 产生式（E1701–E1704）、跨界集检查器（E1705–E1707；byres/opaque/效果走既有机器）、codegen declare + 位置 C ABI（String 为 (ptr, len) 双标量展开、Never 为 void + unreachable）、native/ 构建时链接 + llvm-nm 符号查证（E1906、工具链 gate 扩查 llvm-nm） | done 2026-09-09 |
-| M13 | `dependencies` | 第 22 章 MVS 解析、`we.lock`、依赖缓存、本地 registry 夹具 | pending |
+| M13 | `dependencies` | 第 22 章 MVS 解析、`we.lock`、依赖缓存、本地 registry 夹具 | done |
 | M14 | `lsp` | LSP 文档与 `we lsp` | pending |
 | M15 | `benchmarks` | 评测套件（First-Pass Compile Rate 等） | pending |
 | B1 | `codegen-full` | 全量代码生成：所有已批准的表达式与声明形式皆可发射——任意位置的函数（M10b 起的拓宽）、泛型单态化、闭包捕获、Dyn 派发、record 运行时布局、非字面量 String、集合内建面；codegen 未实现集合收缩至零 | pending |

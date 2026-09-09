@@ -1,0 +1,16 @@
+{
+  "name": "check-deps-e2003-op",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[dependencies]\nfoo = \">1.2.3\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E2003]: invalid version constraint — \">1.2.3\" for \"foo\" is not one of the four forms ^ ~ >= = with a three-part version operand\n"
+}

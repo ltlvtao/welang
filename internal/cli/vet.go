@@ -41,11 +41,11 @@ func (e *env) runVet(path string, info os.FileInfo) int {
 // whole advisory surface — the source graph's root, then every test
 // module — under the manifest's postures.
 func (e *env) runVetProject(dir string) int {
-	manifest, file, _, mods, code := e.loadProject(dir, false)
+	manifest, file, _, mods, depRoots, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
 	}
-	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods)
+	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods, depRoots)
 	if code != exitOK {
 		return code
 	}

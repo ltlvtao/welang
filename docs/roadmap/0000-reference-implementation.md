@@ -30,7 +30,7 @@ This document is the single authority for reference-toolchain execution state: t
 | M10c | `testing-explore` | Chapter 21 exploration: interleaving probes, E1901/E1902 guards, partial-order reduction | done 2026-09-09 |
 | M11 | `fmt-vet-doc` | Chapter 21 formatter (line-preserving rewrite, project face over every .we less build/), the advisory layer (W1910-W1912, [vet] postures across the pipeline), we vet, we doc (pub-only pages, --check) | done 2026-09-09 |
 | M12 | `ffi` | Chapter 19 foreign blocks end to end: parser forms (E1701-E1704), crossing-set checker (E1705-E1707; byres/opaque/effects through the existing machines), codegen declares with the positional C ABI (String as a (ptr, len) two-scalar expansion, Never as void + unreachable), native/ build-time linkage with llvm-nm symbol verification (E1906, toolchain gate widened to llvm-nm) | done 2026-09-09 |
-| M13 | `dependencies` | Chapter 22 MVS resolution, `we.lock`, the dependency cache, a local registry fixture | pending |
+| M13 | `dependencies` | Chapter 22 MVS resolution, `we.lock`, the dependency cache, a local registry fixture | done |
 | M14 | `lsp` | The LSP document and `we lsp` | pending |
 | M15 | `benchmarks` | The evaluation suite (First-Pass Compile Rate and its siblings) | pending |
 | B1 | `codegen-full` | Full code generation: every ratified expression and declaration form emits — functions in every position (the widening M10b starts), generics monomorphization, closure captures, Dyn dispatch, runtime layouts for records, Strings beyond literals, and the collection builtin faces; the codegen not-implemented set reaches zero | pending |

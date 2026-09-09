@@ -20,7 +20,6 @@ import (
 const (
 	whatSingleFileBuild  = "single-file builds (spec gap; roadmap follow-up)"
 	whatLibraryArtifacts = "library artifacts (chapter 21)"
-	whatNonEmptyDeps     = "pipeline commands with a non-empty dependency set (chapter 22)"
 )
 
 // runBuild builds one project directory into build/<name> (chapter 21 R2:
@@ -207,14 +206,14 @@ func checkClangVersion(path string) error {
 // inspection. On success it returns the artifact path and prints the
 // success faces; a failure is already reported, with its exit code.
 func (e *env) buildProject(dir string) (string, int) {
-	manifest, file, name, mods, code := e.loadProject(dir, true)
+	manifest, file, name, mods, depRoots, code := e.loadProject(dir, true)
 	if file == nil {
 		return "", code
 	}
 	// The advisory layer rides before code generation (M11 design D5):
 	// warnings render and the build continues; a promoted finding stops
 	// exactly as an error does — no artifact, the run's exit 1.
-	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods)
+	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods, depRoots)
 	if code != exitOK {
 		return "", code
 	}
