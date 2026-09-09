@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "count above threshold" {
+    st.assertEqual(main.countAbove(), 2)
+}

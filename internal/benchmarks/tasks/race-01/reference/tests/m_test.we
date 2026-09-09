@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "shared counter" {
+    st.assertEqual(main.sharedCount(), 100)
+}

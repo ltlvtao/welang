@@ -32,7 +32,7 @@
 | M12 | `ffi` | 第 19 章 foreign 块端到端：parser 产生式（E1701–E1704）、跨界集检查器（E1705–E1707；byres/opaque/效果走既有机器）、codegen declare + 位置 C ABI（String 为 (ptr, len) 双标量展开、Never 为 void + unreachable）、native/ 构建时链接 + llvm-nm 符号查证（E1906、工具链 gate 扩查 llvm-nm） | done 2026-09-09 |
 | M13 | `dependencies` | 第 22 章 MVS 解析、`we.lock`、依赖缓存、本地 registry 夹具 | done |
 | M14 | `lsp` | LSP 文档与 `we lsp` | done |
-| M15 | `benchmarks` | 评测套件（First-Pass Compile Rate 等） | pending |
+| M15 | `benchmarks` | 评测套件（First-Pass Compile Rate 等）：方法论文档、18 任务种子集（参考解自证）、in-process 批次跑器（五桶判定机）、校准与黑盒测试面 | done 2026-09-09 |
 | B1 | `codegen-full` | 全量代码生成：所有已批准的表达式与声明形式皆可发射——任意位置的函数（M10b 起的拓宽）、泛型单态化、闭包捕获、Dyn 派发、record 运行时布局、非字面量 String、集合内建面；codegen 未实现集合收缩至零 | pending |
 | B2 | `stdlib-real` | 编译器所需的标准库实库面：文件与目录 I/O、子进程 spawn（钉版 clang）、字符串构建、集合面背后的真数据结构 | pending |
 | B3 | `bootstrap` | 自举：编译器从 Go 移植到 We，以三段式闭环验收——Go 宿主构建编译 We 编译器，其产物再编译编译器一次，两段产物逐字节一致；conformance 套件在 We 宿主编译器下全绿 | pending |
@@ -62,3 +62,5 @@
 13. **test 关键字与 std.test 模块段。** 第 1 章保留字闭集使 `test` 成为关键字（它领 test 块产生式），该段无法按标识符取词；第 15 章的限定触及恰为「经导入名的 `name.item` 形」，而第 20 章示例调 `std.test.assertEqual(...)`——第 15 章未定型的两级点形。M10a 使已批面可拼写（模块路径段收过字符集检查的关键字 token）、调用走别名形（`import std.test as st; st.assertEqual(...)`）；裸导入绑定关键字名且惰性。规范修订应定夺真实调用面：两级 std 限定符、仅别名示例、或非关键字模块名。M10a（`testing-check` design D8、实现准备期披露）发现。
 14. **并发构造面为 mock 目标。** 第 20 章「不可 mock 目标」Requirement 以 `E1804:` 拒绝泛型 fn、impl 方法、「构造器如 `User`」——未点名并发构造器。M10a 的字面读在检查面接受 `mock conc.channel`（名字解析为模块级 fn 条目、无特判触发，`m10a_test.go:178`），但运行面是原始构造面：channel 构造的期望类型派生自调用实参、非声明签名可复述，唯一可复述的签名（无参、unit 返回）在运行时无从拦截。M10b 维持检查面零改、channel 不入槽表——检查过的 `mock conc.channel` 运行时跑真构造器。规范修订应裁决重分类：或 E1804 集点名原始构造器（检查面拒绝运行面无法兑现的目标）、或章文为其固定拦截面。M10a（`testing-check` 审查 F1）发现，M10b（`testing-run` design D3）登记。
 15. **第 19 章第二个效果段示例拼写。** 第 19 章 foreign 声明 Requirement 给出的签名形为 `fn name(params) effect tag1 tag2 ...` 或 `fn name(params) -> type effect tag1 tag2 ...`；第二个字面示例把段画在返回类型之后，与同句自己的散文（「between the parameter list and the arrow or the declaration's end」）及两处权威——第 6 章（「between the parameter list and the arrow or body」）、第 16 章（「between the parameter list and the arrow (or the body, when no return type is written)」）——矛盾。示例级笔误、非语义冲突：M12 实现及其黄金矩阵一律按第 6/16 章拼写 foreign 声明（`fn name(params) effect tags -> type`）。规范变更应修正第 19 章示例。M12（`ffi` T1 黄金源探针、披露 1）发现。
+16. **codegen 支配性缺陷：scope 块之前的带赋值 match。** 同一函数内，臂内赋值的 match 语句先于 `scope`（含 `scope timeout`）块执行时，发出的 IR 违反支配性——clang 以 `Instruction does not dominate all uses` 拒绝。参考构建的绕法（把首个 match 延迟到 scope 之后）塑造了 M15 errpath-02 参考解并在其 traps.md 披露。修复归属 codegen 线（B1 拓宽或专门变更）。M15（`benchmarks`，实现期披露二）发现。
+17. **评测套件：真实批次面与 L2/L3 扩充。** M15 落了方法论、18 任务 L1 种子集、经合成批次自证的 in-process 跑器。尚欠：真实 LLM 批次生产（生产面，与判定面设计分离）、不终止 attempt 的墙钟守卫（in-process 跑器遇无等待源忙循环会挂起——死锁检测唯一看不见的形）、L2（模块级）/ L3（系统级）任务扩充。M15（`benchmarks`，非目标与跑器披露）发现。

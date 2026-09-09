@@ -2394,10 +2394,12 @@ func (p *parser) parseScopeRes() ast.Stmt {
 	}
 	p.next() // (
 	// The binding list is a paren region — line breaks fold inside and
-	// a head expression's construction braces open (the noBrace
-	// suspension binds only at depth zero).
+	// a binding value's construction braces open (a value position, so
+	// no head suspension applies). The region closes at the `)`; the
+	// body block after it is a plain block, not a bracket region, and
+	// parses at the enclosing depth (the M15 fix: a leaked region depth
+	// made the body's own control-flow heads misread their braces).
 	p.depth++
-	defer func() { p.depth-- }()
 	var binds []ast.ScopeBind
 	seen := map[string]int{}
 	for {
@@ -2428,7 +2430,7 @@ func (p *parser) parseScopeRes() ast.Stmt {
 				fmt.Sprintf("unexpected token — %q where a scope resource binding's = goes: a binding is name = expr", p.cur().Text))
 		}
 		p.next() // =
-		val := p.headExpr()
+		val := p.parseExpr(valueCtx)
 		binds = append(binds, ast.ScopeBind{Name: nt.Text, Val: val, Line: nt.Line, Col: nt.Col})
 		if p.cur().Kind == "," {
 			p.next()
@@ -2444,6 +2446,7 @@ func (p *parser) parseScopeRes() ast.Stmt {
 		p.failTok(p.cur(), "E0105",
 			fmt.Sprintf("unexpected token — %q where the scope resource binding list closes with )", p.cur().Text))
 	}
+	p.depth--
 	if p.cur().Kind != "{" {
 		if p.atEnd() {
 			p.failTok(p.cur(), "E0105", "unexpected end of file — a scope resource wants its body block")
@@ -3140,8 +3143,12 @@ func (p *parser) parsePostfix(ctx exprCtx) ast.Expr {
 				`unexpected token — "[" fits no postfix production: postfix is .name or (args); indexing is by named methods (the collections chapter)`)
 		case "{":
 			// A control-flow head ends at its body brace — never a
-			// construction (headExpr suspends this case at depth zero).
-			if p.noBrace > 0 && p.depth == 0 {
+			// construction. The suspension is a fact about the head, not
+			// the region: it binds at every depth (the M15 fix — the old
+			// `depth == 0` rider made an if/while/match head inside an
+			// impl method, a call argument, or a paren group misread its
+			// own body brace as a construction head).
+			if p.noBrace > 0 {
 				return node
 			}
 			// Construction (chapter 8): a bare name/member chain whose
@@ -3203,7 +3210,10 @@ func (p *parser) tryTypeArgs(id *ast.Ident) (node ast.Expr) {
 		return &ast.Call{Fn: id, Args: p.parseCallArgs(), TypeArgs: args,
 			Line: op.Line, Col: op.Col, ArgLine: cl.Line, ArgCol: cl.Col}
 	case "{":
-		if p.noBrace > 0 && p.depth == 0 {
+		// The head suspension of the postfix `{` case, mirrored for the
+		// speculative explicit-application form: a control-flow head's
+		// body brace backs the attempt out at every depth (the M15 fix).
+		if p.noBrace > 0 {
 			p.pos, p.last = savedPos, savedLast
 			return nil
 		}

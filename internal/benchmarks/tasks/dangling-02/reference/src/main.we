@@ -1,0 +1,20 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn jobResult() effect io -> Int64 {
+    var out: Int64 = 0
+    scope {
+        let t = task effect io { 5 }
+        let r = t.await()
+        match r {
+            Ok(v) => { out = v }
+            Err(_) => { out = 0 }
+        }
+    }
+    return out
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    return Ok(())
+}

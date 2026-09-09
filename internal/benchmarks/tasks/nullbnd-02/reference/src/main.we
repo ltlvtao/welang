@@ -1,0 +1,34 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn pollScore() -> Int64 {
+    let ch: conc.Channel<Int64> = conc.channel(4)
+    ch.send(4)
+    ch.send(7)
+    ch.close()
+    var total: Int64 = 0
+    let r1 = ch.tryReceive()
+    match r1 {
+        Received(x) => { total = total + x }
+        Empty => { total = total + 0 }
+        Closed => { total = total + 100 }
+    }
+    let r2 = ch.tryReceive()
+    match r2 {
+        Received(x) => { total = total + x }
+        Empty => { total = total + 0 }
+        Closed => { total = total + 100 }
+    }
+    let r3 = ch.tryReceive()
+    match r3 {
+        Received(x) => { total = total + x }
+        Empty => { total = total + 0 }
+        Closed => { total = total + 100 }
+    }
+    return total
+}
+
+pub fn main() -> Result<(), AppError> {
+    return Ok(())
+}

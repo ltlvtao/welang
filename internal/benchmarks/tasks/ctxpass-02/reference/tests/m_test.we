@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "config via channel" {
+    st.assertEqual(main.scaled(10), 22)
+}

@@ -1,0 +1,8 @@
+import std.test as st
+import main
+
+test "slow product" {
+    st.assertEqual(main.slowProduct(3, 4), 12)
+    st.assertEqual(main.slowProduct(0, 9), 0)
+    st.assertEqual(main.slowProduct(5, 1), 5)
+}

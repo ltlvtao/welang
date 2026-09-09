@@ -1,0 +1,8 @@
+import std.test as st
+import main
+
+test "series sum" {
+    st.assertEqual(main.seriesSum(0), 0)
+    st.assertEqual(main.seriesSum(1), 1)
+    st.assertEqual(main.seriesSum(10), 55)
+}

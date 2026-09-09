@@ -1,0 +1,13 @@
+pub type AppError = Failed(String)
+
+pub fn tag() -> String {
+    return "we-bench"
+}
+
+pub fn echo(s: String) -> String {
+    return s
+}
+
+pub fn main() -> Result<(), AppError> {
+    return Ok(())
+}

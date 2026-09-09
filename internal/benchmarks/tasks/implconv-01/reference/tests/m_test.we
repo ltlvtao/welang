@@ -1,0 +1,8 @@
+import std.test as st
+import main
+
+test "packet score" {
+    st.assertEqual(main.packetScore(8), 111)
+    st.assertEqual(main.packetScore(2), 5)
+    st.assertEqual(main.packetScore(7), 10)
+}

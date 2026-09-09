@@ -1,0 +1,14 @@
+pub type AppError = Failed(String)
+
+pub fn packetScore(base: Int64) -> Int64 {
+    var t: Int64 = base
+    t = t + 3
+    if t > 10 {
+        t = t + 100
+    }
+    return t
+}
+
+pub fn main() -> Result<(), AppError> {
+    return Ok(())
+}

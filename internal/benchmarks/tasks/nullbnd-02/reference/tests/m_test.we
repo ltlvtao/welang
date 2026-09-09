@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "poll closed state" {
+    st.assertEqual(main.pollScore(), 111)
+}

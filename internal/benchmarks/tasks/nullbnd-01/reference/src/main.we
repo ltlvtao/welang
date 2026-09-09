@@ -1,0 +1,63 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn countAbove() -> Int64 {
+    let ch: conc.Channel<Int64> = conc.channel(4)
+    ch.send(5)
+    ch.send(12)
+    ch.send(9)
+    ch.send(20)
+    ch.close()
+    var count: Int64 = 0
+    let v = ch.receive()
+    match v {
+        Some(x) => {
+            if x > 10 {
+                count = count + 1
+            }
+        }
+        None => { count = count + 0 }
+    }
+    let w = ch.receive()
+    match w {
+        Some(x) => {
+            if x > 10 {
+                count = count + 1
+            }
+        }
+        None => { count = count + 0 }
+    }
+    let u = ch.receive()
+    match u {
+        Some(x) => {
+            if x > 10 {
+                count = count + 1
+            }
+        }
+        None => { count = count + 0 }
+    }
+    let z = ch.receive()
+    match z {
+        Some(x) => {
+            if x > 10 {
+                count = count + 1
+            }
+        }
+        None => { count = count + 0 }
+    }
+    let y = ch.receive()
+    match y {
+        Some(x) => {
+            if x > 10 {
+                count = count + 1
+            }
+        }
+        None => { count = count + 0 }
+    }
+    return count
+}
+
+pub fn main() -> Result<(), AppError> {
+    return Ok(())
+}

@@ -1,0 +1,13 @@
+import std.concurrent as conc
+import std.test as st
+import main
+
+test "empty wait times out" {
+    scope {
+        let adv = task effect time {
+            advanceTime(200)
+        }
+        st.assertEqual(main.emptyWait(), 100)
+        let _ = adv.await()
+    }
+}

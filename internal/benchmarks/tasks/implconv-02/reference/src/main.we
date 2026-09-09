@@ -1,0 +1,15 @@
+pub type AppError = Failed(String)
+
+pub fn gate(seed: Int32) -> Int64 {
+    var acc: Int32 = seed
+    acc = acc + 3i32
+    var out: Int64 = 0
+    if acc == 5i32 {
+        out = 1
+    }
+    return out
+}
+
+pub fn main() -> Result<(), AppError> {
+    return Ok(())
+}

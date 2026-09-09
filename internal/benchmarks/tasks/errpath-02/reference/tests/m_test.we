@@ -1,0 +1,13 @@
+import std.concurrent as conc
+import std.test as st
+import main
+
+test "first value then dry timeout" {
+    scope {
+        let adv = task effect time {
+            advanceTime(200)
+        }
+        st.assertEqual(main.drainOrTimeout(), 1007)
+        let _ = adv.await()
+    }
+}

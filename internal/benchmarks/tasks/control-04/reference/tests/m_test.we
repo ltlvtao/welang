@@ -1,0 +1,9 @@
+import std.test as st
+import main
+
+test "parity class" {
+    st.assertEqual(main.parityClass(10), 0)
+    st.assertEqual(main.parityClass(7), 1)
+    st.assertEqual(main.parityClass(0), 0)
+    st.assertEqual(main.parityClass(1), 1)
+}

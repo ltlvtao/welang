@@ -735,3 +735,71 @@ func TestDiagnosticShape(t *testing.T) {
 	// A lexical diagnostic floats up unchanged, no tree.
 	wantDiag(t, "let a = \"unterminated\n", "E0002", "unterminated string literal", 1, 9)
 }
+
+// TestControlFlowInDepthRegions pins the brace-suspension defect the M15
+// benchmarks change uncovered: the control-flow head's body brace
+// suspended only at depth zero (`noBrace > 0 && depth == 0`), so an
+// if/while/match head inside any depth region — an impl method body, an
+// interface default method, a call argument, a paren group, a list
+// literal element, or a scope resource body — misread its own body brace
+// as a construction head (E0105 on legal chapter 3/4/10/13 forms). The
+// suspension is a fact about the head, not about the region, and the
+// scope resource's leaked binding-list depth must not reach its body
+// block either (blocks are not brackets, chapter 2). Constructions in
+// value positions keep opening everywhere.
+func TestControlFlowInDepthRegions(t *testing.T) {
+	// An if head inside an impl method body.
+	wantClean(t, `interface Cmp {
+    fn score(self, n: Int64) -> Int64
+}
+
+impl Cmp for Int64 {
+    fn score(self, n: Int64) -> Int64 {
+        if n > 10 {
+            return 2
+        }
+        return 1
+    }
+}
+`)
+	// A default method body is a depth region of the same kind.
+	wantClean(t, `interface Cmp {
+    fn score(self, n: Int64) -> Int64
+
+    fn doubled(self, n: Int64) -> Int64 {
+        if n > 10 {
+            return n
+        }
+        return n * 2
+    }
+}
+`)
+	// An if expression as a call argument.
+	wantClean(t, "fn pick(n: Int64) -> Int64 {\n    return n\n}\n\nfn f(c: Bool) -> Int64 {\n    return pick(if c { 1 } else { 2 })\n}\n")
+	// An if expression inside a paren group.
+	wantClean(t, "fn f(c: Bool) -> Int64 {\n    let x = (if c { 1 } else { 2 })\n    return x\n}\n")
+	// A control-flow head inside a scope resource body, with the binding
+	// list's depth correctly closed before the body block.
+	wantClean(t, "fn use(open: fn () -> FileHandle) -> Int64 {\n    scope resource(f = open()) {\n        if f.fd > 0 {\n            return f.fd\n        }\n    }\n    return 0\n}\n\nbyres record FileHandle { fd: Int64 }\n")
+	// A match head inside an impl method body.
+	wantClean(t, `type Flag = On | Off
+
+impl Cmp for Int64 {
+    fn score(self, n: Int64) -> Int64 {
+        let r = match On {
+            On => n
+            Off => 0
+        }
+        return r
+    }
+}
+
+interface Cmp {
+    fn score(self, n: Int64) -> Int64
+}
+`)
+	// Constructions keep their value-position braces at every depth: as a
+	// scope resource binding value and as a call argument.
+	wantClean(t, "fn use() -> Int64 {\n    scope resource(f = FileHandle { fd: 1 }) {\n        let n = f.fd\n    }\n    return 0\n}\n\nbyres record FileHandle { fd: Int64 }\n")
+	wantClean(t, "fn take(h: FileHandle) -> Int64 {\n    return h.fd\n}\n\nfn use() -> Int64 {\n    return take(FileHandle { fd: 1 })\n}\n\nbyres record FileHandle { fd: Int64 }\n")
+}

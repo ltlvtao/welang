@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "release guard" {
+    st.assertEqual(main.guarded(), 7)
+}

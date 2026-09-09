@@ -1,0 +1,33 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn joinedSum() effect io -> Int64 {
+    let ch: conc.Channel<Int64> = conc.channel(2)
+    scope {
+        let a = task effect io {
+            ch.send(5)
+        }
+        let b = task effect io {
+            ch.send(6)
+        }
+        let _ = a.await()
+        let _ = b.await()
+    }
+    var total: Int64 = 0
+    let v1 = ch.receive()
+    match v1 {
+        Some(x) => { total = total + x }
+        None => { total = total + 0 }
+    }
+    let v2 = ch.receive()
+    match v2 {
+        Some(x) => { total = total + x }
+        None => { total = total + 0 }
+    }
+    return total
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    return Ok(())
+}

@@ -1,0 +1,30 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn scaled(base: Int64) effect io -> Int64 {
+    let cfg: conc.Channel<Int64> = conc.channel(0)
+    let out: conc.Channel<Int64> = conc.channel(1)
+    var result: Int64 = 0
+    scope {
+        let t = task effect io {
+            let c = cfg.receive()
+            match c {
+                Some(x) => { out.send(x * 2) }
+                None => { out.send(0) }
+            }
+        }
+        cfg.send(base + 1)
+        let _ = t.await()
+    }
+    let v = out.receive()
+    match v {
+        Some(x) => { result = x }
+        None => { result = 0 }
+    }
+    return result
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    return Ok(())
+}

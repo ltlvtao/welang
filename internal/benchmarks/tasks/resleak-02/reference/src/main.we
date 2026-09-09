@@ -1,0 +1,19 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn guarded() effect io -> Int64 {
+    let m = conc.Mutex(0)
+    scope {
+        let t = task effect io {
+            m.set(3)
+            defer { m.set(7) }
+        }
+        let _ = t.await()
+    }
+    return m.get()
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    return Ok(())
+}

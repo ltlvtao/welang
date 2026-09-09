@@ -1,0 +1,20 @@
+{
+  "name": "check-if-arg-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn pick(n: Int64) -> Int64 {\n    return n\n}\n\npub fn choose(c: Bool) -> Int64 {\n    return pick(if c { 1 } else { 2 })\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn pick(n: Int64) -> Int64 {\n    return n\n}\n\npub fn choose(c: Bool) -> Int64 {\n    return pick(if c { 1 } else { 2 })\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

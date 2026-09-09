@@ -1,0 +1,7 @@
+import std.test as st
+import main
+
+test "narrow gate" {
+    st.assertEqual(main.gate(2i32), 1)
+    st.assertEqual(main.gate(9i32), 0)
+}

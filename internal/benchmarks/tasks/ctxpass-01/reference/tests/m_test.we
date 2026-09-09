@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "scaled merge" {
+    st.assertEqual(main.scaledMerge(10), 43)
+}

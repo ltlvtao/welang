@@ -1,0 +1,20 @@
+{
+  "name": "check-if-scope-res-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "pub type AppError = Failed(String)\n\nbyres record FileHandle { fd: Int64 }\n\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\npub fn open() -> FileHandle {\n    return FileHandle { fd: 7 }\n}\n\npub fn readIfPositive() -> Int64 {\n    scope resource(f = open()) {\n        if f.fd > 0 {\n            return f.fd\n        }\n    }\n    return 0\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "pub type AppError = Failed(String)\n\nbyres record FileHandle { fd: Int64 }\n\nimpl Releasable for FileHandle {\n    fn release(mut self) {\n        return\n    }\n}\n\npub fn open() -> FileHandle {\n    return FileHandle { fd: 7 }\n}\n\npub fn readIfPositive() -> Int64 {\n    scope resource(f = open()) {\n        if f.fd > 0 {\n            return f.fd\n        }\n    }\n    return 0\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

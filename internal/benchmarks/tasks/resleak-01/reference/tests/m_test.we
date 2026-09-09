@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "close and drain" {
+    st.assertEqual(main.drainSum(), 60)
+}

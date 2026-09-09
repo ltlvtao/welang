@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "joined sum" {
+    st.assertEqual(main.joinedSum(), 11)
+}

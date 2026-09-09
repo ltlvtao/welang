@@ -1,0 +1,37 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn drainSum() -> Int64 {
+    let ch: conc.Channel<Int64> = conc.channel(4)
+    ch.send(10)
+    ch.send(20)
+    ch.send(30)
+    ch.close()
+    var total: Int64 = 0
+    let v = ch.receive()
+    match v {
+        Some(x) => { total = total + x }
+        None => { total = total + 0 }
+    }
+    let w = ch.receive()
+    match w {
+        Some(x) => { total = total + x }
+        None => { total = total + 0 }
+    }
+    let u = ch.receive()
+    match u {
+        Some(x) => { total = total + x }
+        None => { total = total + 0 }
+    }
+    let z = ch.receive()
+    match z {
+        Some(x) => { total = total + x }
+        None => { total = total + 0 }
+    }
+    return total
+}
+
+pub fn main() -> Result<(), AppError> {
+    return Ok(())
+}

@@ -1,0 +1,6 @@
+import std.test as st
+import main
+
+test "merge scale" {
+    st.assertEqual(main.mergeScale(10), 23)
+}

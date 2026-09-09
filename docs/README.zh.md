@@ -34,6 +34,7 @@ welang 文档遵循"一类事实只有一个权威位置"。语言规范定义�
 | [`docs/process/`](process/development-process.md) | 研发流程（工作方式的唯一权威） | 语言行为、变更级决策 |
 | `docs/spec/` | 规范正典，带版本；含机器可读诊断码注册表 `diagnostics.toml`（每个已分配码的唯一条目权威） | 实现决策、迁移历史、执行状态 |
 | [`docs/lsp.md`](lsp.zh.md) | LSP 绑定文档（第 21 章 R12 的 separate document）：协议基线、传输、生命周期、诊断映射 | 诊断之外的编辑器能力、任何新诊断码 |
+| [`docs/benchmarks.md`](benchmarks.zh.md) | 评测方法论文档（M15）：三指标、任务分类体系、陷阱清单、批次 schema、反馈协议、跑器判定序、统计纪律 | 模型调用与真实批次生产、种子集的统计结论 |
 | `docs/decisions/` | 长期 ADR：状态、依赖、被拒选项（首个 ADR 需要时创建） | 需求、任务清单 |
 | `docs/roadmap/` | 战略、里程碑、变更目录、执行状态（roadmap 超出 `openspec/changes/` 所能承载时创建） | 需求、字段级设计 |
 | [`openspec/`](../openspec/README.md) | 变更管理：active/archived 变更及其 proposal/spec-delta/design/tasks 工件；仓库工件校验器（`validate.py` 查变更结构，`docs_sync.py` 查双语配对） | 任何事实的长期权威（变更是过程增量） |

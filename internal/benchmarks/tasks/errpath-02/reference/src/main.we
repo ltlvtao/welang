@@ -1,0 +1,35 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn drainOrTimeout() effect io -> Int64 {
+    let loaded: conc.Channel<Int64> = conc.channel(1)
+    let dry: conc.Channel<Int64> = conc.channel(1)
+    loaded.send(7)
+    var got: Int64 = 0
+    let first = loaded.receive()
+    var flag: Int64 = 0
+    let r = scope timeout(50) {
+        let t = task effect io {
+            let v = dry.receive()
+            match v {
+                Some(x) => { let _ = x }
+                None => { let _ = 0 }
+            }
+        }
+        let _ = t.await()
+    }
+    match r {
+        Ok(_) => { flag = 1 }
+        Err(_) => { flag = 1000 }
+    }
+    match first {
+        Some(x) => { got = x }
+        None => { got = 0 }
+    }
+    return got + flag
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    return Ok(())
+}

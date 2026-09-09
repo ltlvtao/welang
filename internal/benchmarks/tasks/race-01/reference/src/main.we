@@ -1,0 +1,30 @@
+import std.concurrent as conc
+
+pub type AppError = Failed(String)
+
+pub fn sharedCount() effect io -> Int64 {
+    let m = conc.Mutex(0)
+    scope {
+        let a = task effect io {
+            var i: Int64 = 0
+            while i < 50 {
+                let _ = m.update(|v| v + 1)
+                i = i + 1
+            }
+        }
+        let b = task effect io {
+            var j: Int64 = 0
+            while j < 50 {
+                let _ = m.update(|v| v + 1)
+                j = j + 1
+            }
+        }
+        let _ = a.await()
+        let _ = b.await()
+    }
+    return m.get()
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    return Ok(())
+}
