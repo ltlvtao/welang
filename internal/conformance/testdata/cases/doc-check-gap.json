@@ -1,0 +1,23 @@
+{
+  "name": "doc-check-gap",
+  "args": [
+    "doc",
+    ".",
+    "--check"
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import util\n\neffect db\n\n/// One user of the system.\npub record User { name: String, age: Int64 }\n\npub type AppError = Failed(String)\n\n/// Adds one user to the ledger.\npub fn add(user: User) effect db -> Result<(), AppError> {\n    return Ok(())\n}\n\npub let maxUsers = 10\n\npub newtype UserId(Int64)\n\npub interface Describable {\n    fn describe(self) -> String\n}\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", age: 1 }\n    let n = util.double(u.age)\n    let _ = n\n    return Ok(())\n}\n",
+      "src/util.we": "/// Computes the double.\npub fn double(n: Int64) -> Int64 {\n    return n * 2\n}\n\npub let limit = 5\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we: undocumented pub declaration AppError at src/main.we:8\nwe: undocumented pub declaration maxUsers at src/main.we:15\nwe: undocumented pub declaration UserId at src/main.we:17\nwe: undocumented pub declaration Describable at src/main.we:19\nwe: undocumented pub declaration main at src/main.we:23\nwe: undocumented pub declaration limit at src/util.we:6\n",
+  "files": {
+    "src/main.we": "import util\n\neffect db\n\n/// One user of the system.\npub record User { name: String, age: Int64 }\n\npub type AppError = Failed(String)\n\n/// Adds one user to the ledger.\npub fn add(user: User) effect db -> Result<(), AppError> {\n    return Ok(())\n}\n\npub let maxUsers = 10\n\npub newtype UserId(Int64)\n\npub interface Describable {\n    fn describe(self) -> String\n}\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", age: 1 }\n    let n = util.double(u.age)\n    let _ = n\n    return Ok(())\n}\n",
+    "src/util.we": "/// Computes the double.\npub fn double(n: Int64) -> Int64 {\n    return n * 2\n}\n\npub let limit = 5\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

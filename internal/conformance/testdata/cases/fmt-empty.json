@@ -1,0 +1,22 @@
+{
+  "name": "fmt-empty",
+  "args": [
+    "fmt",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/empty.we": "",
+      "src/main.we": "pub fn main() -> Result<(), AppError> {\n  return Ok(())\n}\n\npub type AppError = Failed(String)\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/empty.we": "",
+    "src/main.we": "pub fn main() -> Result<(), AppError> {\n  return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

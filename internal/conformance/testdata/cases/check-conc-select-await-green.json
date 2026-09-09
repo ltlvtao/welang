@@ -6,15 +6,15 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let ch: conc.Channel<Int64> = conc.channel(4)\n        let t = task effect net {\n            let _ = select {\n                case _ = ch.receive() => ()\n                case _ = currentCancelSignal().awaitCancelled() => ()\n            }\n        }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    scope {\n        let ch: conc.Channel\u003cInt64\u003e = conc.channel(4)\n        let t = task effect net {\n            let _ = select {\n                case _ = ch.receive() =\u003e ()\n                case _ = currentCancelSignal().awaitCancelled() =\u003e ()\n            }\n        }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "",
-  "stderr": "",
+  "stderr": "src/main.we:10:29: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:14:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\n",
   "files": {
-    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    scope {\n        let ch: conc.Channel<Int64> = conc.channel(4)\n        let t = task effect net {\n            let _ = select {\n                case _ = ch.receive() => ()\n                case _ = currentCancelSignal().awaitCancelled() => ()\n            }\n        }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    scope {\n        let ch: conc.Channel\u003cInt64\u003e = conc.channel(4)\n        let t = task effect net {\n            let _ = select {\n                case _ = ch.receive() =\u003e ()\n                case _ = currentCancelSignal().awaitCancelled() =\u003e ()\n            }\n        }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
     "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
   }
 }

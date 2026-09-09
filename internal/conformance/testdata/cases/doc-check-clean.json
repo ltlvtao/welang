@@ -1,0 +1,21 @@
+{
+  "name": "doc-check-clean",
+  "args": [
+    "doc",
+    ".",
+    "--check"
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "/// The error surface.\npub type AppError = Failed(String)\n\n/// Entry point.\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "/// The error surface.\npub type AppError = Failed(String)\n\n/// Entry point.\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

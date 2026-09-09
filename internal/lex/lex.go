@@ -29,6 +29,7 @@ const (
 	KindString  = "string"
 	KindRune    = "rune"
 	KindAttr    = "attr"
+	KindComment = "comment"
 	KindEOF     = "eof"
 )
 
@@ -111,6 +112,9 @@ type stop struct{ d diag.Diagnostic }
 // unconsumed rune; a line break resets it. docs/docOpen track the ///
 // side channel: docOpen indexes the unit that consecutive /// lines still
 // extend, -1 when a blank line or ordinary comment has broken the run.
+// keep switches the comment branches of the main loop from skipping to
+// emitting: comments surface as KindComment trivia tokens (the formatter's
+// face, M11) instead of vanishing.
 type lexer struct {
 	name string
 	src  string
@@ -121,6 +125,7 @@ type lexer struct {
 	docs    []DocUnit
 	docOpen int
 	docLast int
+	keep    bool
 }
 
 // File lexes one source file. It returns the token stream (ending in an
@@ -136,7 +141,24 @@ func File(name string, src []byte) (toks []Token, first *diag.Diagnostic) {
 // eof token) and the /// documentation units alongside it, or the first
 // lexical diagnostic with no tokens and no units.
 func Scan(name string, src []byte) (toks []Token, docs []DocUnit, first *diag.Diagnostic) {
-	l := &lexer{name: name, src: string(src), line: 1, col: 1, docOpen: -1}
+	toks, docs, first = run(name, src, false)
+	return toks, docs, first
+}
+
+// Keep lexes one source file with comments kept as trivia: each //, ///,
+// or /* */ comment surfaces as a KindComment token (text verbatim, slashes
+// included, the line break excluded) at its own position, and every other
+// token is exactly the face Scan produces. Chapter 1 fixes that comments
+// produce no tokens on the compile pipeline's face; this second entry is
+// the formatter's (M11 design D1) — one scanner, two faces.
+func Keep(name string, src []byte) (toks []Token, first *diag.Diagnostic) {
+	toks, _, first = run(name, src, true)
+	return toks, first
+}
+
+// run is the shared scan body under both faces.
+func run(name string, src []byte, keep bool) (toks []Token, docs []DocUnit, first *diag.Diagnostic) {
+	l := &lexer{name: name, src: string(src), line: 1, col: 1, docOpen: -1, keep: keep}
 	if d := l.checkEncoding(); d != nil {
 		return nil, nil, d
 	}
@@ -267,10 +289,18 @@ func (l *lexer) scanAll() []Token {
 			case c == ' ' || c == '\t' || c == '\n' || c == '\r':
 				l.advance()
 			case c == '/' && l.peek2() == '/':
-				l.skipLineComment()
+				if l.keep {
+					toks = append(toks, l.keepLineComment())
+				} else {
+					l.skipLineComment()
+				}
 			case c == '/' && l.peek2() == '*':
-				l.docOpen = -1
-				l.skipBlockComment()
+				if l.keep {
+					toks = append(toks, l.keepBlockComment())
+				} else {
+					l.docOpen = -1
+					l.skipBlockComment()
+				}
 			default:
 				goto token
 			}
@@ -324,6 +354,28 @@ func (l *lexer) skipLineComment() {
 	default:
 		l.docOpen = -1
 	}
+}
+
+// keepLineComment consumes one // or /// comment and returns it as a
+// KindComment token: text verbatim through the slashes, the line break
+// (and its CR) excluded. The /// side channel stays off in keep mode —
+// attachment semantics belong to the parser's face.
+func (l *lexer) keepLineComment() Token {
+	line, col := l.pos()
+	start := l.off
+	for !l.eof() && l.peek() != '\n' {
+		l.advance()
+	}
+	return Token{Kind: KindComment, Text: strings.TrimRight(l.src[start:l.off], "\r"), Line: line, Col: col}
+}
+
+// keepBlockComment consumes one /* */ comment and returns it as one
+// KindComment token, text verbatim (its line span rides the opening line).
+func (l *lexer) keepBlockComment() Token {
+	line, col := l.pos()
+	start := l.off
+	l.skipBlockComment()
+	return Token{Kind: KindComment, Text: l.src[start:l.off], Line: line, Col: col}
 }
 
 // skipBlockComment consumes one /* */ comment. Block comments do not nest:

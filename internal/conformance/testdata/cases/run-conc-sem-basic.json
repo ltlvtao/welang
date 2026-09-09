@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let s = conc.Semaphore(1)\n    let _ = s.acquire()\n    let got = s.tryAcquire()\n    if got {\n        io.println(\"bad\")\n    } else {\n        io.println(\"blocked\")\n    }\n    let _ = s.release()\n    let got2 = s.tryAcquire()\n    if got2 {\n        io.println(\"free\")\n    } else {\n        io.println(\"bad2\")\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -\u003e Result\u003c(), AppError\u003e {\n    let s = conc.Semaphore(1)\n    let _ = s.acquire()\n    let got = s.tryAcquire()\n    if got {\n        io.println(\"bad\")\n    } else {\n        io.println(\"blocked\")\n    }\n    let _ = s.release()\n    let got2 = s.tryAcquire()\n    if got2 {\n        io.println(\"free\")\n    } else {\n        io.println(\"bad2\")\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "blocked\nfree\n",
-  "stderr": ""
+  "stderr": "src/main.we:8:15: warning[W1912]: function may block on a wait — Semaphore.acquire may block\n"
 }

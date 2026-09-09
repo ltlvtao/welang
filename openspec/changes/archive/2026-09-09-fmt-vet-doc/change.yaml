@@ -1,0 +1,3 @@
+name: fmt-vet-doc
+status: archived
+layers: [compiler]

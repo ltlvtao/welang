@@ -1,0 +1,20 @@
+{
+  "name": "fmt-empty-block",
+  "args": [
+    "fmt",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub fn noop() { }\n\npub fn main() -> Result<(), AppError> {\n    noop( )\n    return Ok(())\n}\n\npub type AppError = Failed(String)\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "pub fn noop() {}\n\npub fn main() -> Result<(), AppError> {\n  noop()\n  return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

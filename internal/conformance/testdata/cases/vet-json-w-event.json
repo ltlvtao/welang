@@ -1,0 +1,18 @@
+{
+  "name": "vet-json-w-event",
+  "args": [
+    "check",
+    ".",
+    "--json"
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "tests/anchor_test.we": "import std.concurrent as conc\n\neffect db\n\nfn save() effect db {\n    return\n}\n\ntest \"anchor\" {\n    let sem = conc.Semaphore(1)\n    sem.acquire()\n    save()\n    sem.release()\n    assert(true, \"done\")\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1912\",\"message\":\"function may block on a wait — Semaphore.acquire may block\",\"file\":\"tests/anchor_test.we\",\"line\":11,\"column\":9,\"help\":\"No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded.\"}\n{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1910\",\"message\":\"unmocked custom effect in a test — save carries custom effect db, no mock in this test\",\"file\":\"tests/anchor_test.we\",\"line\":12,\"column\":5,\"help\":\"Mock the custom-effect function on the test's path, or accept the real call deliberately.\"}\n",
+  "stderr": ""
+}

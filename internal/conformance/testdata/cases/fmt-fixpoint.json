@@ -1,0 +1,20 @@
+{
+  "name": "fmt-fixpoint",
+  "args": [
+    "fmt",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io as io\n\nimport util\n\neffect db\n\npub type AppError = Failed(String)\n\n/// One user.\npub record User { name: String, age: Int64 }\n\npub fn add(user: User) effect db -> Result<(), AppError> {\n  let s = \"a  b\"\n  let total = user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age\n  //  keeps double space\n  return Ok(())\n}\n\npub fn main() -> Result<(), AppError> {\n  let u = User { name: \"a\", age: 1 }\n  if u.age == 1 {\n    io.println(\"one\")\n  } else {\n    io.println(\"other\")\n  }\n  return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.io as io\n\nimport util\n\neffect db\n\npub type AppError = Failed(String)\n\n/// One user.\npub record User { name: String, age: Int64 }\n\npub fn add(user: User) effect db -> Result<(), AppError> {\n  let s = \"a  b\"\n  let total = user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age + user.age\n  //  keeps double space\n  return Ok(())\n}\n\npub fn main() -> Result<(), AppError> {\n  let u = User { name: \"a\", age: 1 }\n  if u.age == 1 {\n    io.println(\"one\")\n  } else {\n    io.println(\"other\")\n  }\n  return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

@@ -27,19 +27,33 @@ func (e *env) runCheck(path string, info os.FileInfo) int {
 	if !strings.HasSuffix(path, ".we") {
 		return e.usageErr("check wants a .we file, got %q", path)
 	}
-	if file, code := e.loadFile(path); file == nil {
+	file, code := e.loadFile(path)
+	if file == nil {
 		return code
 	}
+	// The advisory layer rides the single-file face too (Q4): no
+	// manifest, so every posture is the warning default and nothing can
+	// promote — the findings report and the check still passes.
+	e.advise(nil, typecheck.Advisories(file, path, typecheck.SingleFile))
 	return e.checkPassed(1)
 }
 
-// runCheckProject checks a project directory through the shared loader
-// and stops at the type stage — check produces no artifact (chapter 21
-// R2), so there is no artifact face to stop at.
+// runCheckProject checks a project directory through the shared loader,
+// stops at the type stage — check produces no artifact (chapter 21 R2),
+// so there is no artifact face to stop at — and renders the advisory
+// layer after the clean check (M11 design D5): warnings report and the
+// check still passes; a promoted finding stops exactly as an error does.
 func (e *env) runCheckProject(dir string) int {
-	_, _, mods, code := e.loadProject(dir, false)
+	manifest, file, _, mods, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
+	}
+	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods)
+	if code != exitOK {
+		return code
+	}
+	if promoted, _ := e.advise(manifest, found); promoted {
+		return exitDiagnostic
 	}
 	return e.checkPassed(len(mods) + 1)
 }
@@ -80,10 +94,12 @@ func (e *env) loadFile(path string) (*ast.File, int) {
 // faces), then all modules type-checked in the graph's post-order (the
 // imported before the importing — chapter 15's deterministic
 // initialization order; the main convention binds the root module).
-// It returns the root module, the manifest name, and the dependency
-// modules in post-order (the std modules among them — the type stage
-// wants the graph whole; the code stage filters its own face); a nil
-// file means the failure is already reported, with its exit code.
+// It returns the manifest's parsed keys (the advisory layer's [vet]
+// postures read them; every other caller has its own key), the root
+// module, the manifest name, and the dependency modules in post-order
+// (the std modules among them — the type stage wants the graph whole;
+// the code stage filters its own face); a nil file means the failure is
+// already reported, with its exit code.
 //
 // artifact marks a caller with an artifact face (build/run): a library
 // manifest stops at the library boundary after the manifest validations
@@ -91,10 +107,10 @@ func (e *env) loadFile(path string) (*ast.File, int) {
 // its check-through behavior. The dependency boundary applies to every
 // pipeline command alike (chapter 22 R5) and fires first when both are
 // present.
-func (e *env) loadProject(dir string, artifact bool) (*ast.File, string, []typecheck.Module, int) {
+func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.File, string, []typecheck.Module, int) {
 	manifest, code := e.loadManifest(dir, artifact)
 	if code != exitOK {
-		return nil, "", nil, code
+		return nil, nil, "", nil, code
 	}
 	root := filepath.Join(dir, "src", "main.we")
 	src, err := os.ReadFile(root)
@@ -102,31 +118,31 @@ func (e *env) loadProject(dir string, artifact bool) (*ast.File, string, []typec
 		e.report(diag.Error("E1305", "main function signature violation — the root module "+root+" does not exist; declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type").
 			At(root, 1, 1).
 			WithHelp("Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type."))
-		return nil, "", nil, exitDiagnostic
+		return nil, nil, "", nil, exitDiagnostic
 	}
 	file, d, ni := parser.Parse(root, src)
 	if d != nil {
 		e.report(*d)
-		return nil, "", nil, exitDiagnostic
+		return nil, nil, "", nil, exitDiagnostic
 	}
 	if ni != nil {
-		return nil, "", nil, e.boundary(ni.What)
+		return nil, nil, "", nil, e.boundary(ni.What)
 	}
 	// The module graph from the root (chapter 15): depth-first over the
 	// imports in source order, then the post-order the type stage takes.
 	mods, code := e.loadGraph(dir, "main", root, file)
 	if code != exitOK {
-		return nil, "", nil, code
+		return nil, nil, "", nil, code
 	}
 	td, tni := typecheck.CheckProject(file, root, mods)
 	if td != nil {
 		e.report(*td)
-		return nil, "", nil, exitDiagnostic
+		return nil, nil, "", nil, exitDiagnostic
 	}
 	if tni != nil {
-		return nil, "", nil, e.boundary(tni.What)
+		return nil, nil, "", nil, e.boundary(tni.What)
 	}
-	return file, manifest["name"], mods, exitOK
+	return manifest, file, manifest["name"], mods, exitOK
 }
 
 // loadManifest reads and validates the project manifest (design D2's
@@ -144,7 +160,7 @@ func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
 			WithHelp("Create we.toml with the name, version, and type keys, or run we new to write the skeleton."))
 		return nil, exitDiagnostic
 	}
-	manifest, deps := parseManifest(string(raw))
+	manifest, deps, bare := parseManifest(string(raw))
 	for _, key := range []string{"name", "version", "type"} {
 		if manifest[key] == "" {
 			e.report(diag.Error("E1905", fmt.Sprintf(
@@ -188,6 +204,28 @@ func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
 				"invalid toolchain configuration value — explore-iterations must be a positive integer, got %s", v)).
 				At("we.toml", 1, 1).
 				WithHelp("Set explore-iterations to a positive integer."))
+			return nil, exitDiagnostic
+		}
+	}
+	// The [vet] table's three pinned keys (M11 design D5): W1910, W1911,
+	// and W1912 each hold one of the three postures — warning, error,
+	// ignore — as the strings they are in TOML: a quoted value outside the
+	// set is E1903, and so is a bare unquoted token (`W1910 = error` is no
+	// TOML scalar at all), reported with the bare text. The shared loader
+	// face makes the gate hold on check/build/run/test/fmt alike. Every
+	// other key in the table stays unread (the [test] posture); an absent
+	// table or key is the warning default, not an error.
+	for _, vetCode := range []string{"W1910", "W1911", "W1912"} {
+		k := "vet." + vetCode
+		v, ok := manifest[k]
+		if !ok {
+			continue
+		}
+		if bare[k] || (v != "warning" && v != "error" && v != "ignore") {
+			e.report(diag.Error("E1903", fmt.Sprintf(
+				"invalid toolchain configuration value — vet.%s must be \"warning\", \"error\", or \"ignore\", got %s", vetCode, v)).
+				At("we.toml", 1, 1).
+				WithHelp("Set the named key to one of the legal values the diagnostic lists."))
 			return nil, exitDiagnostic
 		}
 	}
@@ -327,12 +365,16 @@ func (e *env) loadGraph(dir, rootKey, rootPath string, root *ast.File) ([]typech
 // subset this milestone's validations need: `key = "value"` lines, with
 // blank and # lines skipped. A key inside a [section] surfaces under its
 // dotted name ("test.explore-iterations") so section keys cannot collide
-// with top-level ones. It also counts the keys inside a [dependencies]
-// section (chapter 22 R5's face: any key there is a non-empty dependency
-// set). Richer TOML shapes arrive with the project chapter's own
-// milestone.
-func parseManifest(raw string) (map[string]string, int) {
+// with top-level ones. Values render bare in the map whether quoted or
+// not (the M10c face: `5` and `"5"` read alike); bare marks the keys
+// whose value carried no surrounding quotes, for gates that want the
+// TOML string face — a bare token is no TOML scalar at all. It also
+// counts the keys inside a [dependencies] section (chapter 22 R5's face:
+// any key there is a non-empty dependency set). Richer TOML shapes
+// arrive with the project chapter's own milestone.
+func parseManifest(raw string) (map[string]string, int, map[string]bool) {
 	m := map[string]string{}
+	bare := map[string]bool{}
 	deps := 0
 	section := ""
 	for _, line := range strings.Split(raw, "\n") {
@@ -346,17 +388,24 @@ func parseManifest(raw string) (map[string]string, int) {
 		}
 		if i := strings.Index(line, "="); i >= 0 {
 			key := strings.TrimSpace(line[:i])
-			val := strings.Trim(strings.TrimSpace(line[i+1:]), `"`)
+			val := strings.TrimSpace(line[i+1:])
+			quoted := len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"'
+			if quoted {
+				val = val[1 : len(val)-1]
+			}
 			if section != "" {
 				key = section + "." + key
 			}
 			m[key] = val
+			if !quoted {
+				bare[key] = true
+			}
 			if section == "dependencies" {
 				deps++
 			}
 		}
 	}
-	return m, deps
+	return m, deps, bare
 }
 
 // validVersion reports whether v is three dot-separated non-negative

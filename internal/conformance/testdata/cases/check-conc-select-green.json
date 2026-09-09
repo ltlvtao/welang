@@ -6,15 +6,15 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let b: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n        case y = b.receive() => y\n    }\n    let w = select {\n        case _ = a.receive() => 1\n        case _ = b.receive() => 2\n    }\n    let _ = v\n    let _ = w\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    let a: conc.Channel\u003cInt64\u003e = conc.channel(4)\n    let b: conc.Channel\u003cInt64\u003e = conc.channel(4)\n    let v = select {\n        case x = a.receive() =\u003e x\n        case y = b.receive() =\u003e y\n    }\n    let w = select {\n        case _ = a.receive() =\u003e 1\n        case _ = b.receive() =\u003e 2\n    }\n    let _ = v\n    let _ = w\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "",
-  "stderr": "",
+  "stderr": "src/main.we:9:20: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:10:20: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:13:20: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:14:20: warning[W1912]: function may block on a wait — Channel.receive may block\n",
   "files": {
-    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(4)\n    let b: conc.Channel<Int64> = conc.channel(4)\n    let v = select {\n        case x = a.receive() => x\n        case y = b.receive() => y\n    }\n    let w = select {\n        case _ = a.receive() => 1\n        case _ = b.receive() => 2\n    }\n    let _ = v\n    let _ = w\n    return Ok(())\n}\n",
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    let a: conc.Channel\u003cInt64\u003e = conc.channel(4)\n    let b: conc.Channel\u003cInt64\u003e = conc.channel(4)\n    let v = select {\n        case x = a.receive() =\u003e x\n        case y = b.receive() =\u003e y\n    }\n    let w = select {\n        case _ = a.receive() =\u003e 1\n        case _ = b.receive() =\u003e 2\n    }\n    let _ = v\n    let _ = w\n    return Ok(())\n}\n",
     "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
   }
 }

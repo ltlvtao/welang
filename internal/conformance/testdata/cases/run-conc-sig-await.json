@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let r = scope timeout(30) {\n        let waiter = task effect io {\n            let sig = currentCancelSignal()\n            if sig.isCancelled() {\n                io.println(\"bad\")\n            } else {\n                io.println(\"clean\")\n            }\n            let _ = sig.awaitCancelled()\n            io.println(\"woke-on-cancel\")\n        }\n        let _ = waiter.await()\n    }\n    match r {\n        Ok(_) => { io.println(\"ok\") }\n        Err(_) => { io.println(\"timedout\") }\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -\u003e Result\u003c(), AppError\u003e {\n    let r = scope timeout(30) {\n        let waiter = task effect io {\n            let sig = currentCancelSignal()\n            if sig.isCancelled() {\n                io.println(\"bad\")\n            } else {\n                io.println(\"clean\")\n            }\n            let _ = sig.awaitCancelled()\n            io.println(\"woke-on-cancel\")\n        }\n        let _ = waiter.await()\n    }\n    match r {\n        Ok(_) =\u003e { io.println(\"ok\") }\n        Err(_) =\u003e { io.println(\"timedout\") }\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "clean\nwoke-on-cancel\ntimedout\n",
-  "stderr": ""
+  "stderr": "src/main.we:18:24: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

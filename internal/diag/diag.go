@@ -43,6 +43,22 @@ func Error(code, message string) Diagnostic {
 	return Diagnostic{severity: SeverityError, code: code, message: message}
 }
 
+// Warning constructs a warning-severity diagnostic (the registry's W codes,
+// chapter 21 R4's advisory findings). The message discipline is Error's:
+// it starts with the code's registry title.
+func Warning(code, message string) Diagnostic {
+	return Diagnostic{severity: SeverityWarning, code: code, message: message}
+}
+
+// AsError returns the same finding at error severity — the promotion face
+// of the manifest's [vet] table (M11): the registry's one-code-one-
+// severity holds on the registry side, severity is the rendering layer
+// here, so a promoted advisory keeps its W code and renders as an error.
+func (d Diagnostic) AsError() Diagnostic {
+	d.severity = SeverityError
+	return d
+}
+
 // At attaches a source position. Command-level diagnostics carry the empty
 // file and 0/0, per chapter 21's protocol example for E1907.
 func (d Diagnostic) At(file string, line, column int) Diagnostic {

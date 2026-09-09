@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(0)\n    scope {\n        let p1 = task effect io {\n            io.println(\"p1a\")\n            ch.send(1)\n            io.println(\"p1b\")\n        }\n        let c1 = task effect io {\n            let v = ch.receive()\n            io.println(\"c1a\")\n            io.println(\"c1b\")\n        }\n        let _ = p1.await()\n        let _ = c1.await()\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -\u003e Result\u003c(), AppError\u003e {\n    let ch: conc.Channel\u003cInt64\u003e = conc.channel(0)\n    scope {\n        let p1 = task effect io {\n            io.println(\"p1a\")\n            ch.send(1)\n            io.println(\"p1b\")\n        }\n        let c1 = task effect io {\n            let v = ch.receive()\n            io.println(\"c1a\")\n            io.println(\"c1b\")\n        }\n        let _ = p1.await()\n        let _ = c1.await()\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "p1a\nc1a\nc1b\np1b\n",
-  "stderr": ""
+  "stderr": "src/main.we:11:16: warning[W1912]: function may block on a wait — Channel.send may block\nsrc/main.we:15:24: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:19:20: warning[W1912]: function may block on a wait — TaskHandle.await may block\nsrc/main.we:20:20: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

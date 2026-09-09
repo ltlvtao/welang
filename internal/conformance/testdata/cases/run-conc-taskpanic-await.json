@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), conc.TaskPanic> {\n    scope {\n        let t = task effect io { panic(\"boom\") }\n        let _ = t.await()?\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), conc.TaskPanic\u003e {\n    scope {\n        let t = task effect io { panic(\"boom\") }\n        let _ = t.await()?\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 1,
   "stdout": "",
-  "stderr": "error: Panicked: boom\n"
+  "stderr": "src/main.we:9:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\nerror: Panicked: boom\n"
 }

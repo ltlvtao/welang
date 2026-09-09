@@ -1,0 +1,16 @@
+{
+  "name": "vet-e1903-check-face",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[vet]\nW1912 = \"strict\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "we.toml:1:1: error[E1903]: invalid toolchain configuration value — vet.W1912 must be \"warning\", \"error\", or \"ignore\", got strict\n"
+}

@@ -205,6 +205,12 @@ func (e *env) runTestProject(dir string) int {
 	name := manifestKeys["name"]
 	prog := make([]codegen.ProgModule, 0, len(files))
 	depSeen := map[string]bool{}
+	// The advisory findings of the roots this run compiles (M11 design
+	// D5): collected per test module beside its own check — the graph is
+	// already in hand — and rendered after the whole set checks clean, a
+	// promoted finding mapping to the compile-failure exit before any
+	// harness is built.
+	var advisories []diag.Diagnostic
 	for _, f := range files {
 		key := strings.ReplaceAll(strings.TrimSuffix(f.Path, ".we"), "/", ".")
 		rootPath := filepath.Join(dir, filepath.FromSlash(f.Path))
@@ -223,6 +229,7 @@ func (e *env) runTestProject(dir string) int {
 		if tni != nil {
 			return e.boundary(tni.What)
 		}
+		advisories = append(advisories, typecheck.AdvisoriesTestRoot(f.File, rootPath, key, deps)...)
 		for _, m := range deps {
 			// The std modules ride the graph for the type stage; the
 			// program face filters them — their call faces are the
@@ -239,6 +246,9 @@ func (e *env) runTestProject(dir string) int {
 		// The test module's ID carries the manifest name: the program
 		// this run builds is the project's own.
 		prog = append(prog, codegen.ProgModule{Key: key, ID: name, Path: f.Path, File: f.File})
+	}
+	if promoted, _ := e.advise(manifestKeys, advisories); promoted {
+		return exitCompileFailure
 	}
 	if len(prog) == 0 {
 		// The empty default set still runs: a zero-test driver reports
@@ -280,6 +290,10 @@ func (e *env) runTestSingle(path string) int {
 	if code != exitOK {
 		return code
 	}
+	// The advisory layer over the filtered face — the set this run
+	// compiles (Q4); no manifest here, so nothing can promote and the
+	// findings report without stopping the run.
+	e.advise(nil, typecheck.Advisories(files[0].File, path, typecheck.SingleFile))
 	base := strings.TrimSuffix(filepath.Base(path), ".we")
 	prog := []codegen.ProgModule{{
 		Key:  "main", // the single-file face's module key (Emit's own)

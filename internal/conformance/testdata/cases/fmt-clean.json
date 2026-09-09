@@ -1,0 +1,20 @@
+{
+  "name": "fmt-clean",
+  "args": [
+    "fmt",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "effect db\n\npub type AppError = Failed(String)\n\npub fn add(a: Int64, b: Int64) -> Int64 {\n  return a + b\n}\n\npub fn main() -> Result<(), AppError> {\n  let n = add(1, 2)\n  let s = \"x, y:z\"\n  if n > 1 {\n    return Ok(())\n  }\n  return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "effect db\n\npub type AppError = Failed(String)\n\npub fn add(a: Int64, b: Int64) -> Int64 {\n  return a + b\n}\n\npub fn main() -> Result<(), AppError> {\n  let n = add(1, 2)\n  let s = \"x, y:z\"\n  if n > 1 {\n    return Ok(())\n  }\n  return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

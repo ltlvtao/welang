@@ -1,20 +1,20 @@
 {
- "name": "test-explore-json",
- "args": [
-  "test",
-  ".",
-  "--json",
-  "--explore",
-  "--iterations",
-  "2"
- ],
- "setup": {
-  "files": {
-   "tests/tied_test.we": "import std.concurrent as conc\nimport std.time\n\ntest \"tied\" {\n    let ch: conc.Channel<Int64> = conc.channel(0)\n    scope {\n        let a = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(1)\n        }\n        let b = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(2)\n        }\n        advanceTime(10)\n        let _ = ch.receive()\n        let _ = ch.receive()\n        let _ = a.await()\n        let _ = b.await()\n    }\n    assert(true, \"done\")\n}\n",
-   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
-  }
- },
- "exit": 0,
- "stdout": "{\"type\":\"test-result\",\"file\":\"tests/tied_test.we\",\"name\":\"tied\",\"status\":\"pass\",\"duration_ms\":10,\"explore\":{\"iterations\":2,\"attempts\":5,\"classes\":1}}\n{\"type\":\"test-summary\",\"total\":1,\"passed\":1,\"failed\":0,\"duration_ms\":10}\n",
- "stderr": ""
+  "name": "test-explore-json",
+  "args": [
+    "test",
+    ".",
+    "--json",
+    "--explore",
+    "--iterations",
+    "2"
+  ],
+  "setup": {
+    "files": {
+      "tests/tied_test.we": "import std.concurrent as conc\nimport std.time\n\ntest \"tied\" {\n    let ch: conc.Channel\u003cInt64\u003e = conc.channel(0)\n    scope {\n        let a = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(1)\n        }\n        let b = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(2)\n        }\n        advanceTime(10)\n        let _ = ch.receive()\n        let _ = ch.receive()\n        let _ = a.await()\n        let _ = b.await()\n    }\n    assert(true, \"done\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1912\",\"message\":\"function may block on a wait — Channel.send may block\",\"file\":\"tests/tied_test.we\",\"line\":9,\"column\":16,\"help\":\"No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded.\"}\n{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1912\",\"message\":\"function may block on a wait — Channel.send may block\",\"file\":\"tests/tied_test.we\",\"line\":13,\"column\":16,\"help\":\"No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded.\"}\n{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1912\",\"message\":\"function may block on a wait — Channel.receive may block\",\"file\":\"tests/tied_test.we\",\"line\":16,\"column\":20,\"help\":\"No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded.\"}\n{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1912\",\"message\":\"function may block on a wait — Channel.receive may block\",\"file\":\"tests/tied_test.we\",\"line\":17,\"column\":20,\"help\":\"No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded.\"}\n{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1912\",\"message\":\"function may block on a wait — TaskHandle.await may block\",\"file\":\"tests/tied_test.we\",\"line\":18,\"column\":19,\"help\":\"No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded.\"}\n{\"type\":\"diagnostic\",\"severity\":\"warning\",\"code\":\"W1912\",\"message\":\"function may block on a wait — TaskHandle.await may block\",\"file\":\"tests/tied_test.we\",\"line\":19,\"column\":19,\"help\":\"No change required; the note informs lock-wait chain analysis. Wrap with scope timeout if the wait must be bounded.\"}\n{\"type\":\"test-result\",\"file\":\"tests/tied_test.we\",\"name\":\"tied\",\"status\":\"pass\",\"duration_ms\":10,\"explore\":{\"iterations\":2,\"attempts\":5,\"classes\":1}}\n{\"type\":\"test-summary\",\"total\":1,\"passed\":1,\"failed\":0,\"duration_ms\":10}\n",
+  "stderr": ""
 }

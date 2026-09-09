@@ -1,0 +1,16 @@
+{
+  "name": "vet-w1911",
+  "args": [
+    "vet",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn touch(h: conc.Mutex<Int64>, v: Int64) -> Int64 {\n    let out = h.get()\n    return v + out\n}\n\npub fn main() -> Result<(), AppError> {\n    let m = conc.Mutex(0)\n    let r = m.update(|v| touch(m, v))\n    let _ = r\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:12:26: warning[W1911]: possible indirect nested access to one shared value — m is passed to touch inside its own callback\n"
+}

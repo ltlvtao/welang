@@ -6,15 +6,15 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn join(t: conc.TaskHandle<Int64>) -> Int64 {\n    let r = t.await()\n    return match r {\n        Ok(v) => v\n        Err(conc.Panicked(m)) => 0\n    }\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn join(t: conc.TaskHandle\u003cInt64\u003e) -\u003e Int64 {\n    let r = t.await()\n    return match r {\n        Ok(v) =\u003e v\n        Err(conc.Panicked(m)) =\u003e 0\n    }\n}\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "",
-  "stderr": "",
+  "stderr": "src/main.we:6:15: warning[W1912]: function may block on a wait — TaskHandle.await may block\n",
   "files": {
-    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn join(t: conc.TaskHandle<Int64>) -> Int64 {\n    let r = t.await()\n    return match r {\n        Ok(v) => v\n        Err(conc.Panicked(m)) => 0\n    }\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn join(t: conc.TaskHandle\u003cInt64\u003e) -\u003e Int64 {\n    let r = t.await()\n    return match r {\n        Ok(v) =\u003e v\n        Err(conc.Panicked(m)) =\u003e 0\n    }\n}\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    return Ok(())\n}\n",
     "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
   }
 }

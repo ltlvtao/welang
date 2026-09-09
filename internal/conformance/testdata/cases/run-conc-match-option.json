@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(1)\n    ch.send(4)\n    let v = ch.receive()\n    match v {\n        Some(x) => {\n            if x == 4 {\n                io.println(\"four\")\n            } else {\n                io.println(\"x\")\n            }\n        }\n        None => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -\u003e Result\u003c(), AppError\u003e {\n    let ch: conc.Channel\u003cInt64\u003e = conc.channel(1)\n    ch.send(4)\n    let v = ch.receive()\n    match v {\n        Some(x) =\u003e {\n            if x == 4 {\n                io.println(\"four\")\n            } else {\n                io.println(\"x\")\n            }\n        }\n        None =\u003e { io.println(\"none\") }\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "four\n",
-  "stderr": ""
+  "stderr": "src/main.we:8:8: warning[W1912]: function may block on a wait — Channel.send may block\nsrc/main.we:9:16: warning[W1912]: function may block on a wait — Channel.receive may block\n"
 }

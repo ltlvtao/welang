@@ -28,7 +28,7 @@ This document is the single authority for reference-toolchain execution state: t
 | M10a | `testing-check` | Chapter 20 check face: test modules and test blocks, mock declarations, advanceTime typing and position, std.test loading | done 2026-09-08 |
 | M10b | `testing-run` | Chapter 20/21 run towers: multi-function codegen widening, the we test runner, the virtual clock, deterministic test scheduling, the test boundary, mock interception | done 2026-09-08 |
 | M10c | `testing-explore` | Chapter 21 exploration: interleaving probes, E1901/E1902 guards, partial-order reduction | done 2026-09-09 |
-| M11 | `fmt-vet-doc` | Chapter 21 formatter, vet, documentation generation | pending |
+| M11 | `fmt-vet-doc` | Chapter 21 formatter (line-preserving rewrite, project face over every .we less build/), the advisory layer (W1910-W1912, [vet] postures across the pipeline), we vet, we doc (pub-only pages, --check) | done 2026-09-09 |
 | M12 | `ffi` | Chapter 19 foreign blocks and build-time linkage (E1906) | pending |
 | M13 | `dependencies` | Chapter 22 MVS resolution, `we.lock`, the dependency cache, a local registry fixture | pending |
 | M14 | `lsp` | The LSP document and `we lsp` | pending |

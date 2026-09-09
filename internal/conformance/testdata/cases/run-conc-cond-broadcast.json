@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let q = conc.Mutex(0)\n    let go = conc.Cond(q)\n    scope {\n        let w1 = task effect io {\n            go.wait(|v| v > 0)\n            io.println(\"w1\")\n        }\n        let w2 = task effect io {\n            go.wait(|v| v > 0)\n            io.println(\"w2\")\n        }\n        let s = task effect io {\n            let _ = q.set(2)\n            let _ = go.broadcast()\n            io.println(\"set\")\n        }\n        let _ = w1.await()\n        let _ = w2.await()\n        let _ = s.await()\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -\u003e Result\u003c(), AppError\u003e {\n    let q = conc.Mutex(0)\n    let go = conc.Cond(q)\n    scope {\n        let w1 = task effect io {\n            go.wait(|v| v \u003e 0)\n            io.println(\"w1\")\n        }\n        let w2 = task effect io {\n            go.wait(|v| v \u003e 0)\n            io.println(\"w2\")\n        }\n        let s = task effect io {\n            let _ = q.set(2)\n            let _ = go.broadcast()\n            io.println(\"set\")\n        }\n        let _ = w1.await()\n        let _ = w2.await()\n        let _ = s.await()\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "set\nw1\nw2\n",
-  "stderr": ""
+  "stderr": "src/main.we:11:16: warning[W1912]: function may block on a wait — Cond.wait may block\nsrc/main.we:15:16: warning[W1912]: function may block on a wait — Cond.wait may block\nsrc/main.we:23:20: warning[W1912]: function may block on a wait — TaskHandle.await may block\nsrc/main.we:24:20: warning[W1912]: function may block on a wait — TaskHandle.await may block\nsrc/main.we:25:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

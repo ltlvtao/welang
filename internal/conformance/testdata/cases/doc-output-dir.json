@@ -1,0 +1,23 @@
+{
+  "name": "doc-output-dir",
+  "args": [
+    "doc",
+    ".",
+    "--output",
+    "site"
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "/// The error surface.\npub type AppError = Failed(String)\n\n/// Entry point.\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "site/main.md": "# Module main\n\n### AppError\n\n```\npub type AppError = Failed(String)\n```\n\nThe error surface.\n\n### main\n\n```\npub fn main() -> Result<(), AppError>\n```\n\nEntry point.\n",
+    "src/main.we": "/// The error surface.\npub type AppError = Failed(String)\n\n/// Entry point.\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

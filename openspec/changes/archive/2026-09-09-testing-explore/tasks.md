@@ -94,6 +94,7 @@
   **归档期复验拦下一处（披露，D13）**：`gofmt -l` 揪出 `internal/cli/m10c_test.go` 未格式化——T2–T6 验证门（go test/go vet/conformance）不含 gofmt，结构体字段对齐空白漏网（TestM10cResolveExploreIters 用例表四字段）。`gofmt -w` 修复（零行为改动，diff 纯空白），`go test ./internal/cli/` 复验绿。T8 阶梯不含 gofmt 属验证清单缺口，如实记录；M10b T10 验证面（gofmt -l 空）本次补齐。
   **验证对账**：`validate.py --all --strict` → `OK: no changes found (nothing to validate); registry clean`（active 目录清空之谓，M10b 归档后同形）；docs_sync `31 document pair(s) aligned`（对数不变）；gofmt -l 空（修复后）；`go build ./...`/`go vet ./...` 过；`git diff --check` 干净；归档目录 `archive/2026-09-09-testing-explore/` 在位、roadmap M10c 行 done（双语）。
 
-- [ ] T11 记忆与提交：project-overview 增 M10c 全量条 + MEMORY.md 索引行更新；提交信息草案呈报，**候用户明示**
+- [x] T11 记忆与提交：project-overview 增 M10c 全量条 + MEMORY.md 索引行更新；提交信息草案呈报，**候用户明示**
   来源：仓库节奏（提交须明示）
   验证：记忆回写；提交草案就绪；未提交状态确认
+  完成记录（2026-09-09）：project-overview.md 增 M10c 全量条（四裁决、探索机/codegen/CLI 三面机制、三处 D13 缺陷披露、两普适教训 [argv join 盲区 / 黄金源须过编译器]、六探针、conformance 588→606、T10 gofmt 拦截披露）+ MEMORY.md 索引行更新（M0–M10c、下一里程碑 M11 fmt-vet-doc）。提交信息草案呈报（`Land M10c testing-explore: chapter 21 exploration tower`），**用户明示提交+推送（2026-09-09）**。提交对账：38 文件 +3096/−48；`git log -1 --format='%(trailers)'` 空（无署名 trailer）；staged 集零 refr/ 命中；push origin main `2818136..7021aec`。

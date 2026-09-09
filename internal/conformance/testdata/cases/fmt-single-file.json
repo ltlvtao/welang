@@ -1,0 +1,18 @@
+{
+  "name": "fmt-single-file",
+  "args": [
+    "fmt",
+    "demo/util.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/util.we": "pub fn helper()->Int64{\n    return 1\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/util.we": "pub fn helper() -> Int64 {\n  return 1\n}\n"
+  }
+}

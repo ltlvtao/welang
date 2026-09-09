@@ -6,15 +6,15 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let queue = conc.Mutex(0)\n    let notEmpty = conc.Cond(queue)\n    notEmpty.wait(|v| v > 0)\n    notEmpty.signal()\n    notEmpty.broadcast()\n    let dbLimiter = conc.Semaphore(10)\n    dbLimiter.acquire()\n    dbLimiter.release()\n    let n = dbLimiter.currentCount()\n    let ok = dbLimiter.tryAcquire()\n    let _ = n\n    let _ = ok\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    let queue = conc.Mutex(0)\n    let notEmpty = conc.Cond(queue)\n    notEmpty.wait(|v| v \u003e 0)\n    notEmpty.signal()\n    notEmpty.broadcast()\n    let dbLimiter = conc.Semaphore(10)\n    dbLimiter.acquire()\n    dbLimiter.release()\n    let n = dbLimiter.currentCount()\n    let ok = dbLimiter.tryAcquire()\n    let _ = n\n    let _ = ok\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "",
-  "stderr": "",
+  "stderr": "src/main.we:8:14: warning[W1912]: function may block on a wait — Cond.wait may block\nsrc/main.we:12:15: warning[W1912]: function may block on a wait — Semaphore.acquire may block\n",
   "files": {
-    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let queue = conc.Mutex(0)\n    let notEmpty = conc.Cond(queue)\n    notEmpty.wait(|v| v > 0)\n    notEmpty.signal()\n    notEmpty.broadcast()\n    let dbLimiter = conc.Semaphore(10)\n    dbLimiter.acquire()\n    dbLimiter.release()\n    let n = dbLimiter.currentCount()\n    let ok = dbLimiter.tryAcquire()\n    let _ = n\n    let _ = ok\n    return Ok(())\n}\n",
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    let queue = conc.Mutex(0)\n    let notEmpty = conc.Cond(queue)\n    notEmpty.wait(|v| v \u003e 0)\n    notEmpty.signal()\n    notEmpty.broadcast()\n    let dbLimiter = conc.Semaphore(10)\n    dbLimiter.acquire()\n    dbLimiter.release()\n    let n = dbLimiter.currentCount()\n    let ok = dbLimiter.tryAcquire()\n    let _ = n\n    let _ = ok\n    return Ok(())\n}\n",
     "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
   }
 }

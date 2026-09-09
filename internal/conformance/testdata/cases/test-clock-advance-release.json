@@ -12,5 +12,5 @@
   },
   "exit": 0,
   "stdout": "slept\npass  tests/advance_test.we: advance (100ms)\ntotal 1, passed 1, failed 0 (100ms)\n",
-  "stderr": ""
+  "stderr": "tests/advance_test.we:11:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

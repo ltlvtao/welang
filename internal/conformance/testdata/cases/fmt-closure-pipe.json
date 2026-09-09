@@ -1,0 +1,20 @@
+{
+  "name": "fmt-closure-pipe",
+  "args": [
+    "fmt",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let m=conc.Mutex(0)\n    let n=m.update(|v|v+1)\n    let _=n\n    let flag=match n {\n        1|2=>true\n        _=>false\n    }\n    let _ = flag\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n  let m = conc.Mutex(0)\n  let n = m.update(|v| v + 1)\n  let _ = n\n  let flag = match n {\n    1 | 2 => true\n    _ => false\n  }\n  let _ = flag\n  return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

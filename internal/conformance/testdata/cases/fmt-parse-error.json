@@ -1,0 +1,22 @@
+{
+  "name": "fmt-parse-error",
+  "args": [
+    "fmt",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/bad.we": "pub fn (",
+      "src/main.we": "pub fn main()->Result<(),AppError>{\n    return Ok(())\n}\n\npub type AppError=Failed(String)\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/bad.we:1:8: error[E0105]: unexpected token — \"(\" where a fn name goes: a fn declaration is fn name(params) [-> type] { body }\n",
+  "files": {
+    "src/bad.we": "pub fn (",
+    "src/main.we": "pub fn main() -> Result<(), AppError> {\n  return Ok(())\n}\n\npub type AppError = Failed(String)\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

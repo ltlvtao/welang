@@ -1,0 +1,17 @@
+{
+  "name": "vet-anchor-message",
+  "args": [
+    "vet",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "tests/anchor_test.we": "import std.concurrent as conc\n\neffect db\n\nfn save() effect db {\n    return\n}\n\ntest \"anchor\" {\n    let sem = conc.Semaphore(1)\n    sem.acquire()\n    save()\n    sem.release()\n    assert(true, \"done\")\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/anchor_test.we:11:9: warning[W1912]: function may block on a wait — Semaphore.acquire may block\ntests/anchor_test.we:12:5: warning[W1910]: unmocked custom effect in a test — save carries custom effect db, no mock in this test\n"
+}

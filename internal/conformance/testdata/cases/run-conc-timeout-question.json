@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), conc.TimeoutError> {\n    let ch: conc.Channel<Int64> = conc.channel(1)\n    let r = scope timeout(30) {\n        let t = task effect io {\n            let v = ch.receive()\n        }\n        let _ = t.await()\n    }\n    let _ = r?\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), conc.TimeoutError\u003e {\n    let ch: conc.Channel\u003cInt64\u003e = conc.channel(1)\n    let r = scope timeout(30) {\n        let t = task effect io {\n            let v = ch.receive()\n        }\n        let _ = t.await()\n    }\n    let _ = r?\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 1,
   "stdout": "",
-  "stderr": "error: TimedOut\n"
+  "stderr": "src/main.we:10:24: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:12:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\nerror: TimedOut\n"
 }

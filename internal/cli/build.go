@@ -167,9 +167,19 @@ func checkClangVersion(path string) error {
 // inspection. On success it returns the artifact path and prints the
 // success faces; a failure is already reported, with its exit code.
 func (e *env) buildProject(dir string) (string, int) {
-	file, name, mods, code := e.loadProject(dir, true)
+	manifest, file, name, mods, code := e.loadProject(dir, true)
 	if file == nil {
 		return "", code
+	}
+	// The advisory layer rides before code generation (M11 design D5):
+	// warnings render and the build continues; a promoted finding stops
+	// exactly as an error does — no artifact, the run's exit 1.
+	found, code := e.projectAdvisories(dir, filepath.Join(dir, "src", "main.we"), file, mods)
+	if code != exitOK {
+		return "", code
+	}
+	if promoted, _ := e.advise(manifest, found); promoted {
+		return "", exitDiagnostic
 	}
 	// The program face of design D1: dependency modules in graph order,
 	// the root last. The std modules drop out here — their call faces

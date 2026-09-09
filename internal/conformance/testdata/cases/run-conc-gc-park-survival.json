@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nrecord Msg {\n    text: String\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Msg> = conc.channel(0)\n    scope {\n        let sender = task effect io {\n            ch.send(Msg { text: \"hello\" })\n            io.println(\"sent\")\n        }\n        let receiver = task effect io {\n            let v = ch.receive()\n            match v {\n                Some(m) => { io.println(\"got-hello\") }\n                None => { io.println(\"got-none\") }\n            }\n        }\n        let _ = sender.await()\n        let _ = receiver.await()\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nrecord Msg {\n    text: String\n}\n\npub fn main() effect io -\u003e Result\u003c(), AppError\u003e {\n    let ch: conc.Channel\u003cMsg\u003e = conc.channel(0)\n    scope {\n        let sender = task effect io {\n            ch.send(Msg { text: \"hello\" })\n            io.println(\"sent\")\n        }\n        let receiver = task effect io {\n            let v = ch.receive()\n            match v {\n                Some(m) =\u003e { io.println(\"got-hello\") }\n                None =\u003e { io.println(\"got-none\") }\n            }\n        }\n        let _ = sender.await()\n        let _ = receiver.await()\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "got-hello\nsent\n",
-  "stderr": ""
+  "stderr": "src/main.we:14:16: warning[W1912]: function may block on a wait — Channel.send may block\nsrc/main.we:18:24: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:24:24: warning[W1912]: function may block on a wait — TaskHandle.await may block\nsrc/main.we:25:26: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

@@ -47,9 +47,9 @@ var subcommands = map[string]struct {
 	"check":   {takesPath: true, implemented: true},
 	"run":     {takesPath: true, implemented: true},
 	"test":    {takesPath: true, implemented: true},
-	"fmt":     {takesPath: true},
-	"vet":     {takesPath: true},
-	"doc":     {takesPath: true},
+	"fmt":     {takesPath: true, implemented: true},
+	"vet":     {takesPath: true, implemented: true},
+	"doc":     {takesPath: true, implemented: true},
 	"clean":   {takesPath: true, implemented: true},
 	"version": {takesPath: false, implemented: true},
 	"lsp":     {takesPath: true},
@@ -65,6 +65,11 @@ type env struct {
 	// filter is we test's --filter pattern (M10b design D6): matched
 	// CLI-side, the kept tests alone ride into the harness synthesis.
 	filter string
+	// The doc face (M11 design D6), doc-scoped like test's own trio:
+	// --output redirects the pages into a directory, --check reports
+	// documentation gaps without writing anything.
+	docOutput string
+	docCheck  bool
 	// The exploration face (M10c design D9), test-scoped like --filter:
 	// --explore arms the harness's exploration mode, --no-reduce disables
 	// the POR dedup, --iterations N (both forms) pins the count. itersFlag
@@ -123,7 +128,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return e.runVersion(positional)
 	case "new":
 		return e.runNew(positional)
-	case "check", "build", "run", "clean":
+	case "check", "build", "run", "clean", "fmt", "vet", "doc":
 		path := "."
 		if len(positional) == 1 {
 			path = positional[0]
@@ -135,6 +140,12 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			return e.runBuild(path, info)
 		case "run":
 			return e.runRun(path, info)
+		case "fmt":
+			return e.runFmt(path, info)
+		case "vet":
+			return e.runVet(path, info)
+		case "doc":
+			return e.runDoc(path, info)
 		default:
 			return e.runClean(path, info)
 		}
@@ -153,8 +164,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // accepted anywhere after the subcommand, per `we <subcommand> [path]
 // [options]`. The subcommand's own flags — we test's --filter (M10b
 // design D6) and the exploration trio --explore/--iterations/--no-reduce
-// (M10c design D9) — parse only under their subcommand; elsewhere they
-// stay unknown options.
+// (M10c design D9), we doc's --output/--check (M11 design D6) — parse
+// only under their subcommand; elsewhere they stay unknown options.
 func (e *env) parseOptions(sub string, args []string) ([]string, int) {
 	var positional []string
 	for i := 0; i < len(args); i++ {
@@ -200,6 +211,16 @@ func (e *env) parseOptions(sub string, args []string) ([]string, int) {
 			if code := e.setIterations(strings.TrimPrefix(a, "--iterations=")); code != exitOK {
 				return nil, code
 			}
+		case sub == "doc" && a == "--output":
+			if i+1 >= len(args) {
+				return nil, e.usageErr("--output wants a directory")
+			}
+			i++
+			e.docOutput = args[i]
+		case sub == "doc" && strings.HasPrefix(a, "--output="):
+			e.docOutput = strings.TrimPrefix(a, "--output=")
+		case sub == "doc" && a == "--check":
+			e.docCheck = true
 		case strings.HasPrefix(a, "--"):
 			return nil, e.usageErr("unknown option %q", a)
 		default:

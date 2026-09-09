@@ -1,0 +1,16 @@
+{
+  "name": "vet-w1912-five",
+  "args": [
+    "vet",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let m = conc.Mutex(0)\n    let cv = conc.Cond(m)\n    let sem = conc.Semaphore(1)\n    let ch: conc.Channel<Int64> = conc.channel(2)\n    scope {\n        let t = task effect io {\n            let _ = m.set(1)\n            let _ = sem.release()\n            let _ = ch.close()\n        }\n        let _ = t.await()\n    }\n    sem.acquire()\n    cv.wait(|v| v > 0)\n    ch.send(1)\n    let a = ch.receive()\n    let _ = a\n    let b = ch.trySend(2)\n    let c = ch.tryReceive()\n    let _ = b\n    let _ = c\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:17:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\nsrc/main.we:19:9: warning[W1912]: function may block on a wait — Semaphore.acquire may block\nsrc/main.we:20:8: warning[W1912]: function may block on a wait — Cond.wait may block\nsrc/main.we:21:8: warning[W1912]: function may block on a wait — Channel.send may block\nsrc/main.we:22:16: warning[W1912]: function may block on a wait — Channel.receive may block\n"
+}

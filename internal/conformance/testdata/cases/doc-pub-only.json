@@ -1,0 +1,24 @@
+{
+  "name": "doc-pub-only",
+  "args": [
+    "doc",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import util\n\neffect db\n\n/// One user of the system.\npub record User { name: String, age: Int64 }\n\npub type AppError = Failed(String)\n\n/// Adds one user to the ledger.\npub fn add(user: User) effect db -> Result<(), AppError> {\n    return Ok(())\n}\n\npub let maxUsers = 10\n\npub newtype UserId(Int64)\n\npub interface Describable {\n    fn describe(self) -> String\n}\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", age: 1 }\n    let n = util.double(u.age)\n    let _ = n\n    return Ok(())\n}\n",
+      "src/util.we": "/// Computes the double.\npub fn double(n: Int64) -> Int64 {\n    return n * 2\n}\n\npub let limit = 5\n\nfn hidden(n: Int64) -> Int64 {\n    return n\n}\n\nrecord Internal { x: Int64 }\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "docs/main.md": "# Module main\n\n### User\n\n```\npub record User { name: String, age: Int64 }\n```\n\nOne user of the system.\n\n### AppError\n\n```\npub type AppError = Failed(String)\n```\n\n### add\n\n```\npub fn add(user: User) effect db -> Result<(), AppError>\n```\n\nAdds one user to the ledger.\n\n### maxUsers\n\n```\npub let maxUsers = 10\n```\n\n### UserId\n\n```\npub newtype UserId(Int64)\n```\n\n### Describable\n\n```\npub interface Describable {\n  fn describe(self) -> String\n}\n```\n\n### main\n\n```\npub fn main() -> Result<(), AppError>\n```\n",
+    "docs/util.md": "# Module util\n\n### double\n\n```\npub fn double(n: Int64) -> Int64\n```\n\nComputes the double.\n\n### limit\n\n```\npub let limit = 5\n```\n",
+    "src/main.we": "import util\n\neffect db\n\n/// One user of the system.\npub record User { name: String, age: Int64 }\n\npub type AppError = Failed(String)\n\n/// Adds one user to the ledger.\npub fn add(user: User) effect db -> Result<(), AppError> {\n    return Ok(())\n}\n\npub let maxUsers = 10\n\npub newtype UserId(Int64)\n\npub interface Describable {\n    fn describe(self) -> String\n}\n\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\", age: 1 }\n    let n = util.double(u.age)\n    let _ = n\n    return Ok(())\n}\n",
+    "src/util.we": "/// Computes the double.\npub fn double(n: Int64) -> Int64 {\n    return n * 2\n}\n\npub let limit = 5\n\nfn hidden(n: Int64) -> Int64 {\n    return n\n}\n\nrecord Internal { x: Int64 }\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

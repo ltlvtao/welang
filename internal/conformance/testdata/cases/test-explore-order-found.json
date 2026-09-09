@@ -1,19 +1,19 @@
 {
- "name": "test-explore-order-found",
- "args": [
-  "test",
-  ".",
-  "--explore",
-  "--iterations",
-  "3"
- ],
- "setup": {
-  "files": {
-   "tests/order_test.we": "import std.concurrent as conc\nimport std.test as st\nimport std.time\n\ntest \"order\" {\n    let ch: conc.Channel<Int64> = conc.channel(0)\n    scope {\n        let a = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(1)\n        }\n        let b = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(2)\n        }\n        advanceTime(10)\n        let first = ch.receive()\n        let second = ch.receive()\n        match first {\n            Some(x) => { st.assertEqual(x, 1) }\n            None => { assert(false, \"none-first\") }\n        }\n        match second {\n            Some(y) => { st.assertEqual(y, 2) }\n            None => { assert(false, \"none-second\") }\n        }\n        let _ = a.await()\n        let _ = b.await()\n    }\n    assert(true, \"done\")\n}\n",
-   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
-  }
- },
- "exit": 1,
- "stdout": "fail  tests/order_test.we: order (explore 3 iterations, 3 attempts, 1 classes)\n  explored schedule failed: assertion failed: got 2, want 1\ntotal 1, passed 0, failed 1 (10ms)\n",
- "stderr": ""
+  "name": "test-explore-order-found",
+  "args": [
+    "test",
+    ".",
+    "--explore",
+    "--iterations",
+    "3"
+  ],
+  "setup": {
+    "files": {
+      "tests/order_test.we": "import std.concurrent as conc\nimport std.test as st\nimport std.time\n\ntest \"order\" {\n    let ch: conc.Channel\u003cInt64\u003e = conc.channel(0)\n    scope {\n        let a = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(1)\n        }\n        let b = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(2)\n        }\n        advanceTime(10)\n        let first = ch.receive()\n        let second = ch.receive()\n        match first {\n            Some(x) =\u003e { st.assertEqual(x, 1) }\n            None =\u003e { assert(false, \"none-first\") }\n        }\n        match second {\n            Some(y) =\u003e { st.assertEqual(y, 2) }\n            None =\u003e { assert(false, \"none-second\") }\n        }\n        let _ = a.await()\n        let _ = b.await()\n    }\n    assert(true, \"done\")\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/order_test.we: order (explore 3 iterations, 3 attempts, 1 classes)\n  explored schedule failed: assertion failed: got 2, want 1\ntotal 1, passed 0, failed 1 (10ms)\n",
+  "stderr": "tests/order_test.we:10:16: warning[W1912]: function may block on a wait — Channel.send may block\ntests/order_test.we:14:16: warning[W1912]: function may block on a wait — Channel.send may block\ntests/order_test.we:17:24: warning[W1912]: function may block on a wait — Channel.receive may block\ntests/order_test.we:18:25: warning[W1912]: function may block on a wait — Channel.receive may block\ntests/order_test.we:27:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\ntests/order_test.we:28:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

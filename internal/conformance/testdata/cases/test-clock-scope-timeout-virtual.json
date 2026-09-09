@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "tests/tv_test.we": "import std.io\nimport std.time\n\ntest \"timeout virtual\" {\n    scope {\n        let adv = task effect time {\n            advanceTime(100)\n        }\n        let r = scope timeout(50) {\n            let t = task effect time {\n                let _ = time.sleep(1000)\n            }\n            let _ = t.await()\n        }\n        match r {\n            Ok(_) => { io.println(\"ok\") }\n            Err(_) => { io.println(\"timedout\") }\n        }\n        let _ = adv.await()\n    }\n    assert(true, \"done\")\n}\n",
+      "tests/tv_test.we": "import std.io\nimport std.time\n\ntest \"timeout virtual\" {\n    scope {\n        let adv = task effect time {\n            advanceTime(100)\n        }\n        let r = scope timeout(50) {\n            let t = task effect time {\n                let _ = time.sleep(1000)\n            }\n            let _ = t.await()\n        }\n        match r {\n            Ok(_) =\u003e { io.println(\"ok\") }\n            Err(_) =\u003e { io.println(\"timedout\") }\n        }\n        let _ = adv.await()\n    }\n    assert(true, \"done\")\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "timedout\npass  tests/tv_test.we: timeout virtual (100ms)\ntotal 1, passed 1, failed 0 (100ms)\n",
-  "stderr": ""
+  "stderr": "tests/tv_test.we:13:23: warning[W1912]: function may block on a wait — TaskHandle.await may block\ntests/tv_test.we:19:21: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

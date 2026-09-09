@@ -1723,6 +1723,21 @@ type checker struct {
 	// mocks one target at most once (E1805). checkTestDecl swaps a fresh
 	// map in for each block; blocks are independent by chapter 20:71.
 	mockSeen map[string]bool
+	// The M11 advisory collector (design D4): advisories holds the
+	// W-severity findings of the walk; advRoot arms collection for the
+	// graph's root module alone (the std bodies, the builtin combinators,
+	// and every dependency module walk the same hooks and stay silent —
+	// the advisory surface is the compiled root's own code); advInTest
+	// spans a whole test body subtree (a task or mock body inside keeps
+	// it — chapter 20's calls are real there, unlike bodyTest, which
+	// resets per body kind); advPend carries a test block's unmocked
+	// custom-effect calls to their settle at the block's exit, where the
+	// complete mockSeen set decides (a mock anywhere in the block covers
+	// every call in it — the runtime installs at block start).
+	advisories []diag.Diagnostic
+	advRoot    bool
+	advInTest  bool
+	advPend    []pendingW1910
 	// topLetName carries the binding name of the top-level initializer
 	// being walked (chapter 16, design D8): that walk runs outside any
 	// declaration body (inBody false), so the first effectful call it
@@ -2522,7 +2537,7 @@ func (c *checker) importCall(mod string, x *ast.Call, expected Type) Type {
 	sym := c.importSym(mod, m.Name, m.Recv.(*ast.Ident).Line, m.Recv.(*ast.Ident).Col)
 	switch sym.kind {
 	case symFn:
-		return c.fnCall(sym.fn, x)
+		return c.fnCall(sym.fn, x, mod)
 	case symVariant:
 		return c.ctorCall(sym.sum, sym.vi, x)
 	case symNewtype:
@@ -4392,7 +4407,15 @@ func (c *checker) checkTestDecl(td *ast.TestDecl) {
 	c.locals = []map[string]Type{{}}
 	savedSeen := c.mockSeen
 	c.mockSeen = map[string]bool{}
+	// The advisory sentinel spans the whole subtree (M11 design D4):
+	// unlike bodyTest, task and mock bodies inside keep it — chapter
+	// 20's calls are real there. The pending list settles at the exit,
+	// against the block's complete mock set.
+	savedInTest, savedPend := c.advInTest, c.advPend
+	c.advInTest, c.advPend = true, nil
 	c.walkItems(td.Body.Items, walkFn)
+	c.settleW1910()
+	c.advInTest, c.advPend = savedInTest, savedPend
 	c.mockSeen = savedSeen
 	// Chapter 13's release discipline over the typed-clean body: a test
 	// declares bindings like any statement code, and a resource binding's
@@ -6983,7 +7006,7 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 		if sym, ok := c.syms[id.Name]; ok {
 			switch sym.kind {
 			case symFn:
-				return c.fnCall(sym.fn, x)
+				return c.fnCall(sym.fn, x, "")
 			case symVariant:
 				return c.ctorCall(sym.sum, sym.vi, x)
 			case symNewtype:
@@ -7060,9 +7083,12 @@ func (c *checker) callType(x *ast.Call, expected Type) Type {
 	// Chapter 18's nested-access discipline (E1613), after the arguments
 	// typed clean (the release walk's position): a shared cell's own
 	// callback re-acquiring the cell — direct, per binding, no chasing
-	// into further functions (the spec's own stated boundary).
+	// into further functions (the spec's own stated boundary). The
+	// receiver's named type is in hand here and nowhere later, so the
+	// W1912 blocking-operation advisory rides the same tail (design D4).
 	if head != nil {
 		c.nestedAccessCheck(head, x, recvT)
+		c.adviseBlocking(head, recvT)
 	}
 	return rt
 }
@@ -7084,6 +7110,10 @@ func (c *checker) nestedAccessCheck(m *ast.Member, x *ast.Call, recv Type) {
 	for _, a := range x.Args {
 		if cl, isCl := a.(*ast.Closure); isCl {
 			c.checkNestedAccess(id.Name, m.Name, cl)
+			// The W1911 companion (M11 design D4) on the same site: the
+			// callback is the one subtree where a pass of the binding
+			// onward is the indirect face E1613 cannot see.
+			c.adviseIndirect(id.Name, cl)
 		}
 	}
 }
@@ -7493,14 +7523,18 @@ func (c *checker) fnValueCall(ft fnType, x *ast.Call) Type {
 // the declaration (chapter 10) — the written arguments (E0828's arity
 // first, at the call head's pre-block), or the determination from the
 // call's arguments (design D6's single-direction unification); the where
-// clause holds at every application (E0830, at the call head).
-func (c *checker) fnCall(fd *ast.FnDecl, x *ast.Call) Type {
+// clause holds at every application (E0830, at the call head). mod is
+// the callee's canonical module key — "" for a name of the live module,
+// the import's resolved key for a qualified call — the one fact the
+// W1910 mock-identity judgment needs that the body machinery does not.
+func (c *checker) fnCall(fd *ast.FnDecl, x *ast.Call, mod string) Type {
 	// Chapter 16's call judgment leads (design D4): the callee's declared
 	// set faces the enclosing body's before any application machinery —
 	// an effect segment is never generic, so no determination can change
 	// it.
 	line, col := exprPos(x.Fn)
 	c.checkCallEffect(c.fnTags[fd], fd.Name, line, col)
+	c.adviseUnmocked(fd, mod, x)
 	params := c.fnParams[fd]
 	var args []Type
 	if len(fd.TypeParams) > 0 {

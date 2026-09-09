@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let a: conc.Channel<Int64> = conc.channel(0)\n    let b: conc.Channel<Int64> = conc.channel(0)\n    scope {\n        let t1 = task effect io {\n            let _ = a.send(1)\n            let v = b.receive()\n        }\n        let t2 = task effect io {\n            let _ = b.send(2)\n            let v = a.receive()\n        }\n        let _ = t1.await()\n        let _ = t2.await()\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() -\u003e Result\u003c(), AppError\u003e {\n    let a: conc.Channel\u003cInt64\u003e = conc.channel(0)\n    let b: conc.Channel\u003cInt64\u003e = conc.channel(0)\n    scope {\n        let t1 = task effect io {\n            let _ = a.send(1)\n            let v = b.receive()\n        }\n        let t2 = task effect io {\n            let _ = b.send(2)\n            let v = a.receive()\n        }\n        let _ = t1.await()\n        let _ = t2.await()\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 70,
   "stdout": "",
-  "stderr": "we: deadlock: 3 tasks parked with no wake source\n"
+  "stderr": "src/main.we:11:23: warning[W1912]: function may block on a wait — Channel.send may block\nsrc/main.we:12:23: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:15:23: warning[W1912]: function may block on a wait — Channel.send may block\nsrc/main.we:16:23: warning[W1912]: function may block on a wait — Channel.receive may block\nsrc/main.we:18:20: warning[W1912]: function may block on a wait — TaskHandle.await may block\nsrc/main.we:19:20: warning[W1912]: function may block on a wait — TaskHandle.await may block\nwe: deadlock: 3 tasks parked with no wake source\n"
 }

@@ -1,0 +1,18 @@
+{
+  "name": "fmt-bad-flag",
+  "args": [
+    "fmt",
+    ".",
+    "--width",
+    "80"
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub fn main() -> Result<(), AppError> {\n  return Ok(())\n}\n\npub type AppError = Failed(String)\n"
+    }
+  },
+  "exit": 2,
+  "stdout": "",
+  "stderr": "we: unknown option \"--width\"\nusage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n"
+}

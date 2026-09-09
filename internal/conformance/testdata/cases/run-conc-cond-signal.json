@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let q = conc.Mutex(0)\n    let notZero = conc.Cond(q)\n    scope {\n        let waiter = task effect io {\n            notZero.wait(|v| v > 0)\n            io.println(\"woken\")\n        }\n        let setter = task effect io {\n            let _ = q.set(1)\n            let _ = notZero.signal()\n            io.println(\"signaled\")\n        }\n        let _ = waiter.await()\n        let _ = setter.await()\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -\u003e Result\u003c(), AppError\u003e {\n    let q = conc.Mutex(0)\n    let notZero = conc.Cond(q)\n    scope {\n        let waiter = task effect io {\n            notZero.wait(|v| v \u003e 0)\n            io.println(\"woken\")\n        }\n        let setter = task effect io {\n            let _ = q.set(1)\n            let _ = notZero.signal()\n            io.println(\"signaled\")\n        }\n        let _ = waiter.await()\n        let _ = setter.await()\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "signaled\nwoken\n",
-  "stderr": ""
+  "stderr": "src/main.we:11:21: warning[W1912]: function may block on a wait — Cond.wait may block\nsrc/main.we:19:24: warning[W1912]: function may block on a wait — TaskHandle.await may block\nsrc/main.we:20:24: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }

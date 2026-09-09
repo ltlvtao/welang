@@ -1,0 +1,22 @@
+{
+  "name": "vet-promote-build",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[vet]\nW1910 = \"error\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+      "tests/gate_test.we": "effect db\n\nfn save() effect db {\n    return\n}\n\ntest \"gate\" {\n    save()\n    assert(true, \"done\")\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "tests/gate_test.we:8:5: error[W1910]: unmocked custom effect in a test — save carries custom effect db, no mock in this test\n",
+  "files": {
+    "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+    "tests/gate_test.we": "effect db\n\nfn save() effect db {\n    return\n}\n\ntest \"gate\" {\n    save()\n    assert(true, \"done\")\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[vet]\nW1910 = \"error\"\n"
+  }
+}

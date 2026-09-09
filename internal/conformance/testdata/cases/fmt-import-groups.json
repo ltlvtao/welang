@@ -1,0 +1,20 @@
+{
+  "name": "fmt-import-groups",
+  "args": [
+    "fmt",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import util\nimport std.concurrent as conc\nimport std.io\n\npub fn main() -> Result<(), AppError> {\n    let m = conc.Mutex(0)\n    let _ = m\n    io.println(\"hi\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "src/main.we": "import std.concurrent as conc\nimport std.io\n\nimport util\n\npub fn main() -> Result<(), AppError> {\n  let m = conc.Mutex(0)\n  let _ = m\n  io.println(\"hi\")\n  return Ok(())\n}\n",
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+}

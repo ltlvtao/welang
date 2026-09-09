@@ -6,11 +6,11 @@
   ],
   "setup": {
     "files": {
-      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -> Result<(), AppError> {\n    scope {\n        let t = task effect net { 1 }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\npub fn main() effect net -\u003e Result\u003c(), AppError\u003e {\n    scope {\n        let t = task effect net { 1 }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
   "exit": 0,
   "stdout": "",
-  "stderr": ""
+  "stderr": "src/main.we:8:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\n"
 }
