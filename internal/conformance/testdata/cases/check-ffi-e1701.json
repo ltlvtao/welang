@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e1701",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"go\" {\n    fn abs(x: Int64) effect -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:1:9: error[E1701]: foreign block's ABI string is not \"c\" — got \"go\"\n"
+}

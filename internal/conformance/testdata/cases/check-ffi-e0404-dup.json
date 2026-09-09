@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e0404-dup",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn open(path: String) effect io -> Int64\n}\n\nforeign \"c\" {\n    fn open(path: String) effect io -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:8: error[E0404]: duplicate name in one module — \"open\" is already declared at line 2; one module has one name space\n"
+}

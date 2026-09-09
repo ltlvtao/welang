@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-eff-custom-tag",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "effect gpio\n\nforeign \"c\" {\n    fn readPin(pin: Int64) effect gpio -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn caller(pin: Int64) -> Int64 {\n    let v = readPin(pin)\n    return v\n}\n\npub fn main() -> Result<(), AppError> {\n    let n = caller(1)\n    let _ = n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:10:13: error[E1401]: undeclared effect at a call — \"readPin\" performs effect \"gpio\" which \"caller\" does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead\n"
+}

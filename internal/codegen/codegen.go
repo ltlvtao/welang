@@ -305,6 +305,17 @@ type emitter struct {
 	curKey     string // the module whose body is being walked/emitted
 	curImports map[string]string
 
+	// M12 foreign state (design D4/D5). Opaque records live in their own
+	// table — no layout, no constructor, no records/order entry (E1707
+	// shut the We-side construction paths at check); declare lines ride
+	// their own group, emitted for every entry whether called or not (the
+	// same every-fn-emitted discipline the We fns ride). diverged marks a
+	// body whose branch already ended in unreachable — a Never-returning
+	// foreign call — so no statement, defer, pop, or ret follows it.
+	opaques      map[string]bool
+	foreignDecls []string
+	diverged     bool
+
 	// M10b test state (design D5). tests collects the TestDecls pass one
 	// sees in test mode (module order, source order within); the tower
 	// emitter turns each into a test fn, its mocks, and a wrapper, and
@@ -368,13 +379,16 @@ type recRef struct {
 // declaration. The define's symbol is "<key>.<name>". The ABI classifies
 // lazily (at the define or the first call site, whichever comes first —
 // call sites in the entry precede the defines) and caches here, in the
-// callee's own module's tables.
+// callee's own module's tables. A foreign entry (chapter 19) joins the
+// table but never the define list — its body is native, its contract a
+// declare line, and its calls take the foreign ABI, not this one.
 type fnDef struct {
-	key   string
-	name  string
-	decl  *ast.FnDecl
-	abi   fnAbi
-	abiOK bool
+	key     string
+	name    string
+	decl    *ast.FnDecl
+	abi     fnAbi
+	abiOK   bool
+	foreign bool
 }
 
 // captureSet is one task block's environment face: the names the body
@@ -456,6 +470,39 @@ func (e *emitter) label(s string) { e.body.WriteString(s + ":\n") }
 func (e *emitter) value() string  { v := "v" + strconv.Itoa(e.fresh); e.fresh++; return v }
 func (e *emitter) use(sym string) { e.declUsed[sym] = true }
 
+// ForeignName is one foreign fn entry the link stage must resolve: the
+// module that declares it, the entry's source name (the Q3 ruling: the
+// declared name is the C symbol itself, unmangled), and the position the
+// E1906 report names it from.
+type ForeignName struct {
+	Module    string
+	Name      string
+	Line, Col int
+}
+
+// ForeignNames collects the program's foreign fn entries, module order
+// then source order within — the link tower's face (design D5): every
+// declared name must exist among the native objects llvm-nm reports, and
+// the ones that do not are E1906's list. Opaque records declare no
+// symbol of their own.
+func ForeignNames(mods []ProgModule) []ForeignName {
+	var names []ForeignName
+	for _, m := range mods {
+		for _, it := range m.File.Items {
+			fb, ok := it.(*ast.ForeignBlock)
+			if !ok {
+				continue
+			}
+			for _, x := range fb.Items {
+				if f, ok := x.(*ast.FnDecl); ok && f.Foreign {
+					names = append(names, ForeignName{Module: m.Key, Name: f.Name, Line: f.NameLine, Col: f.NameCol})
+				}
+			}
+		}
+	}
+	return names
+}
+
 // Emit renders f as textual LLVM IR under the module name (the manifest
 // name at the call site) — the single-file face of program emission
 // (design D1): one root module keyed "main". A non-nil NotImplemented
@@ -500,6 +547,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		modConc:    make(map[string]map[string]bool),
 		fnTable:    make(map[string]*fnDef),
 		slotSeen:   make(map[string]bool),
+		opaques:    make(map[string]bool),
 		mode:       mode,
 	}
 	root := mods[len(mods)-1]
@@ -564,6 +612,33 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				// every segment, and the tag names reach no IR and no
 				// runtime face.
 				continue
+			case *ast.ForeignBlock:
+				// Chapter 19 (M12 design D4): the block's records are
+				// opaque handles and its fns are native contracts. The
+				// records collect first — an entry may reference an opaque
+				// the block declares later — then every fn joins the fn
+				// table under its module key and renders its declare line,
+				// in block order, called or not. Fn entries never join the
+				// define list: the body is native. Opaque records join
+				// neither the record table nor its order — no layout, no
+				// constructor, nothing to emit.
+				for _, x := range d.Items {
+					if r, ok := x.(*ast.RecordDecl); ok {
+						e.opaques[m.Key+"."+r.Name] = true
+					}
+				}
+				for _, x := range d.Items {
+					f, ok := x.(*ast.FnDecl)
+					if !ok || !f.Foreign {
+						continue
+					}
+					e.fnTable[m.Key+"."+f.Name] = &fnDef{key: m.Key, name: f.Name, decl: f, foreign: true}
+					line, ok := e.foreignDeclare(f)
+					if !ok {
+						return "", bndFn() // check already owns the crossing set; this is unreachable defense
+					}
+					e.foreignDecls = append(e.foreignDecls, line)
+				}
 			case *ast.TestDecl:
 				// Test declarations are the run tower's own material
 				// (design D5): a test build collects them here (module
@@ -750,6 +825,13 @@ func (e *emitter) emitTestTower() *NotImplemented {
 // scalar io arguments, and the concurrent statement forms (while, if,
 // match, defer, task/scope/select, `?`).
 func (e *emitter) emitStmt(st ast.Stmt) *NotImplemented {
+	if e.diverged {
+		// A Never-returning foreign call already terminated this branch:
+		// unreachable is the block's terminator, so nothing after it
+		// emits — the statements lexically following are dead by the
+		// declaration's own semantics.
+		return nil
+	}
 	switch s := st.(type) {
 	case *ast.Binding:
 		if s.Pat != nil || (s.Kw != "let" && s.Kw != "var") {
@@ -1775,17 +1857,22 @@ func (e *emitter) emitCallback(cl *ast.Closure) (string, *NotImplemented) {
 		return "", bndCallback()
 	}
 	savedCtx, savedScalars, savedBody := e.ctx, e.scalars, e.body
+	savedDiverged := e.diverged
 	e.ctx = ctxCallback
 	e.scalars = map[string]scalarSlot{cl.Params[0].Name: {operand: "%v0"}}
 	e.body = strings.Builder{}
+	e.diverged = false
 	op, _, ni := e.emitNumExpr(es.Expr)
 	// The callback's text snapshots before the restore — reading e.body
 	// after would return the caller's builder (the swap-back already
 	// happened), and the callback's own instructions would vanish.
 	cb := e.body.String()
-	e.body, e.ctx, e.scalars = savedBody, savedCtx, savedScalars
-	if ni != nil {
-		return "", ni
+	diverged := e.diverged
+	e.body, e.ctx, e.scalars, e.diverged = savedBody, savedCtx, savedScalars, savedDiverged
+	if ni != nil || diverged {
+		// A diverged predicate is outside the face by contract: the
+		// callback owes its caller a value (a Never call returns none).
+		return "", bndCallback()
 	}
 	name := fmt.Sprintf("@.cb%d", len(e.thunks))
 	e.thunks = append(e.thunks, fmt.Sprintf(
@@ -2418,14 +2505,17 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedDiverged := e.diverged
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.diverged = savedDiverged
 	}
 	e.ctx = ctxTask
 	e.body = strings.Builder{}
+	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
@@ -2448,6 +2538,9 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 		}
 	}
 	for _, st := range items {
+		if e.diverged {
+			break // a Never call already terminated the task body
+		}
 		if _, ok := st.(*ast.Return); ok {
 			restore()
 			return callResult{}, bndTask()
@@ -2457,18 +2550,28 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 			return callResult{}, ni
 		}
 	}
-	// Deferred blocks invert at the tail, reverse registration order.
-	for i := len(e.defers) - 1; i >= 0; i-- {
-		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
-			restore()
-			return callResult{}, ni
+	if e.diverged {
+		// A diverged task body ends at its unreachable — no defers, no
+		// value tail (the process the Never call ends takes the task
+		// with it).
+		body := e.body.String()
+		restore()
+		e.thunks = append(e.thunks, fmt.Sprintf(
+			"define internal i64 %s(ptr %%env) {\nentry:\n%s}\n", name, body))
+	} else {
+		// Deferred blocks invert at the tail, reverse registration order.
+		for i := len(e.defers) - 1; i >= 0; i-- {
+			if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
+				restore()
+				return callResult{}, ni
+			}
 		}
+		body := e.body.String()
+		restore()
+		e.thunks = append(e.thunks, fmt.Sprintf(
+			"define internal i64 %s(ptr %%env) {\nentry:\n%s  ret i64 %s\n}\n",
+			name, body, val))
 	}
-	body := e.body.String()
-	restore()
-	e.thunks = append(e.thunks, fmt.Sprintf(
-		"define internal i64 %s(ptr %%env) {\nentry:\n%s  ret i64 %s\n}\n",
-		name, body, val))
 
 	e.use("__we_task_new")
 	h := e.value()
@@ -2897,6 +3000,9 @@ func scalarImmediate(x ast.Expr) (string, bool) {
 // returns 0; Err ends the process inside __we_fail, a noreturn call that
 // no pop precedes.
 func (e *emitter) emitTail(v ast.Expr) *NotImplemented {
+	if e.diverged {
+		return nil // the entry branch already ended in unreachable — no tail ret
+	}
 	call, ok := v.(*ast.Call)
 	if !ok {
 		return bndMain()
@@ -3155,6 +3261,279 @@ func (e *emitter) emitFxGate(fd *fnDef, abi fnAbi) {
 		abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body.String()))
 }
 
+// --- chapter 19: the foreign ABI (M12 design D4) -----------------------------------
+//
+// The We domain carries every integer as i64 and every float as double;
+// the C side takes its own widths. Each crossing kind names its C
+// spelling plus the conversion each direction needs — trunc/sext or
+// zext for the integers (signedness per kind), fptrunc/fpext for the
+// single-precision float; the i64 and double rows are identity. String
+// and Bytes are not kinds: they expand to the (ptr, i64) pair in
+// parameter position and never return (E1706). Never is not a kind
+// either — a void return position whose call diverges. Opaque records
+// are table lookups, not spellings: a single ptr.
+
+type foreignKind struct {
+	abi    string // the C-side IR spelling
+	narrow string // the conversion a We-domain argument takes ("" when none)
+	widen  string // the conversion a C return takes back ("" when none)
+	float  bool   // the We domain carries this kind as a double
+}
+
+var foreignKinds = map[string]foreignKind{
+	"Int8":    {abi: "i8", narrow: "trunc", widen: "sext"},
+	"UInt8":   {abi: "i8", narrow: "trunc", widen: "zext"},
+	"Int16":   {abi: "i16", narrow: "trunc", widen: "sext"},
+	"UInt16":  {abi: "i16", narrow: "trunc", widen: "zext"},
+	"Int32":   {abi: "i32", narrow: "trunc", widen: "sext"},
+	"UInt32":  {abi: "i32", narrow: "trunc", widen: "zext"},
+	"Rune":    {abi: "i32", narrow: "trunc", widen: "zext"},
+	"Int64":   {abi: "i64"},
+	"UInt64":  {abi: "i64"},
+	"Bool":    {abi: "i8", narrow: "trunc", widen: "zext"},
+	"Float32": {abi: "float", narrow: "fptrunc", widen: "fpext", float: true},
+	"Float64": {abi: "double", float: true},
+}
+
+// bareTypeName names t when it is an unqualified, unapplied reference —
+// the spelling the crossing kinds key on.
+func bareTypeName(t ast.TypeRef) string {
+	if n, ok := t.(*ast.NamedType); ok && n.Qual == "" && len(n.Args) == 0 {
+		return n.Name
+	}
+	return ""
+}
+
+// isOpaqueRef reports whether t names a foreign opaque record: the
+// walked module's own name, or a qualified one through its imports (the
+// no-import module-key fallback resolveQual carries).
+func (e *emitter) isOpaqueRef(t ast.TypeRef) bool {
+	n, ok := t.(*ast.NamedType)
+	if !ok || len(n.Args) != 0 {
+		return false
+	}
+	if n.Qual == "" {
+		return e.opaques[e.curKey+"."+n.Name]
+	}
+	if k := e.resolveQual(n.Qual); k != "" {
+		return e.opaques[k+"."+n.Name]
+	}
+	return false
+}
+
+// foreignRet is a foreign entry's return face: the call's IR result
+// spelling, the crossing kind a widening return widens back through
+// (zero value when none), and the two special families — an opaque's
+// single ptr and Never's void, the return position that only diverges.
+type foreignRet struct {
+	typ    string
+	k      foreignKind
+	opaque bool
+	never  bool
+}
+
+// foreignRetOf classifies one entry's declared return: no return and
+// Never are void (Never alone diverges), the crossing kinds take their
+// C spelling, an opaque takes a single ptr.
+func (e *emitter) foreignRetOf(t ast.TypeRef) (foreignRet, bool) {
+	if t == nil {
+		return foreignRet{typ: "void"}, true
+	}
+	name := bareTypeName(t)
+	if name == "Never" {
+		return foreignRet{typ: "void", never: true}, true
+	}
+	if k, ok := foreignKinds[name]; ok {
+		return foreignRet{typ: k.abi, k: k}, true
+	}
+	if e.isOpaqueRef(t) {
+		return foreignRet{typ: "ptr", opaque: true}, true
+	}
+	return foreignRet{}, false
+}
+
+// foreignDeclare renders one entry's declare line — the whole native
+// contract per the positional ABI map: each scalar at its C width,
+// String and Bytes as their (ptr, i64) pair, an opaque as a single ptr,
+// no return as void, Never as a void only ever seen diverging.
+func (e *emitter) foreignDeclare(f *ast.FnDecl) (string, bool) {
+	ret, ok := e.foreignRetOf(f.Ret)
+	if !ok {
+		return "", false
+	}
+	var ps []string
+	for _, p := range f.Params {
+		if k, ok := foreignKinds[bareTypeName(p.Type)]; ok {
+			ps = append(ps, k.abi)
+			continue
+		}
+		switch bareTypeName(p.Type) {
+		case "String", "Bytes":
+			ps = append(ps, "ptr", "i64")
+		default:
+			if !e.isOpaqueRef(p.Type) {
+				return "", false // check owns the crossing set; unreachable defense
+			}
+			ps = append(ps, "ptr")
+		}
+	}
+	return fmt.Sprintf("declare %s @%s(%s)", ret.typ, f.Name, strings.Join(ps, ", ")), true
+}
+
+// emitForeignCall emits one foreign call: no slot, no module-key
+// qualifier — the declared name is the C symbol itself (the Q3 ruling:
+// names under chapter 1's conventions pass through unmangled). The
+// arguments ride the positional ABI map — each scalar narrowed out of
+// the We domain, a String as its (ptr, i64) pair, an opaque as its
+// single ptr — and the result widens back. A Never return ends the
+// branch: unreachable is the terminator and the body stops emitting
+// (diverged).
+func (e *emitter) emitForeignCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplemented) {
+	if len(args) != len(fd.decl.Params) {
+		return callResult{}, e.bnd()
+	}
+	ret, ok := e.foreignRetOf(fd.decl.Ret)
+	if !ok {
+		return callResult{}, bndFn()
+	}
+	var ops []string
+	for i, a := range args {
+		p := fd.decl.Params[i]
+		if k, is := foreignKinds[bareTypeName(p.Type)]; is {
+			op, ni := e.foreignScalarArg(a, k)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			ops = append(ops, k.abi+" "+op)
+			continue
+		}
+		switch bareTypeName(p.Type) {
+		case "String":
+			// The buffer face: a String argument rides its (ptr, i64)
+			// pair, a nested call's String result alike.
+			if c, is := a.(*ast.Call); is {
+				res, ni := e.emitCall(c, nil)
+				if ni != nil {
+					return callResult{}, ni
+				}
+				if res.kind != ckStr {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "ptr "+res.strBind.dataOp, "i64 "+res.strBind.lenOp)
+				continue
+			}
+			d, l, ni := e.emitStringExpr(a)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			ops = append(ops, "ptr "+d, "i64 "+l)
+		case "Bytes":
+			// Bytes has no We-side producer yet (the B2 stdlib face
+			// carries it); the declare rides the map, the value face
+			// waits for a value to carry.
+			return callResult{}, e.bnd()
+		default:
+			if !e.isOpaqueRef(p.Type) {
+				return callResult{}, bndFn()
+			}
+			// The handle face: a bound opaque is a primitive pointer in
+			// the environment, a nested foreign call's return is the
+			// same face fresh.
+			switch v := a.(type) {
+			case *ast.Ident:
+				ptr, is := e.prims[v.Name]
+				if !is {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "ptr "+ptr)
+			case *ast.Call:
+				res, ni := e.emitCall(v, nil)
+				if ni != nil {
+					return callResult{}, ni
+				}
+				if res.kind != ckPrim {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "ptr "+res.i64)
+			default:
+				return callResult{}, e.bnd()
+			}
+		}
+	}
+	join := strings.Join(ops, ", ")
+	sym := "@" + fd.decl.Name
+	switch {
+	case ret.never:
+		e.inst(fmt.Sprintf("call void %s(%s)", sym, join))
+		e.inst("unreachable")
+		e.diverged = true
+		return callResult{kind: ckVoid}, nil
+	case ret.typ == "void":
+		e.inst(fmt.Sprintf("call void %s(%s)", sym, join))
+		return callResult{kind: ckVoid}, nil
+	case ret.opaque:
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr %s(%s)", v, sym, join))
+		return callResult{kind: ckPrim, i64: "%" + v}, nil
+	case ret.k.abi == "double":
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call double %s(%s)", v, sym, join))
+		return callResult{kind: ckI64, i64: "%" + v, isFloat: true}, nil
+	default:
+		// Integers, Bool, Rune arrive at their C width and widen back
+		// into the We i64 domain — sext or zext per the kind's
+		// signedness.
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call %s %s(%s)", v, ret.k.abi, sym, join))
+		if ret.k.widen == "" {
+			return callResult{kind: ckI64, i64: "%" + v}, nil
+		}
+		w := e.value()
+		e.inst(fmt.Sprintf("%%%s = %s %s %%%s to i64", w, ret.k.widen, ret.k.abi, v))
+		return callResult{kind: ckI64, i64: "%" + w}, nil
+	}
+}
+
+// foreignScalarArg emits one scalar argument in its C domain: a nested
+// call rides its result when the float/int families agree, otherwise
+// the expression must already sit in the We domain the kind maps from.
+func (e *emitter) foreignScalarArg(a ast.Expr, k foreignKind) (string, *NotImplemented) {
+	if c, ok := a.(*ast.Call); ok {
+		res, ni := e.emitCall(c, nil)
+		if ni != nil {
+			return "", ni
+		}
+		if res.kind != ckI64 || res.isFloat != k.float {
+			return "", e.bnd()
+		}
+		return e.narrowForeign(res.i64, k)
+	}
+	op, isF, ni := e.emitNumExpr(a)
+	if ni != nil {
+		return "", ni
+	}
+	if isF != k.float {
+		return "", e.bnd()
+	}
+	return e.narrowForeign(op, k)
+}
+
+// narrowForeign converts one We-domain operand into the kind's C width —
+// trunc for the integers, fptrunc for the single-precision float; the
+// i64 and double rows carry no conversion.
+func (e *emitter) narrowForeign(op string, k foreignKind) (string, *NotImplemented) {
+	if k.narrow == "" {
+		return op, nil
+	}
+	from := "i64"
+	if k.float {
+		from = "double"
+	}
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = %s %s %s to %s", v, k.narrow, from, op, k.abi))
+	return "%" + v, nil
+}
+
 // emitFnDefine emits one program fn: the define under its
 // module-qualified symbol, the parameter environments (scalars, the
 // String double word, record pointers, the sum pair re-housed in two
@@ -3177,14 +3556,17 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedDiverged := e.diverged
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.diverged = savedDiverged
 	}
 	e.ctx = ctxFn
 	e.body = strings.Builder{}
+	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
@@ -3208,6 +3590,9 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 		}
 	}
 	for _, st := range items {
+		if e.diverged {
+			break // a Never call already terminated the body
+		}
 		if _, ok := st.(*ast.Return); ok {
 			restore()
 			return bndFn()
@@ -3216,6 +3601,20 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 			restore()
 			return ni
 		}
+	}
+	if e.diverged {
+		// The body ended in unreachable (a Never-returning foreign
+		// call): no return value, no defers, no pops — the terminator
+		// stands as the define's own.
+		body := e.body.String()
+		restore()
+		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
+			"define %s @%s.%s(%s) {\nentry:\n%s}\n",
+			abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body))
+		if isCustomEffect(fd.decl) {
+			e.emitFxGate(fd, abi) // the gate's own call never diverges; its callee does, at runtime
+		}
+		return nil
 	}
 	ret, ni := e.fnRetVal(abi, tail)
 	if ni != nil {
@@ -3360,14 +3759,17 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedDiverged := e.diverged
 	restoreState := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.diverged = savedDiverged
 	}
 	e.ctx = ctxFn
 	e.body = strings.Builder{}
+	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
@@ -3387,6 +3789,9 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 		}
 	}
 	for _, st := range items {
+		if e.diverged {
+			break // a Never call already terminated the mock body
+		}
 		if _, ok := st.(*ast.Return); ok {
 			restoreState()
 			return mockInstall{}, bndFn()
@@ -3395,6 +3800,16 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 			restoreState()
 			return mockInstall{}, ni
 		}
+	}
+	if e.diverged {
+		// A diverged mock body ends at its unreachable, no value tail.
+		body := e.body.String()
+		restoreState()
+		sym := fmt.Sprintf("%s.mock.%d", key, n)
+		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
+			"define %s @%s(%s) {\nentry:\n%s}\n",
+			abi.retTyp, sym, strings.Join(ps, ", "), body))
+		return mockInstall{slot: slot, mock: "@" + sym, restore: restore}, nil
 	}
 	ret, ni := e.fnRetVal(abi, tail)
 	if ni != nil {
@@ -3433,16 +3848,19 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedTestBody := e.testBody
+	savedDiverged := e.diverged
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.testBody = savedTestBody
+		e.diverged = savedDiverged
 	}
 	e.ctx = ctxFn
 	e.testBody = true
 	e.body = strings.Builder{}
+	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
@@ -3453,6 +3871,9 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	e.pushes = 0
 
 	for _, st := range td.Body.Items {
+		if e.diverged {
+			break // a Never call already terminated the test body
+		}
 		if _, ok := st.(*ast.MockDecl); ok {
 			continue // its define rode ahead of this walk
 		}
@@ -3467,6 +3888,16 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 			restore()
 			return ni
 		}
+	}
+	if e.diverged {
+		// A diverged test body ends at its unreachable — no defers, no
+		// pops, no ret void (the Never call took the process before any
+		// assertion could fail).
+		body := e.body.String()
+		restore()
+		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
+			"define void @%s.test.%d() {\nentry:\n%s}\n", key, n, body))
+		return nil
 	}
 	for i := len(e.defers) - 1; i >= 0; i-- {
 		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
@@ -3709,8 +4140,13 @@ func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented
 // slot load, the argument list per the callee's families, and the result
 // per the return family — a String return extracts its two words into
 // the binding's operand pair, a record return is rooted by the caller,
-// a sum return lands in the two-slot environment.
+// a sum return lands in the two-slot environment. A foreign entry
+// (chapter 19) takes the foreign ABI instead: no slot, no qualifier —
+// the declared name is the C symbol itself.
 func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplemented) {
+	if fd.foreign {
+		return e.emitForeignCall(fd, args)
+	}
 	abi, ok := e.classify(fd)
 	if !ok {
 		return callResult{}, bndFn()
@@ -3989,6 +4425,9 @@ func (e *emitter) render(module string) string {
 	}
 	if len(e.slots) > 0 {
 		groups = append(groups, e.slots)
+	}
+	if len(e.foreignDecls) > 0 {
+		groups = append(groups, e.foreignDecls)
 	}
 	var decls []string
 	for _, d := range declareLines {

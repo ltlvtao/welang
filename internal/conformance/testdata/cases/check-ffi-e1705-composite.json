@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e1705-composite",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn sum(xs: List<Int64>) effect io -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:2:16: error[E1705]: foreign function signature holds a type outside the crossing set — parameter \"xs\" holds List<Int64>, which does not cross; values cross one at a time, or they do not cross at all\n"
+}

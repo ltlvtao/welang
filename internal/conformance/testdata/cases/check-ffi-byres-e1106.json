@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-byres-e1106",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    byres record File { }\n    fn open(path: String) effect io -> File\n}\n\nimpl Releasable for File {\n    fn release(mut self) {\n        return\n    }\n}\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs: List<File> = []\n    let _ = xs\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:15:18: error[E1106]: resource type in a composite position — \"File\" appears as a generic argument at the instantiation; a resource type appears only in binding positions - a parameter, a let or scope-head binding, a return type\n"
+}

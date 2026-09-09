@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e1704",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn id<T>(x: T) effect -> T\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:2:8: error[E1704]: foreign function declaration with a generic clause — \"id\"; the boundary is monomorphic: declare each instantiation, or wrap the polymorphism in a We-side generic function\n"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e1706-bytes",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn take() effect io -> Bytes\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:2:28: error[E1706]: String or Bytes is not a foreign return type — \"take\" declares a Bytes return; return an opaque handle plus a length query plus a copy into a caller-provided buffer\n"
+}

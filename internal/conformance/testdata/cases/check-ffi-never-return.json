@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-never-return",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn weAbort() effect io -> Never\n}\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    weAbort()\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

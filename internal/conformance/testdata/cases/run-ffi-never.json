@@ -1,0 +1,17 @@
+{
+  "name": "run-ffi-never",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn exitWith(code: Int64) effect -> Never\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    exitWith(7)\n    return Ok(())\n}\n",
+      "native/exit.c": "#include <stdlib.h>\n\nvoid exitWith(long c) { exit((int)c); }\n"
+    }
+  },
+  "exit": 7,
+  "stdout": "",
+  "stderr": ""
+}

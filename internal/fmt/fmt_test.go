@@ -24,6 +24,11 @@ type oneCase struct {
 var cases = []oneCase{
 	{"spacing", "pub fn add(a:Int64,b:Int64)->Int64{\n    return a+b\n}\n",
 		"pub fn add(a: Int64, b: Int64) -> Int64 {\n  return a + b\n}\n"},
+	// The prefix-minus pin (M12 found the defect: the binary-spacing row
+	// shadowed the prefix rows, spacing every -x to "- x" against the
+	// grammar chapter's own examples; ! and ~ were never hit).
+	{"prefix operators tight", "pub fn f(flag: Bool) -> Int64 {\n    let a = -3\n    let b = 1 - -3\n    let c = --a\n    let t = !flag\n    let m = ~a\n    let _ = b\n    let _ = c\n    let _ = t\n    let _ = m\n    return 0\n}\n",
+		"pub fn f(flag: Bool) -> Int64 {\n  let a = -3\n  let b = 1 - -3\n  let c = - -a\n  let t = !flag\n  let m = ~a\n  let _ = b\n  let _ = c\n  let _ = t\n  let _ = m\n  return 0\n}\n"},
 	{"blank collapse", "\n\npub fn main() -> Int64 {\n\n\n    return 0\n}\n",
 		"pub fn main() -> Int64 {\n\n  return 0\n}\n"},
 	{"empty block", "pub fn noop() { }\n", "pub fn noop() {}\n"},

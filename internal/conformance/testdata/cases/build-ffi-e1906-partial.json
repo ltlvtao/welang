@@ -1,0 +1,17 @@
+{
+  "name": "build-ffi-e1906-partial",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn weAdd(a: Int64, b: Int64) effect -> Int64\n    fn mulInt(a: Int64, b: Int64) effect -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let _ = weAdd(2, 3)\n    return Ok(())\n}\n",
+      "native/calc.c": "long weAdd(long a, long b) { return a + b; }\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:3:8: error[E1906]: unresolved native symbol — \"mulInt\" (declared at src/main.we:3)\n"
+}

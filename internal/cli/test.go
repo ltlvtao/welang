@@ -264,7 +264,7 @@ func (e *env) runTestProject(dir string) int {
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		return e.fsError(err)
 	}
-	artifact, code := e.compileProgram(buildDir, name+".test", ir)
+	artifact, code := e.compileProgram(buildDir, name+".test", ir, nil)
 	if code != exitOK {
 		return code
 	}
@@ -310,7 +310,7 @@ func (e *env) runTestSingle(path string) int {
 		return e.fsError(err)
 	}
 	defer os.RemoveAll(tmp)
-	artifact, code := e.compileProgram(tmp, base+".test", ir)
+	artifact, code := e.compileProgram(tmp, base+".test", ir, nil)
 	if code != exitOK {
 		return code
 	}

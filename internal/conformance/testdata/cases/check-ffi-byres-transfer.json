@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-byres-transfer",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    byres record File { }\n    fn open(path: String) effect io -> File\n}\n\nimpl Releasable for File {\n    fn release(mut self) {\n        return\n    }\n}\n\npub type AppError = Failed(String)\n\npub fn take(f: File) effect io {\n    scope resource(g = f) {\n    }\n    return\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    scope resource(f = open(\"a.txt\")) {\n        take(f)\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

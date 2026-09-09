@@ -1,0 +1,16 @@
+{
+  "name": "build-ffi-e1906",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn abs(x: Int64) effect -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let _ = abs(3)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:2:8: error[E1906]: unresolved native symbol — \"abs\" (declared at src/main.we:2)\n"
+}

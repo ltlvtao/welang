@@ -201,7 +201,6 @@ const (
 	concScopeForms = "chapter 18 (scope) forms"
 	valPart        = "produces no value"
 	concurForms    = "chapter 18 (concurrency) forms"
-	ffiForms       = "chapter 19 (ffi) forms"
 )
 
 // dispatchTable is design D6 verbatim: keyword, its completion text, and
@@ -233,7 +232,7 @@ var dispatchTable = []struct {
 	{"defer", "{ () }", dg("E0105", topStmtPart), okRes(), dg("E0202", `"defer" produces no value`)},
 	{"true", "", dg("E0105", topStmtPart), okRes(), okRes()},
 	{"false", "", dg("E0105", topStmtPart), okRes(), okRes()},
-	{"foreign", "", bd(ffiForms), dg("E0105", stmtPart), dg("E0105", exprPart)},
+	{"foreign", "\"c\" { }", okRes(), dg("E1702", "foreign block outside the top level"), dg("E0105", exprPart)},
 	{"record", "User {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"byval", "record B {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
 	{"byres", "record B {}", okRes(), dg("E0105", stmtPart), dg("E0105", exprPart)},
@@ -706,10 +705,9 @@ func TestBoundaryForms(t *testing.T) {
 		src  string
 		what string
 	}{
-		// chapter 18's rows left the table with M9a and chapter 20's with
-		// M10a (the forms parse now; m9a_test.go and m10a_test.go pin
-		// their true outcomes)
-		{"foreign fn f() {}\n", ffiForms},
+		// chapter 18's rows left the table with M9a, chapter 20's with
+		// M10a, and chapter 19's with M12 (the forms parse now; their
+		// tests pin the true outcomes)
 		{"fn f(mut x: Int64) {}\n", "mut parameters"},
 	}
 	for _, p := range probes {

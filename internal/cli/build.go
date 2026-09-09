@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/ltlvtao/welang/internal/codegen"
+	"github.com/ltlvtao/welang/internal/diag"
+	"github.com/ltlvtao/welang/internal/typecheck"
 	"github.com/ltlvtao/welang/internal/version"
 	"github.com/ltlvtao/welang/runtime"
 )
@@ -59,7 +61,17 @@ func (e *env) runRun(path string, info os.FileInfo) int {
 	if code != exitOK {
 		return code
 	}
-	cmd := exec.Command(artifact)
+	// The artifact path rides the project path the caller named, while the
+	// child's Dir is the project itself — exec resolves a relative Path
+	// inside Dir, so `we run proj` from outside doubles the prefix and the
+	// binary is never found. Resolve absolute first. The conformance run
+	// goldens ride absolute temp dirs and never crossed it; the M12
+	// black-box battery's relative-path form caught it.
+	abs, err := filepath.Abs(artifact)
+	if err != nil {
+		return e.fsError(err)
+	}
+	cmd := exec.Command(abs)
 	cmd.Dir = path
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = e.stdout
@@ -130,13 +142,41 @@ func (e *env) runClean(path string, info os.FileInfo) int {
 // toolchainGate verifies the pinned LLVM toolchain before any project
 // loading (design D7): the clang on PATH must report exactly the pin, or
 // the build surface refuses to start — a toolchain failure, not a
-// diagnostic and not a boundary.
+// diagnostic and not a boundary. M12 (design D5) widens the gate to the
+// nm face the foreign binding's verification rides on.
 func (e *env) toolchainGate() int {
 	if err := checkClangVersion("clang"); err != nil {
 		fmt.Fprintf(e.stderr, "we: LLVM toolchain not available (want clang %s): %v\n", version.LLVMPin, err)
 		return exitDiagnostic
 	}
+	if err := checkNmVersion("llvm-nm"); err != nil {
+		fmt.Fprintf(e.stderr, "we: LLVM toolchain not available (want llvm-nm %s): %v\n", version.LLVMPin, err)
+		return exitDiagnostic
+	}
 	return exitOK
+}
+
+// checkNmVersion parses `LLVM version x.y.z` out of llvm-nm's --version
+// output (the Ubuntu toolchain's second line reads `Ubuntu LLVM version
+// 21.1.8`) and requires the exact pin — the clang gate's own discipline.
+// The path is a parameter so tests can fake the output.
+func checkNmVersion(path string) error {
+	out, err := exec.Command(path, "--version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("running %s --version: %w", path, err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+2 < len(fields); i++ {
+			if fields[i] == "LLVM" && fields[i+1] == "version" {
+				if fields[i+2] == version.LLVMPin {
+					return nil
+				}
+				return fmt.Errorf("%s --version reports %q", path, fields[i+2])
+			}
+		}
+	}
+	return fmt.Errorf("%s --version output carries no version line", path)
 }
 
 // checkClangVersion parses `clang version x.y.z` out of the --version
@@ -185,14 +225,7 @@ func (e *env) buildProject(dir string) (string, int) {
 	// the root last. The std modules drop out here — their call faces
 	// ride the emitter's own std table, their module bodies are the
 	// check stage's material, never IR.
-	prog := make([]codegen.ProgModule, 0, len(mods)+1)
-	for _, m := range mods {
-		if m.Key == "std" || strings.HasPrefix(m.Key, "std.") {
-			continue
-		}
-		prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File})
-	}
-	prog = append(prog, codegen.ProgModule{Key: "main", ID: name, File: file})
+	prog := append(e.programModules(mods), codegen.ProgModule{Key: "main", ID: name, File: file})
 	ir, ni := codegen.EmitProgram(codegen.ModeBuild, prog)
 	if ni != nil {
 		return "", e.boundary(ni.What)
@@ -201,7 +234,15 @@ func (e *env) buildProject(dir string) (string, int) {
 	if err := os.MkdirAll(buildDir, 0o755); err != nil {
 		return "", e.fsError(err)
 	}
-	artifact, code := e.compileProgram(buildDir, name, ir)
+	// The native face (M12 design D5): discover and compile native/,
+	// then verify every declared foreign name against the objects'
+	// symbols — E1906 renders every missing name and no artifact links
+	// with an unresolved binding.
+	nativeObjs, code := e.nativeObjects(dir, buildDir, mods, prog)
+	if code != exitOK {
+		return "", code
+	}
+	artifact, code := e.compileProgram(buildDir, name, ir, nativeObjs)
 	if code != exitOK {
 		return "", code
 	}
@@ -215,12 +256,130 @@ func (e *env) buildProject(dir string) (string, int) {
 	return artifact, exitOK
 }
 
+// nativeSources lists the project's native/ C sources, base names in
+// byte order (os.ReadDir's own order); an absent directory is an empty
+// set, not an error — ok reports the directory's presence so the build
+// log can distinguish an empty native/ from none at all.
+func nativeSources(dir string) ([]string, bool) {
+	entries, err := os.ReadDir(filepath.Join(dir, "native"))
+	if err != nil {
+		return nil, false
+	}
+	var srcs []string
+	for _, en := range entries {
+		if en.IsDir() || filepath.Ext(en.Name()) != ".c" {
+			continue
+		}
+		srcs = append(srcs, en.Name())
+	}
+	return srcs, true
+}
+
+// definedSymbols lists the names llvm-nm reports as defined across the
+// objects: one `address type name` line per symbol, the name the last
+// field (the exact line shape the pinned toolchain prints).
+func definedSymbols(nm string, objs []string) (map[string]bool, error) {
+	defined := make(map[string]bool)
+	if len(objs) == 0 {
+		return defined, nil
+	}
+	args := append([]string{"--defined-only"}, objs...)
+	out, err := exec.Command(nm, args...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("running %s: %w", nm, err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		defined[fields[len(fields)-1]] = true
+	}
+	return defined, nil
+}
+
+// missingForeignNames is the difference the E1906 report renders: every
+// declared foreign name no native object defines, in declaration order.
+func missingForeignNames(declared []codegen.ForeignName, defined map[string]bool) []codegen.ForeignName {
+	var missing []codegen.ForeignName
+	for _, n := range declared {
+		if !defined[n.Name] {
+			missing = append(missing, n)
+		}
+	}
+	return missing
+}
+
+// helpE1906 is the registry's remediation for the link face, quoted per
+// the loader's helps discipline.
+const helpE1906 = "Provide the native library or symbol the declaration names, or correct the declaration to the symbol that exists."
+
+// nativeObjects runs the native face of design D5: compile every
+// native/*.c into build/, list the objects' defined symbols, and verify
+// the program's declared foreign names against them — each missing name
+// is E1906 (anchored at its declaration), all rendered before the exit,
+// and the caller links nothing. prog is the whole program face (deps in
+// graph order plus the root keyed "main"); the mods side carries the
+// source paths the diagnostics anchor against.
+func (e *env) nativeObjects(dir, buildDir string, mods []typecheck.Module, prog []codegen.ProgModule) ([]string, int) {
+	declared := codegen.ForeignNames(prog)
+	srcs, _ := nativeSources(dir)
+	var objs []string
+	for _, f := range srcs {
+		obj := filepath.Join(buildDir, "native-"+strings.TrimSuffix(f, ".c")+".o")
+		if code := e.runClang("clang", "-c", filepath.Join(dir, "native", f), "-o", obj); code != exitOK {
+			return nil, code
+		}
+		objs = append(objs, obj)
+	}
+	if len(declared) == 0 {
+		return objs, exitOK // nothing binds: no verification face
+	}
+	defined, err := definedSymbols("llvm-nm", objs)
+	if err != nil {
+		fmt.Fprintf(e.stderr, "we: %v\n", err)
+		return nil, exitDiagnostic
+	}
+	modPaths := make(map[string]string, len(mods)+1)
+	for _, m := range mods {
+		modPaths[m.Key] = m.Path
+	}
+	modPaths["main"] = filepath.Join(dir, "src", "main.we")
+	missing := missingForeignNames(declared, defined)
+	for _, n := range missing {
+		path := modPaths[n.Module]
+		e.report(diag.Error("E1906",
+			fmt.Sprintf("unresolved native symbol — %q (declared at %s:%d)", n.Name, path, n.Line)).
+			At(path, n.Line, n.Col).
+			WithHelp(helpE1906))
+	}
+	if len(missing) > 0 {
+		return nil, exitDiagnostic
+	}
+	return objs, exitOK
+}
+
+// programModules lifts the loader's modules into the program face
+// buildProject assembles — the non-std dependency modules in graph
+// order. The root module joins at the call site, keyed "main".
+func (e *env) programModules(mods []typecheck.Module) []codegen.ProgModule {
+	prog := make([]codegen.ProgModule, 0, len(mods))
+	for _, m := range mods {
+		if m.Key == "std" || strings.HasPrefix(m.Key, "std.") {
+			continue
+		}
+		prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File})
+	}
+	return prog
+}
+
 // compileProgram writes one program's IR and the runtime sources into
 // build/ and runs the pinned clang sequence (design D6's three-step
 // order), leaving the intermediates for inspection. base names both the
-// IR file (<base>.ll) and the linked artifact (<base>); a failure is
-// already reported, with its exit code.
-func (e *env) compileProgram(buildDir, base, ir string) (string, int) {
+// IR file (<base>.ll) and the linked artifact (<base>); the native
+// objects join the final link's argument list (M12 design D5). A failure
+// is already reported, with its exit code.
+func (e *env) compileProgram(buildDir, base, ir string, nativeObjs []string) (string, int) {
 	for _, f := range []struct{ path, content string }{
 		{filepath.Join(buildDir, base+".ll"), ir},
 		{filepath.Join(buildDir, "rt-startup.c"), weruntime.StartupSource},
@@ -240,9 +399,21 @@ func (e *env) compileProgram(buildDir, base, ir string) (string, int) {
 	// M9b inserts the scheduler and the wait-machine sources ahead of
 	// the collector — startup enters __we_sched_boot, so the link needs
 	// them even for a plain M8 body. M10b adds the clock face test.c owns
-	// (the scheduler reads it, so every sched link carries it).
+	// (the scheduler reads it, so every sched link carries it). M12
+	// appends the native objects after the runtime objects (design D5).
 	// -Wno-override-module keeps the no-triple IR (D4) from warning on
 	// stderr — the success faces are silent, and a warning is output.
+	linkArgs := []string{"-Wno-override-module",
+		filepath.Join(buildDir, base+".ll"),
+		filepath.Join(buildDir, "rt-startup.o"),
+		filepath.Join(buildDir, "rt-sched.o"),
+		filepath.Join(buildDir, "rt-conc.o"),
+		filepath.Join(buildDir, "rt-test.o"),
+		filepath.Join(buildDir, "rt-gc.o"),
+		filepath.Join(buildDir, "rt-io.o"),
+	}
+	linkArgs = append(linkArgs, nativeObjs...)
+	linkArgs = append(linkArgs, "-o", filepath.Join(buildDir, base))
 	for _, c := range []struct {
 		name string
 		args []string
@@ -253,15 +424,7 @@ func (e *env) compileProgram(buildDir, base, ir string) (string, int) {
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-test.c"), "-o", filepath.Join(buildDir, "rt-test.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-gc.c"), "-o", filepath.Join(buildDir, "rt-gc.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-io.c"), "-o", filepath.Join(buildDir, "rt-io.o")}},
-		{"clang", []string{"-Wno-override-module",
-			filepath.Join(buildDir, base+".ll"),
-			filepath.Join(buildDir, "rt-startup.o"),
-			filepath.Join(buildDir, "rt-sched.o"),
-			filepath.Join(buildDir, "rt-conc.o"),
-			filepath.Join(buildDir, "rt-test.o"),
-			filepath.Join(buildDir, "rt-gc.o"),
-			filepath.Join(buildDir, "rt-io.o"),
-			"-o", filepath.Join(buildDir, base)}},
+		{"clang", linkArgs},
 	} {
 		if code := e.runClang(c.name, c.args...); code != exitOK {
 			return "", code

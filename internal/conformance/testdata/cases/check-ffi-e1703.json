@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e1703",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn dial(addr: String) -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:2:8: error[E1703]: foreign function declaration without an effect segment — \"dial\" has no body; the declaration is the only evidence of the callee's effects, so the segment must be written\n"
+}

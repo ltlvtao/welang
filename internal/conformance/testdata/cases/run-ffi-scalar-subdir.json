@@ -1,0 +1,17 @@
+{
+  "name": "run-ffi-scalar-subdir",
+  "args": [
+    "run",
+    "proj"
+  ],
+  "setup": {
+    "files": {
+      "proj/native/math.c": "long weAdd(long a, long b) { return a + b; }\n",
+      "proj/src/main.we": "import std.io\n\nforeign \"c\" {\n    fn weAdd(a: Int64, b: Int64) effect -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = weAdd(2, 3)\n    if n == 5 {\n        io.println(\"five\")\n    } else {\n        io.println(\"other\")\n    }\n    return Ok(())\n}\n",
+      "proj/we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "five\n",
+  "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e1702",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    foreign \"c\" {\n        fn abs(x: Int64) effect -> Int64\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:4:5: error[E1702]: foreign block outside the top level — the boundary is declared per module, not per expression\n"
+}

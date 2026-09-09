@@ -29,7 +29,7 @@
 | M10b | `testing-run` | 第 20/21 章运行塔：codegen 多函数发射拓宽、we test runner、虚拟钟、确定性测试调度、test 边界、mock 拦截 | done 2026-09-08 |
 | M10c | `testing-explore` | 第 21 章探索：交错探针、E1901/E1902 守卫、偏序归约 | done 2026-09-09 |
 | M11 | `fmt-vet-doc` | 第 21 章格式化器（行保结构重排、项目面 = 项目下全部 .we 排除 build/）、advisory 层（W1910–W1912、[vet] 姿态全管线）、we vet、we doc（pub-only 页面、--check） | done 2026-09-09 |
-| M12 | `ffi` | 第 19 章 foreign 块与构建时链接（E1906） | pending |
+| M12 | `ffi` | 第 19 章 foreign 块端到端：parser 产生式（E1701–E1704）、跨界集检查器（E1705–E1707；byres/opaque/效果走既有机器）、codegen declare + 位置 C ABI（String 为 (ptr, len) 双标量展开、Never 为 void + unreachable）、native/ 构建时链接 + llvm-nm 符号查证（E1906、工具链 gate 扩查 llvm-nm） | done 2026-09-09 |
 | M13 | `dependencies` | 第 22 章 MVS 解析、`we.lock`、依赖缓存、本地 registry 夹具 | pending |
 | M14 | `lsp` | LSP 文档与 `we lsp` | pending |
 | M15 | `benchmarks` | 评测套件（First-Pass Compile Rate 等） | pending |
@@ -61,3 +61,4 @@
 12. **test 模块可导入性与模块路径字符集。** 第 21 章场景称 `src/helpers_test.we`「随项目编译、可导入」——但第 15 章的导入→文件映射以 `[a-z][a-z0-9]` 形段拼写模块路径（实现为 E0013），下划线词干不可拼写；项目编译自 src/main.we 走导入图，图外的 test 模块在 `we check .` 下永不编译。或字符集收下划线词干、或场景的可导入性需要自己的映射——规范修订应定夺。M10a（`testing-check` design D10、Q1 切分的装载边界披露）发现。
 13. **test 关键字与 std.test 模块段。** 第 1 章保留字闭集使 `test` 成为关键字（它领 test 块产生式），该段无法按标识符取词；第 15 章的限定触及恰为「经导入名的 `name.item` 形」，而第 20 章示例调 `std.test.assertEqual(...)`——第 15 章未定型的两级点形。M10a 使已批面可拼写（模块路径段收过字符集检查的关键字 token）、调用走别名形（`import std.test as st; st.assertEqual(...)`）；裸导入绑定关键字名且惰性。规范修订应定夺真实调用面：两级 std 限定符、仅别名示例、或非关键字模块名。M10a（`testing-check` design D8、实现准备期披露）发现。
 14. **并发构造面为 mock 目标。** 第 20 章「不可 mock 目标」Requirement 以 `E1804:` 拒绝泛型 fn、impl 方法、「构造器如 `User`」——未点名并发构造器。M10a 的字面读在检查面接受 `mock conc.channel`（名字解析为模块级 fn 条目、无特判触发，`m10a_test.go:178`），但运行面是原始构造面：channel 构造的期望类型派生自调用实参、非声明签名可复述，唯一可复述的签名（无参、unit 返回）在运行时无从拦截。M10b 维持检查面零改、channel 不入槽表——检查过的 `mock conc.channel` 运行时跑真构造器。规范修订应裁决重分类：或 E1804 集点名原始构造器（检查面拒绝运行面无法兑现的目标）、或章文为其固定拦截面。M10a（`testing-check` 审查 F1）发现，M10b（`testing-run` design D3）登记。
+15. **第 19 章第二个效果段示例拼写。** 第 19 章 foreign 声明 Requirement 给出的签名形为 `fn name(params) effect tag1 tag2 ...` 或 `fn name(params) -> type effect tag1 tag2 ...`；第二个字面示例把段画在返回类型之后，与同句自己的散文（「between the parameter list and the arrow or the declaration's end」）及两处权威——第 6 章（「between the parameter list and the arrow or body」）、第 16 章（「between the parameter list and the arrow (or the body, when no return type is written)」）——矛盾。示例级笔误、非语义冲突：M12 实现及其黄金矩阵一律按第 6/16 章拼写 foreign 声明（`fn name(params) effect tags -> type`）。规范变更应修正第 19 章示例。M12（`ffi` T1 黄金源探针、披露 1）发现。

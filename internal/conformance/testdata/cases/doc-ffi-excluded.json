@@ -1,0 +1,21 @@
+{
+  "name": "doc-ffi-excluded",
+  "args": [
+    "doc",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    pub fn absByte(x: Int64) effect -> Int64\n    pub record Socket { }\n}\n\npub type AppError = Failed(String)\n\npub fn helper(n: Int64) -> Int64 {\n    return n\n}\n\npub fn main() -> Result<(), AppError> {\n    let m = helper(1)\n    let _ = m\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+    "src/main.we": "foreign \"c\" {\n    pub fn absByte(x: Int64) effect -> Int64\n    pub record Socket { }\n}\n\npub type AppError = Failed(String)\n\npub fn helper(n: Int64) -> Int64 {\n    return n\n}\n\npub fn main() -> Result<(), AppError> {\n    let m = helper(1)\n    let _ = m\n    return Ok(())\n}\n",
+    "docs/main.md": "# Module main\n\n### AppError\n\n```\npub type AppError = Failed(String)\n```\n\n### helper\n\n```\npub fn helper(n: Int64) -> Int64\n```\n\n### main\n\n```\npub fn main() -> Result<(), AppError>\n```\n"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-eff-e1401",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    fn ioWrite(fd: Int64, count: Int64) effect io -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn pure(count: Int64) -> Int64 {\n    let n = ioWrite(1, count)\n    return n\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = pure(3)\n    let _ = n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:8:13: error[E1401]: undeclared effect at a call — \"ioWrite\" performs effect \"io\" which \"pure\" does not declare; add the missing tag to the enclosing declaration's effect segment, or call a pure function instead\n"
+}

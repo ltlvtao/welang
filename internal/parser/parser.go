@@ -36,7 +36,6 @@ import (
 // The boundary form groups (design D6's closed table). Each later
 // milestone deletes its rows; the list shrinks to zero with the roadmap.
 const (
-	bndFFI    = "chapter 19 (ffi) forms"
 	bndMutPar = "mut parameters"
 )
 
@@ -71,6 +70,10 @@ var helps = map[string]string{
 	"E1612": "Call the wait source directly, or add the second case the construct exists to race.",
 	"E1801": "Move the test into a *_test.we file, or delete the block; a test module is otherwise an ordinary module under chapter 15.",
 	"E1802": "Move the mock into the test block whose calls it should intercept.",
+	"E1701": "Write the block as foreign \"c\"; Go-ecosystem interop goes through a C bridge, and extending the carrier is a spec-layer amendment of chapter 19.",
+	"E1702": "Move the foreign block to the module's top level; the items it declares join the module's name space from there.",
+	"E1703": "Write the segment: the callee's tags, or the bare keyword effect alone for the explicit pure claim (legal only inside a foreign block).",
+	"E1704": "Declare each monomorphic instantiation, or wrap the polymorphism in a We-side generic function calling monomorphic foreign declarations.",
 }
 
 // NotImplemented reports a ratified-but-unimplemented form. What names the
@@ -420,7 +423,7 @@ func (p *parser) parseItem() ast.Item {
 		case "effect":
 			return p.parseEffectDecl(false, t.Line, t.Col)
 		case "foreign":
-			p.bnd(bndFFI)
+			return p.parseForeignDecl(t.Line, t.Col)
 		case "test":
 			return p.parseTestDecl(t.Line, t.Col)
 		case "mock":
@@ -466,11 +469,18 @@ func (p *parser) parseEffectDecl(pub bool, line, col int) *ast.EffectDecl {
 // `effect` keyword (already verified by the caller) followed by one or
 // more effect tags. The tags reach the checker verbatim (resolution is
 // the type stage's own face, E1304); the first tag's position is the
-// anchor for those diagnostics.
-func (p *parser) parseEffectSegment() ([]string, int, int) {
+// anchor for those diagnostics. The one context exception is chapter 19's:
+// inside a foreign fn declaration the bare keyword — no tags — states the
+// explicit pure claim (a declaration with no body is the only evidence
+// there is, so the claim is written, not defaulted), and inForeign admits
+// exactly that. The bare form's position anchor is the keyword itself.
+func (p *parser) parseEffectSegment(inForeign bool) ([]string, int, int) {
 	p.next() // effect
 	t := p.cur()
 	if t.Kind != lex.KindIdent {
+		if inForeign {
+			return nil, p.last.Line, p.last.Col
+		}
 		if p.atEnd() {
 			p.failTok(t, "E0105", "unexpected end of file — an effect segment names at least one effect")
 		}
@@ -599,7 +609,7 @@ func (p *parser) parseFnDecl(pub bool, line, col int) *ast.FnDecl {
 	}
 	d.Params = p.parseParamList()
 	if isKw(p.cur(), "effect") {
-		d.EffectTags, d.EffectLine, d.EffectCol = p.parseEffectSegment()
+		d.EffectTags, d.EffectLine, d.EffectCol = p.parseEffectSegment(false)
 	}
 	if p.cur().Kind == "->" {
 		p.next()
@@ -766,7 +776,7 @@ func (p *parser) parseMockDecl() *ast.MockDecl {
 		m.HasRet = true
 	}
 	if isKw(p.cur(), "effect") {
-		m.EffectTags, m.EffectLine, m.EffectCol = p.parseEffectSegment()
+		m.EffectTags, m.EffectLine, m.EffectCol = p.parseEffectSegment(false)
 	}
 	if p.cur().Kind != "{" {
 		if p.atEnd() {
@@ -781,6 +791,150 @@ func (p *parser) parseMockDecl() *ast.MockDecl {
 	}
 	m.Body = p.parseFnBlock(&fnCtx{name: display, hasRet: m.HasRet})
 	return m
+}
+
+// parseForeignDecl parses chapter 19's foreign block: `foreign "c" { items }`
+// — the module's interoperation boundary, a top-level item (below the top
+// level the keyword is E1702, a statement-position rejection). The ABI
+// literal must be exactly "c" (E1701 — the one carrier chapter 0's host
+// strategy defines); the item closure is [pub] fn declarations (no body, the
+// effect segment REQUIRED — E1703 — and no generic clause — E1704) and [pub]
+// [byval|byres] record declarations reused exactly as opaque types — the
+// fieldless record is chapter 8's own production; a record with fields fits
+// none of the closure (E0105). Anything else is the closure's E0105 too. The
+// entries' names join the module's one name space through the ordinary
+// declaration paths (E0404/E0012/E0011 as everywhere), and the block is a
+// brace region — line breaks inside fold.
+func (p *parser) parseForeignDecl(line, col int) *ast.ForeignBlock {
+	p.next() // foreign
+	fb := &ast.ForeignBlock{ABI: "c", Line: line, Col: col}
+	ab := p.cur()
+	if ab.Kind == lex.KindEOF {
+		p.failTok(ab, "E0105", "unexpected end of file — a foreign block is foreign \"c\" { items }")
+	}
+	if ab.Kind != lex.KindString || descText(ab.Text) != "c" {
+		p.failTok(ab, "E1701",
+			fmt.Sprintf("foreign block's ABI string is not \"c\" — got %s", ab.Text))
+	}
+	p.next()
+	if p.cur().Kind != "{" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a foreign block's item block opens with {")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a foreign block's item block opens", p.cur().Text))
+	}
+	p.next() // {
+	p.depth++
+	defer func() { p.depth-- }()
+	for {
+		if p.cur().Kind == "}" {
+			p.next()
+			return fb
+		}
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a foreign block closes with }")
+		}
+		// The item head anchors the closure diagnostics: pub included, the
+		// first token of the item is where every closure violation reads
+		// from (the same anchor discipline as the position table's rows).
+		head := p.cur()
+		pub := false
+		if isKw(head, "pub") {
+			pub = true
+			p.next()
+			if p.atEnd() {
+				p.failTok(p.cur(), "E0105", "unexpected end of file — a foreign block closes with }")
+			}
+		}
+		it := p.cur()
+		switch {
+		case isKw(it, "fn"):
+			fb.Items = append(fb.Items, p.foreignFnItem(pub, head))
+		case isKw(it, "record"):
+			fb.Items = append(fb.Items, p.foreignRecordItem(pub, "gc", head))
+		case isKw(it, "byval") && isKw(p.peek(), "record"):
+			p.next() // byval
+			fb.Items = append(fb.Items, p.foreignRecordItem(pub, "value", head))
+		case isKw(it, "byres") && isKw(p.peek(), "record"):
+			p.next() // byres
+			fb.Items = append(fb.Items, p.foreignRecordItem(pub, "resource", head))
+		default:
+			p.failTok(head, "E0105",
+				fmt.Sprintf("unexpected token — %q in a foreign block: a foreign block holds foreign function declarations and opaque type declarations, nothing else", head.Text))
+		}
+	}
+}
+
+// foreignFnItem parses one foreign fn declaration — the chapter 6 signature
+// form with no body, its every clause the ordinary production's except the
+// two the boundary owns: a generic clause is E1704 (the native side knows
+// one signature; the boundary is monomorphic), and the effect segment is
+// REQUIRED — E1703 — because a declaration with no body is the only
+// evidence of the callee's effects there is. The bare segment (zero tags,
+// the explicit pure claim) is legal only here (parseEffectSegment's
+// inForeign). A body block after the signature fits no production of the
+// closure (E0105 at the item head): the native side holds the body.
+func (p *parser) foreignFnItem(pub bool, head lex.Token) *ast.FnDecl {
+	d := &ast.FnDecl{Pub: pub, Foreign: true, Line: head.Line, Col: head.Col}
+	p.next() // fn
+	nt := p.cur()
+	if nt.Kind != lex.KindIdent {
+		if p.atEnd() {
+			p.failTok(nt, "E0105", "unexpected end of file — a foreign fn declaration is fn name(params) effect tags")
+		}
+		p.failTok(nt, "E0105",
+			fmt.Sprintf("unexpected token — %q where a fn name goes: a foreign fn declaration is fn name(params) effect tags", nt.Text))
+	}
+	p.dupCheck(nt)
+	p.checkCamel(nt)
+	d.Name, d.NameLine, d.NameCol = nt.Text, nt.Line, nt.Col
+	p.next()
+	if p.cur().Kind == "<" {
+		p.failTok(nt, "E1704",
+			fmt.Sprintf("foreign function declaration with a generic clause — %q; the boundary is monomorphic: declare each instantiation, or wrap the polymorphism in a We-side generic function", d.Name))
+	}
+	if p.cur().Kind != "(" {
+		if p.atEnd() {
+			p.failTok(p.cur(), "E0105", "unexpected end of file — a fn wants its parameter list")
+		}
+		p.failTok(p.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q where a fn's parameter list opens", p.cur().Text))
+	}
+	d.Params = p.parseParamList()
+	if !isKw(p.cur(), "effect") {
+		p.failTok(nt, "E1703",
+			fmt.Sprintf("foreign function declaration without an effect segment — %q has no body; the declaration is the only evidence of the callee's effects, so the segment must be written", d.Name))
+	}
+	d.EffectTags, d.EffectLine, d.EffectCol = p.parseEffectSegment(true)
+	if p.cur().Kind == "->" {
+		p.next()
+		d.Ret = p.parseTypeRef()
+	}
+	if p.cur().Kind == "{" {
+		p.failTok(head, "E0105",
+			"a foreign fn declares no body — the native side holds it; a foreign block holds foreign function declarations and opaque type declarations, nothing else")
+	}
+	p.names[d.Name] = d.NameLine
+	return d
+}
+
+// foreignRecordItem parses one opaque type declaration: chapter 8's
+// fieldless record reused exactly — the category prefixes carry their
+// meanings unchanged (gc handle / byval copy / byres resource under
+// chapter 13's full discipline), the empty field list carrying opacity.
+// The name joins the name space and PascalCase holds, both through the
+// ordinary production. A record with fields is an ordinary record, not an
+// opaque declaration — E0105 at the item head, after the production has
+// run so no partial tree escapes the diagnostic.
+func (p *parser) foreignRecordItem(pub bool, cat string, head lex.Token) *ast.RecordDecl {
+	d := p.parseRecordDecl(pub, cat, head.Line, head.Col)
+	d.Opaque = true
+	if len(d.Fields) != 0 {
+		p.failTok(head, "E0105",
+			"a record with fields is an ordinary record, not an opaque type declaration; a foreign block holds foreign function declarations and opaque type declarations, nothing else")
+	}
+	return d
 }
 
 // descText carries a test description literal (chapter 20): a plain
@@ -1578,7 +1732,7 @@ func (p *parser) parseMethodSig(memberNames map[string]int) ast.MethodSig {
 	}
 	m.Recv, m.Params = p.recvParamList(m.Name)
 	if isKw(p.cur(), "effect") {
-		m.EffectTags, m.EffectLine, m.EffectCol = p.parseEffectSegment()
+		m.EffectTags, m.EffectLine, m.EffectCol = p.parseEffectSegment(false)
 	}
 	if p.cur().Kind == "->" {
 		p.next()
@@ -1740,7 +1894,7 @@ func (p *parser) parseImplMethod() *ast.FnDecl {
 	}
 	d.Recv, d.Params = p.recvParamList(d.Name)
 	if isKw(p.cur(), "effect") {
-		d.EffectTags, d.EffectLine, d.EffectCol = p.parseEffectSegment()
+		d.EffectTags, d.EffectLine, d.EffectCol = p.parseEffectSegment(false)
 	}
 	if p.cur().Kind == "->" {
 		p.next()
@@ -1892,10 +2046,17 @@ func (p *parser) parseStmt() ast.Stmt {
 			}
 			p.failTok(t, "E1802",
 				"mock declaration outside a test block — a mock exists only as a direct item of a test block body; move it into the test block whose calls it should intercept")
+		case "foreign":
+			// chapter 19's own position rule, its own code: the boundary is
+			// declared per module, and a block below the top level fits no
+			// statement production's intent either way (E1702 over the
+			// generic E0105).
+			p.failTok(t, "E1702",
+				"foreign block outside the top level — the boundary is declared per module, not per expression")
 		case "pub", "import", "as", "mut", "else", "in", "where", "derives",
 			"with", "resource", "effect", "case", "timeout", "collectAll",
 			"record", "byval", "byres", "newtype", "type", "interface",
-			"impl", "foreign", "test":
+			"impl", "test":
 			p.failTok(t, "E0105",
 				fmt.Sprintf("unexpected token — %q fits no statement production: statements are let|var bindings, name assignments, return, chapter 3's control statements, and expression statements", t.Text))
 		}
@@ -2447,7 +2608,7 @@ func (p *parser) parseTask() *ast.TaskExpr {
 		p.failTok(t, "E1601",
 			"task block without an effect segment — the task keyword is followed directly by its block, leaving the body's calls answerable to no declaration; write the segment of the chapter 16 spelling: task effect tag1 tag2 ... followed by the block")
 	}
-	tags, el, ec := p.parseEffectSegment()
+	tags, el, ec := p.parseEffectSegment(false)
 	body := p.parseFnBlock(&fnCtx{name: "(task)", hasRet: true})
 	return &ast.TaskExpr{EffectTags: tags, EffectLine: el, EffectCol: ec, Body: body, Line: t.Line, Col: t.Col}
 }

@@ -1,0 +1,17 @@
+{
+  "name": "run-ffi-opaque",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\nforeign \"c\" {\n    record Box { }\n    fn boxInt(v: Int64) effect -> Box\n    fn unboxInt(b: Box) effect -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let b = boxInt(41)\n    let n = unboxInt(b)\n    if n == 41 {\n        io.println(\"unboxed\")\n    } else {\n        io.println(\"bad\")\n    }\n    return Ok(())\n}\n",
+      "native/handle.c": "static long g_val = 0;\n\nlong* boxInt(long v) { g_val = v; return &g_val; }\n\nlong unboxInt(long* h) { return *h; }\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "unboxed\n",
+  "stderr": ""
+}

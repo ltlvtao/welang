@@ -708,16 +708,20 @@ func (r *reformer) gap(a lex.Token, ia tokinfo, b lex.Token, ib tokinfo) int {
 		}
 		return 1
 	}
-	// Binary operators, one on each side.
-	if isBinaryKind(a.Kind) || isBinaryKind(b.Kind) {
-		return 1
-	}
-	// Prefix operators: one before, none after.
+	// Prefix operators: one before, none after — ahead of the binary row,
+	// because a minus the classification placed in prefix position is by
+	// definition not the binary operator this round (the ordering was the
+	// M12-found defect: every `-x` spaced to `- x`, against the grammar
+	// chapter's own examples).
 	if ib.unary {
 		return 1
 	}
 	if ia.unary {
 		return 0
+	}
+	// Binary operators, one on each side.
+	if isBinaryKind(a.Kind) || isBinaryKind(b.Kind) {
+		return 1
 	}
 	// Comma, semicolon, colon: none before, one after.
 	if a.Kind == "," || a.Kind == ";" || a.Kind == ":" {

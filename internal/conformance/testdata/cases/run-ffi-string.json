@@ -1,0 +1,17 @@
+{
+  "name": "run-ffi-string",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\nforeign \"c\" {\n    fn firstByte(s: String) effect -> Int64\n}\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let c = firstByte(\"hello\")\n    if c == 104 {\n        io.println(\"first-h\")\n    } else {\n        io.println(\"bad\")\n    }\n    return Ok(())\n}\n",
+      "native/str.c": "long firstByte(const char* p, long n) { return n > 0 ? (long)p[0] : -1; }\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "first-h\n",
+  "stderr": ""
+}

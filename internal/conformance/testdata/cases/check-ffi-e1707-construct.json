@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-e1707-construct",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    record Socket { }\n}\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let s = Socket { }\n    let _ = s\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:8:13: error[E1707]: construction or update of a foreign opaque type — Socket is minted on the native side only; obtain the value from a foreign function's declared return\n"
+}

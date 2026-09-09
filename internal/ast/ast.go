@@ -63,9 +63,13 @@ type FnDecl struct {
 	EffectLine int           // at the segment's first tag (the discipline anchor)
 	EffectCol  int
 	Body       Block
-	Line, Col  int // at fn (or pub)
-	NameLine   int
-	NameCol    int
+	// Foreign marks a chapter 19 foreign fn entry — a declaration with no
+	// body (Body is zero): the name binds to a native symbol, the call goes
+	// straight to it, and mocking does not apply (E1804's category face).
+	Foreign   bool
+	Line, Col int // at fn (or pub)
+	NameLine  int
+	NameCol   int
 }
 
 // Param is one `name: type` pair of a parameter list.
@@ -154,9 +158,13 @@ type RecordDecl struct {
 	TypeParams []*TypeParam // chapter 10 generic clause; empty without
 	Fields     []FieldDecl
 	Derives    *DerivesClause // chapter 10 derives clause; nil without
-	Line, Col  int            // at record (or the outermost prefix)
-	NameLine   int
-	NameCol    int
+	// Opaque marks a chapter 19 opaque type entry — a fieldless record
+	// standing for a native-side type: We code holds its values as handles
+	// (one pointer slot), construction and update are E1707.
+	Opaque    bool
+	Line, Col int // at record (or the outermost prefix)
+	NameLine  int
+	NameCol   int
 }
 
 // FieldDecl is one `name: type` field of a record declaration.
@@ -678,6 +686,18 @@ type EffectDecl struct {
 	NameCol   int
 }
 
+// ForeignBlock is chapter 19's foreign block: `foreign "c" { items }` — the
+// module's interoperation boundary, a top-level item (E1702 holds it there;
+// the ABI string is fixed at "c", E1701's position). The items are the
+// entries' own nodes — FnDecl with Foreign set (a declaration, no body) and
+// RecordDecl with Opaque set (a fieldless record standing for a native-side
+// type) — so a walker knows an entry's kind without parent context.
+type ForeignBlock struct {
+	ABI       string // "c" — the one carrier chapter 19 defines
+	Items     []Item
+	Line, Col int // at foreign
+}
+
 // FnType is `fn(T1, ..., Tn) [tags] -> T` (chapter 7's function type
 // reference; EffectTags holds the bare segment when present).
 type FnType struct {
@@ -699,6 +719,7 @@ func (i *InterfaceDecl) item()  {}
 func (m *ImplDecl) item()       {}
 func (e *EffectDecl) item()     {}
 func (td *TestDecl) item()      {}
+func (fb *ForeignBlock) item()  {}
 func (b *Binding) stmt()        {}
 func (m *MockDecl) stmt()       {}
 func (a *Assign) stmt()         {}

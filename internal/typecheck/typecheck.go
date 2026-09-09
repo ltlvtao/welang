@@ -114,6 +114,9 @@ var tHelps = map[string]string{
 	"E1603": "Carry the mutable state in a shared-state type and reach it through its methods, or copy the value into an immutable binding before the task block.",
 	"E1604": "Restrict the type to self methods, keep the task out, or materialize the contents and capture those instead.",
 	"E1605": "Declare the parameter with a Shareable bound, or keep the capture to concrete Shareable types.",
+	"E1705": "Marshall on the We side - explicit field-by-field calls, buffers filled through foreign functions, opaque handles plus length queries; one value per call.",
+	"E1706": "Return an opaque handle plus a length query plus a copy into a caller-provided buffer - the explicit marshalling idiom.",
+	"E1707": "Obtain the value from a foreign function's declared return; the native side mints the handle.",
 	"E1607": "Await or cancel the handle on every path from its creation; on early exits the scope's own exit discharge covers it - plain and timeout forms canceling the rest, collectAll joining them.",
 }
 
@@ -398,7 +401,10 @@ type variantInfo struct {
 // recordInfo is one declared record (chapter 8): its ownership category,
 // its clause names and derive targets, its fields with resolved types, and
 // its registered methods. cat is the declared prefix: "value" (byval
-// record), "resource" (byres record), "gc" (default).
+// record), "resource" (byres record), "gc" (default). opaque marks the
+// chapter 19 foreign entry face: a fieldless record standing for a
+// native-side type — a handle typecheck holds and E1707 keeps We code from
+// minting.
 type recordInfo struct {
 	name    string
 	cat     string
@@ -406,6 +412,7 @@ type recordInfo struct {
 	derives []string
 	fields  []fieldInfo
 	methods []memberMethod
+	opaque  bool
 }
 
 type fieldInfo struct {
@@ -2061,6 +2068,26 @@ func (c *checker) checkModule(f *ast.File) {
 			c.syms[x.Name] = &symbol{kind: symEffect, pub: x.Pub}
 		case *ast.ImplDecl:
 			implDecls = append(implDecls, x)
+		case *ast.ForeignBlock:
+			// Chapter 19's entries join the module's one name space under
+			// their own kinds — a foreign fn is an ordinary symFn the call
+			// machinery resolves by name, an opaque record an ordinary
+			// symRecord carrying the opaque bit. No symbol kind of their
+			// own: the boundary is a declaration site, not a namespace.
+			for _, e := range x.Items {
+				switch it := e.(type) {
+				case *ast.FnDecl:
+					c.syms[it.Name] = &symbol{kind: symFn, fn: it, pub: it.Pub}
+				case *ast.RecordDecl:
+					c.syms[it.Name] = &symbol{kind: symRecord, rec: &recordInfo{
+						name:    it.Name,
+						cat:     it.Cat,
+						params:  typeParamNames(it.TypeParams),
+						derives: deriveTargetNames(it.Derives),
+						opaque:  it.Opaque,
+					}, pub: it.Pub}
+				}
+			}
 		}
 	}
 	// Import dispositions.
@@ -2177,6 +2204,44 @@ func (c *checker) checkModule(f *ast.File) {
 			if x.Binding.Typ != nil && x.Binding.Name != "_" {
 				c.syms[x.Binding.Name].letType = c.resolveTypeRef(x.Binding.Typ, slotAnn)
 			}
+		case *ast.ForeignBlock:
+			for _, e := range x.Items {
+				switch it := e.(type) {
+				case *ast.FnDecl:
+					// The signature resolves exactly as a declaration's own
+					// (the entry feeds the same fnParams/fnTags/fnRets maps
+					// the call machinery reads — the boundary is a
+					// declaration site, not a new call form). The slots pass
+					// slotRet, not slotAnn: a foreign signature's Never
+					// judgment is the crossing set's own (E1705's tail for
+					// a parameter, legal as the declared return), and the
+					// annotation-position E0703 must not pre-empt it.
+					var params []Type
+					for _, p := range it.Params {
+						params = append(params, c.resolveTypeRef(p.Type, slotRet))
+					}
+					c.fnParams[it] = params
+					// The segment is mandatory at parse (E1703); the bare
+					// keyword form resolves as the empty set — the explicit
+					// pure claim — through the same resolver as any other.
+					c.fnTags[it] = c.resolveEffectTags(it.EffectTags, it.EffectLine, it.EffectCol)
+					if it.Ret != nil {
+						c.fnRets[it] = c.resolveTypeRef(it.Ret, slotRet)
+					}
+					c.checkCrossingSet(it, params)
+				case *ast.RecordDecl:
+					// An opaque entry rides the record machinery whole: the
+					// field loop runs zero times (the parser holds the
+					// zero-field rule, E0105), and a derives clause, if
+					// written, checks against no fields through the
+					// ordinary walk (design D2 — chapter 19 adds no rule of
+					// its own here).
+					rec := c.syms[it.Name].rec
+					c.pushTypes(paramScope(rec.params))
+					c.checkRecordDerives(it, rec)
+					c.popTypes()
+				}
+			}
 		}
 	}
 	// Pass 2a2: the impls in source order, after every declaration's facts
@@ -2235,12 +2300,26 @@ func (c *checker) checkModule(f *ast.File) {
 	// by now), and only an impl in the record's own module counts. The
 	// judgment runs after the bodies so a use-site diagnostic (E0606's
 	// update, E1002's capture) reports ahead of the declaration's missing
-	// impl (E1101, at the record's name token).
+	// impl (E1101, at the record's name token). A byres opaque entry of a
+	// foreign block joins the same walk: chapter 19 hands the resource
+	// discipline to chapter 13's machine whole, no rule of its own
+	// (design D2).
+	var resRecords []*ast.RecordDecl
 	for _, it := range f.Items {
-		rd, ok := it.(*ast.RecordDecl)
-		if !ok || rd.Cat != "resource" {
-			continue
+		switch x := it.(type) {
+		case *ast.RecordDecl:
+			if x.Cat == "resource" {
+				resRecords = append(resRecords, x)
+			}
+		case *ast.ForeignBlock:
+			for _, e := range x.Items {
+				if rd, ok := e.(*ast.RecordDecl); ok && rd.Cat == "resource" {
+					resRecords = append(resRecords, rd)
+				}
+			}
 		}
+	}
+	for _, rd := range resRecords {
 		rec := c.syms[rd.Name].rec
 		released := false
 		for _, im := range c.impls {
@@ -2258,6 +2337,70 @@ func (c *checker) checkModule(f *ast.File) {
 				rd.Name, rd.Name))
 		}
 	}
+}
+
+// checkCrossingSet judges one foreign fn entry's signature against chapter
+// 19's closed crossing set (design D2): the base scalars — String and Bytes
+// among them, the ABI's pointer-plus-length pair — cross as parameters
+// alone (E1706's own face at the return), an opaque record bare of
+// arguments crosses as the one-pointer handle, and Never crosses as the
+// declared return alone (the one trust point). Everything else — records
+// with fields, sums, tuples, the generic containers, closures and fn
+// types, a parameterized opaque — does not cross: values cross one at a
+// time, or they do not cross at all. params are the entry's resolved
+// parameter types (pass 2a fills them just before this runs).
+func (c *checker) checkCrossingSet(x *ast.FnDecl, params []Type) {
+	for i, p := range x.Params {
+		t := params[i]
+		if crosses(t) {
+			continue
+		}
+		line, col := refPos(p.Type)
+		if _, never := t.(neverType); never {
+			c.fail(line, col, "E1705", fmt.Sprintf(
+				"foreign function signature holds a type outside the crossing set — parameter %q holds %s, which does not cross; Never is a declared return position only",
+				p.Name, t.String()))
+		}
+		c.fail(line, col, "E1705", fmt.Sprintf(
+			"foreign function signature holds a type outside the crossing set — parameter %q holds %s, which does not cross; values cross one at a time, or they do not cross at all",
+			p.Name, t.String()))
+	}
+	if x.Ret == nil {
+		return
+	}
+	ret := c.fnRets[x]
+	if _, never := ret.(neverType); never {
+		return // the declared return is Never's one legal crossing
+	}
+	if b, base := ret.(baseType); base && (string(b) == "String" || string(b) == "Bytes") {
+		line, col := refPos(x.Ret)
+		c.fail(line, col, "E1706", fmt.Sprintf(
+			"String or Bytes is not a foreign return type — %q declares a %s return; return an opaque handle plus a length query plus a copy into a caller-provided buffer",
+			x.Name, ret.String()))
+	}
+	if !crosses(ret) {
+		line, col := refPos(x.Ret)
+		c.fail(line, col, "E1705", fmt.Sprintf(
+			"foreign function signature holds a type outside the crossing set — the return type holds %s, which does not cross; values cross one at a time, or they do not cross at all",
+			ret.String()))
+	}
+}
+
+// crosses reports whether t is in chapter 19's crossing set for a
+// parameter position: a base scalar (the baseTypes' own closed set — the
+// eight integers, both floats, Bool, Rune, String, and Bytes), or an
+// opaque record bare of generic arguments (the handle; an instantiated
+// opaque is a different type each way and does not cross). Never's
+// position rule (declared returns only) belongs to the callers, not this
+// predicate.
+func crosses(t Type) bool {
+	if b, ok := t.(baseType); ok {
+		return baseNames[string(b)]
+	}
+	if rt, ok := t.(recordType); ok {
+		return rt.decl.opaque && len(rt.args) == 0
+	}
+	return false
 }
 
 // checkImport applies the import dispositions: std paths answer from the
@@ -4574,6 +4717,14 @@ func (c *checker) mockableTarget(sym *symbol, md *ast.MockDecl) *ast.FnDecl {
 	}
 	switch sym.kind {
 	case symFn:
+		// A foreign fn is chapter 19's other monomorphic module-level
+		// category, but the boundary is not a We-side definition: no body
+		// exists to substitute, the call goes to the native symbol, and a
+		// mock would intercept nothing the program calls (E1804's category
+		// face, design D2).
+		if sym.fn.Foreign {
+			notMockable("a foreign function")
+		}
 		if len(sym.fn.TypeParams) > 0 {
 			notMockable("a generic fn")
 		}
@@ -5882,6 +6033,17 @@ func (c *checker) constructType(x *ast.Construct) Type {
 			x.Name, what))
 	}
 	rec := sym.rec
+	// Chapter 19's opaque discipline precedes every field judgment
+	// (E1707): a zero-field record satisfies chapter 8's
+	// all-fields-exactly-once vacuously, so an unrestricted Socket { }
+	// would mint a handle from nothing — the native side mints, We code
+	// only receives. Construction and update share the head, so the one
+	// check holds both (ahead of E0606's update face and E0604's fields).
+	if rec.opaque {
+		c.fail(x.Line, x.Col, "E1707", fmt.Sprintf(
+			"construction or update of a foreign opaque type — %s is minted on the native side only; obtain the value from a foreign function's declared return",
+			rec.name))
+	}
 	// The generic clause instantiates the declaration (chapter 10): the
 	// arity judgment first (E0828), the honesty re-checks at the
 	// application (E0601/E0823), then the field checks against the

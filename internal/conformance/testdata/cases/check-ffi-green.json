@@ -1,0 +1,16 @@
+{
+  "name": "check-ffi-green",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "foreign \"c\" {\n    record Socket { }\n    byval record Errno { }\n    byres record File { }\n\n    fn socket() effect io -> Socket\n    fn errno() effect -> Errno\n    fn abs(x: Int64) effect -> Int64\n    fn close(fd: File) effect\n}\n\nimpl Releasable for File {\n    fn release(mut self) {\n        let _ = close(self)\n        return\n    }\n}\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let s = socket()\n    let _ = s\n    let e = errno()\n    let _ = e\n    let n = abs(-3)\n    let _ = n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}
