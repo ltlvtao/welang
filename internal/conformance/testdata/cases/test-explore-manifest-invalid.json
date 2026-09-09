@@ -1,0 +1,16 @@
+{
+ "name": "test-explore-manifest-invalid",
+ "args": [
+  "test",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "tests/m_test.we": "test \"quiet\" {\n    assert(true, \"ok\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[test]\nexplore-iterations = 0\n"
+  }
+ },
+ "exit": 2,
+ "stdout": "",
+ "stderr": "we.toml:1:1: error[E1903]: invalid toolchain configuration value — explore-iterations must be a positive integer, got 0\n"
+}

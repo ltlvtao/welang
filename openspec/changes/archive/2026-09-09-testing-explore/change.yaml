@@ -1,0 +1,3 @@
+name: testing-explore
+status: archived
+layers: [compiler, stdlib]

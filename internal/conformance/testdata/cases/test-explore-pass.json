@@ -1,0 +1,19 @@
+{
+ "name": "test-explore-pass",
+ "args": [
+  "test",
+  ".",
+  "--explore",
+  "--iterations",
+  "3"
+ ],
+ "setup": {
+  "files": {
+   "tests/m_test.we": "test \"quiet\" {\n    assert(true, \"ok\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  tests/m_test.we: quiet (explore 3 iterations, 9 attempts, 1 classes)\ntotal 1, passed 1, failed 0 (0ms)\n",
+ "stderr": ""
+}

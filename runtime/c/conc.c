@@ -14,6 +14,11 @@
 // header, and reference-bearing layouts carry the descriptor the emitter
 // passes: waiting values live on their (possibly parked) owner's root
 // stack, buffered values inside the gc-traced buffer block.
+//
+// Every completion point a value moves through also feeds the exploration
+// trace (M10c design D4): deliver records the receiver's receive, the
+// take points record the parked sender's send, and each local completion
+// records its own — one no-op branch in a normal run.
 #include <stdlib.h>
 #include <string.h>
 
@@ -271,19 +276,21 @@ typedef struct we_chan {
     we_link *senders;
     we_link *receivers;
     char *buf; // gc-allocated ring: cap * slot_width bytes
+    long long trace_id; // the per-run creation ordinal (the trace's chan id)
 } we_chan;
 
 // The channel object: {map@0 (descriptor: buf slot traced), size@8,
 // cap@16, head@24, count@32, slot_width@40, closed@48, senders@56
-// (malloc, untraced), receivers@64 (same), buf@72} — 80 bytes. Slot 7
-// (offset 72) is the one traced reference.
+// (malloc, untraced), receivers@64 (same), buf@72, trace_id@80} — 88
+// bytes. Slot 7 (offset 72) is the one traced reference.
 static unsigned long long chan_desc[1] = {0x80};
 
 void *__we_prim_new_chan(long long cap, long long slot_width, void *desc) {
-    we_chan *ch = __we_alloc(80);
+    we_chan *ch = __we_alloc(88);
     *(void **)ch = chan_desc;
     ch->cap = cap;
     ch->slot_width = slot_width ? slot_width : 8;
+    ch->trace_id = __we_trace_alloc_id();
     if (cap > 0) {
         ch->buf = __we_alloc(16 + cap * ch->slot_width);
         *(void **)ch->buf = desc; // element bitmap: traced when reference-bearing
@@ -308,13 +315,14 @@ static void select_fire(struct we_select *sel, long long arm, long long v);
 // Deliver to a live parked receiver (already detached from the queue):
 // straight through its out slot, or into its select's taken arm. The
 // owner settles the link after waking (consumed is its signal).
-static void deliver(we_link *r, long long v) {
+static void deliver(we_chan *ch, we_link *r, long long v) {
     if (r->out) {
         *r->out = v;
     } else if (r->sel) {
         select_fire(r->sel, r->arm, v);
     }
     r->consumed = 1;
+    __we_trace_event(WE_EV_RECV, ch->trace_id, r->base.owner);
     __we_task_wake(r->base.owner);
 }
 
@@ -324,6 +332,7 @@ static void sender_fill(we_chan *ch, we_link *s) {
     buf_put(ch, s->value);
     ch->count++;
     s->consumed = 1;
+    __we_trace_event(WE_EV_SEND, ch->trace_id, s->base.owner);
     __we_task_wake(s->base.owner);
 }
 
@@ -336,12 +345,14 @@ long long __we_chan_send(void *cc, long long v) {
         }
         we_link *r = q_pop_alive(&ch->receivers);
         if (r) { // a waiting receiver takes it now (rendezvous or head start)
-            deliver(r, v);
+            deliver(ch, r, v);
+            __we_trace_event(WE_EV_SEND, ch->trace_id, __we_cur_task());
             return 0;
         }
         if (ch->count < ch->cap) {
             buf_put(ch, v);
             ch->count++;
+            __we_trace_event(WE_EV_SEND, ch->trace_id, __we_cur_task());
             return 0;
         }
         if (__we_cur_cancelled()) {
@@ -374,13 +385,16 @@ long long __we_chan_recv(void *cc, long long *out) {
                 sender_fill(ch, s);
             }
             *out = v;
+            __we_trace_event(WE_EV_RECV, ch->trace_id, __we_cur_task());
             return 1;
         }
         we_link *s = q_pop_alive(&ch->senders);
         if (s) { // rendezvous: take the parked sender's payload now
             *out = s->value;
             s->consumed = 1;
+            __we_trace_event(WE_EV_SEND, ch->trace_id, s->base.owner);
             __we_task_wake(s->base.owner);
+            __we_trace_event(WE_EV_RECV, ch->trace_id, __we_cur_task());
             return 1;
         }
         if (ch->closed) {
@@ -435,7 +449,8 @@ long long __we_chan_try_send(void *cc, long long v) {
     }
     we_link *r = q_pop_alive(&ch->receivers);
     if (r) {
-        deliver(r, v);
+        deliver(ch, r, v);
+        __we_trace_event(WE_EV_SEND, ch->trace_id, __we_cur_task());
         return 0;
     }
     if (ch->count >= ch->cap) {
@@ -443,6 +458,7 @@ long long __we_chan_try_send(void *cc, long long v) {
     }
     buf_put(ch, v);
     ch->count++;
+    __we_trace_event(WE_EV_SEND, ch->trace_id, __we_cur_task());
     return 0;
 }
 
@@ -455,13 +471,16 @@ long long __we_chan_try_recv(void *cc, long long *out) {
         if (s) {
             sender_fill(ch, s);
         }
+        __we_trace_event(WE_EV_RECV, ch->trace_id, __we_cur_task());
         return 1; // Received
     }
     we_link *s = q_pop_alive(&ch->senders);
     if (s) {
         *out = s->value;
         s->consumed = 1;
+        __we_trace_event(WE_EV_SEND, ch->trace_id, s->base.owner);
         __we_task_wake(s->base.owner);
+        __we_trace_event(WE_EV_RECV, ch->trace_id, __we_cur_task());
         return 1;
     }
     return ch->closed ? 2 : 0; // Closed : Empty
@@ -566,14 +585,17 @@ void __we_select_add_recv(void *s, void *cc) {
         if (snd) {
             sender_fill(ch, snd);
         }
+        __we_trace_event(WE_EV_RECV, ch->trace_id, __we_cur_task());
         select_fire(sel, arm, v);
         return;
     }
     we_link *s2 = q_pop_alive(&ch->senders);
     if (s2) { // a parked sender hands over now
+        __we_trace_event(WE_EV_SEND, ch->trace_id, s2->base.owner);
         select_fire(sel, arm, s2->value);
         s2->consumed = 1;
         __we_task_wake(s2->base.owner);
+        __we_trace_event(WE_EV_RECV, ch->trace_id, __we_cur_task());
         return;
     }
     if (ch->closed) {
@@ -595,12 +617,14 @@ void __we_select_add_send(void *s, void *cc, long long v) {
     }
     we_link *r = q_pop_alive(&ch->receivers);
     if (r) {
-        deliver(r, v); // deliver routes the select fire itself
+        deliver(ch, r, v); // deliver routes the select fire itself
+        __we_trace_event(WE_EV_SEND, ch->trace_id, __we_cur_task());
         return;
     }
     if (ch->count < ch->cap) {
         buf_put(ch, v);
         ch->count++;
+        __we_trace_event(WE_EV_SEND, ch->trace_id, __we_cur_task());
         select_fire(sel, arm, 0);
         return;
     }

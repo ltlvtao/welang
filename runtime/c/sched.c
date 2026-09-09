@@ -36,6 +36,7 @@
 #define SCHED_STACK (64 * 1024)
 
 static we_task *ready_head, *ready_tail;
+static long long ready_count; // the census the armed pick indexes into
 static we_task *drain_head, *drain_tail; // advanceTime's barrier queue
 static we_task *all_tasks;
 static we_scope *active_scopes;
@@ -64,6 +65,7 @@ static void ready_push(we_task *t) {
         ready_head = t;
     }
     ready_tail = t;
+    ready_count++;
 }
 
 static we_task *ready_pop(void) {
@@ -73,7 +75,88 @@ static we_task *ready_pop(void) {
         if (!ready_head) {
             ready_tail = NULL;
         }
+        ready_count--;
     }
+    return t;
+}
+
+// --- the exploration scheduler (M10c design D2) ------------------------------
+
+// splitmix64, the canonical form: the state advances by the golden-ratio
+// constant and the output is the mixed new state — three shifts, two
+// multiplies, all unsigned (no undefined behavior, every platform the
+// pinned clang targets agrees bit for bit).
+#define SM64_GAMMA 0x9E3779B97F4A7C15ULL
+#define SM64_M1 0xBF58476D1CE4E5B9ULL
+#define SM64_M2 0x94D049BB133111EBULL
+
+static unsigned long long sm64_step(unsigned long long *state) {
+    unsigned long long z = (*state += SM64_GAMMA);
+    z = (z ^ (z >> 30)) * SM64_M1;
+    z = (z ^ (z >> 27)) * SM64_M2;
+    return z ^ (z >> 31);
+}
+
+// The one-shot round the seed derivation composes: mix a value by
+// stepping a copy of it.
+static unsigned long long sm64_of(unsigned long long x) {
+    return sm64_step(&x);
+}
+
+static unsigned long long rng_state;
+
+void __we_rng_seed(unsigned long long s) { rng_state = s; }
+
+unsigned long long __we_rng_next(void) { return sm64_step(&rng_state); }
+
+// seed(n, i, a) = of( of(n*GAMMA ^ i*M1) ^ (a*M2) ): the attempt's whole
+// identity folded through the same mixer, so (test, iteration, attempt)
+// fully determines the schedule the pick draws from.
+unsigned long long __we_explore_seed(long long n, long long i, long long a) {
+    unsigned long long un = (unsigned long long)n;
+    unsigned long long ui = (unsigned long long)i;
+    unsigned long long ua = (unsigned long long)a;
+    return sm64_of(sm64_of(un * SM64_GAMMA ^ ui * SM64_M1) ^ ua * SM64_M2);
+}
+
+// The armed pick policy. Nothing arms in a normal run, so the FIFO face
+// below is exactly the M9b queue; an explored attempt arms either the
+// baseline (iteration zero — the deterministic schedule plain `we test`
+// already covers) or a seeded random index off the queue.
+static int pick_random;
+
+void __we_explore_arm(unsigned long long seed, int baseline) {
+    pick_random = !baseline;
+    if (pick_random) {
+        __we_rng_seed(seed);
+    }
+}
+
+long long __we_ready_count(void) { return ready_count; }
+
+// The one point of schedule freedom: which ready task runs next. Baseline
+// (and every normal run) takes the head; an armed exploration draws an
+// index and unlinks that node — the same queue, a different order, the
+// barrier queue and the clock's release order untouched either way.
+static we_task *we_pick_ready(void) {
+    if (!pick_random || ready_count <= 1) {
+        return ready_pop();
+    }
+    unsigned long long idx = __we_rng_next() % (unsigned long long)ready_count;
+    if (idx == 0) {
+        return ready_pop();
+    }
+    we_task *prev = ready_head;
+    for (unsigned long long k = 1; k < idx; k++) {
+        prev = prev->qnext;
+    }
+    we_task *t = prev->qnext;
+    prev->qnext = t->qnext;
+    if (ready_tail == t) {
+        ready_tail = prev;
+    }
+    t->qnext = NULL;
+    ready_count--;
     return t;
 }
 
@@ -97,6 +180,7 @@ static void ready_unlink(we_task *t) {
                 ready_tail = prev;
             }
             t->qnext = NULL;
+            ready_count--;
             return;
         }
     }
@@ -259,6 +343,7 @@ static void cancel_scope_tasks(we_scope *sc) {
 // wake joiners, settle the scope accounting, and never run again.
 static void task_done(we_task *t) {
     t->state = WE_DONE;
+    __we_trace_event(WE_EV_DONE, __we_trace_task_id(t), t); // the trace's third event
     __we_gc_window_retire(t->gcwin); // stale roots stop marking forever
     if (t->is_main) {
         // The process answer: Ok maps to the exit code, a failed main is
@@ -382,10 +467,19 @@ long long __we_yield(void) {
 // does not interrupt an await — the target's own cooperative return (or
 // completion) is what wakes the joiner, so a cancelled joiner still
 // observes the task's real outcome (chapter 18's awaited-cancelled tasks
-// return cooperatively; the honest-deadlock face covers the rest).
+// return cooperatively; the honest-deadlock face covers the rest). An
+// explored schedule's deadlock settles here instead (M10c design D8):
+// the idle loop's settle sets the flag and wakes this task, and the loop
+// answers the message as the await's failure payload — the finding rides
+// the ordinary report path.
 long long __we_handle_await(void *h, long long *payload) {
     we_task *t = h;
     while (t->state != WE_DONE) {
+        if (__we_explore_settle_pending) {
+            __we_explore_settle_pending = 0;
+            *payload = (long long)(unsigned long long)__we_explore_settle_msg;
+            return 1;
+        }
         we_wait_link *l = __we_link_new();
         l->next = t->awaiters;
         t->awaiters = l;
@@ -497,11 +591,37 @@ static long long count_parked(void) {
     return n;
 }
 
+// The explored deadlock's conversion (M10c design D8): idle with no wake
+// source under the virtual clock is a normal run's exit face, but an
+// explored schedule deadlocking is the probe's finding. Settle the
+// driving await — the message in test.c's buffer, the flag handle_await's
+// loop consumes — abandon everything the run still holds, and wake the
+// driver: the run fails through its own report face and the exploration
+// continues. A settle that finds the previous one unconsumed means the
+// driver parked somewhere other than an await: a shape violation, not a
+// test outcome.
+static void explore_settle(long long parked) {
+    if (__we_explore_settle_pending) {
+        fprintf(stderr, "we: internal error: exploration settle made no progress\n");
+        abort();
+    }
+    snprintf(__we_explore_settle_msg, sizeof __we_explore_settle_msg,
+             "deadlock: %lld tasks parked with no wake source under the explored schedule",
+             parked);
+    __we_explore_settle_pending = 1;
+    for (we_task *t = all_tasks; t; t = t->next) {
+        if (t != task0 && t->state != WE_DONE) {
+            __we_task_abandon(t);
+        }
+    }
+    __we_task_wake(task0);
+}
+
 static void sched_run(void) {
     for (;;) {
         __we_expire_deadlines();
         __we_sleep_expire(); // due real sleeps release alongside the scopes
-        we_task *t = ready_pop();
+        we_task *t = we_pick_ready();
         if (!t) {
             if (drain_head) {
                 // The barrier answers only an empty ready queue: the
@@ -530,11 +650,17 @@ static void sched_run(void) {
                 // line naming the virtual clock, exit 1 (the count is the
                 // clock-parked tasks; a driver parked on a join is not a
                 // clock wait, and with no clock waiter at all every parked
-                // task counts). Outside that extent this is the honest
-                // M9b face: every remaining task parked with nothing that
-                // will ever wake it, exit 70.
+                // task counts). An explored run converts instead (M10c
+                // design D8): the deadlock is the schedule's failure, and
+                // the run keeps going. Outside that extent this is the
+                // honest M9b face: every remaining task parked with
+                // nothing that will ever wake it, exit 70.
                 long long parked = count_parked();
                 if (__we_test_virtual()) {
+                    if (__we_explore_on) {
+                        explore_settle(parked);
+                        continue;
+                    }
                     long long clocked = __we_virtual_parked();
                     fprintf(stderr, "we: deadlock: %lld tasks parked with no wake source"
                                     " (the virtual clock only advances when a runnable task"

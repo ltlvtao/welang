@@ -1,0 +1,17 @@
+{
+ "name": "test-explore-manifest-iterations",
+ "args": [
+  "test",
+  ".",
+  "--explore"
+ ],
+ "setup": {
+  "files": {
+   "tests/m_test.we": "test \"quiet\" {\n    assert(true, \"ok\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[test]\nexplore-iterations = 5\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  tests/m_test.we: quiet (explore 5 iterations, 17 attempts, 1 classes)\ntotal 1, passed 1, failed 0 (0ms)\n",
+ "stderr": ""
+}

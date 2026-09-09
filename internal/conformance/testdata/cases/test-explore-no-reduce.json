@@ -1,0 +1,20 @@
+{
+ "name": "test-explore-no-reduce",
+ "args": [
+  "test",
+  ".",
+  "--explore",
+  "--iterations",
+  "3",
+  "--no-reduce"
+ ],
+ "setup": {
+  "files": {
+   "tests/tied_test.we": "import std.concurrent as conc\nimport std.time\n\ntest \"tied\" {\n    let ch: conc.Channel<Int64> = conc.channel(0)\n    scope {\n        let a = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(1)\n        }\n        let b = task effect net time {\n            let _ = time.sleep(10)\n            ch.send(2)\n        }\n        advanceTime(10)\n        let _ = ch.receive()\n        let _ = ch.receive()\n        let _ = a.await()\n        let _ = b.await()\n    }\n    assert(true, \"done\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  tests/tied_test.we: tied (explore 3 iterations, 3 attempts, 1 classes)\ntotal 1, passed 1, failed 0 (10ms)\n",
+ "stderr": ""
+}

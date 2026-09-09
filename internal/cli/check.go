@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ltlvtao/welang/internal/ast"
@@ -174,6 +175,22 @@ func (e *env) loadManifest(dir string, artifact bool) (map[string]string, int) {
 			WithHelp("Set the named key to one of the legal values the diagnostic lists."))
 		return nil, exitDiagnostic
 	}
+	// The [test] table's one pinned key (M10c design D9): a present
+	// explore-iterations must be a positive integer or the run is E1903 —
+	// the registry text names this key, and the shared loader face makes
+	// the ruling hold on check/build/run/test alike. Every other key in
+	// the table stays unread (the [vet] posture: the spec fixes only this
+	// key's shape); an absent table or key is the default chain's
+	// business, not an error.
+	if v, ok := manifest["test.explore-iterations"]; ok {
+		if n, err := strconv.Atoi(v); err != nil || n <= 0 {
+			e.report(diag.Error("E1903", fmt.Sprintf(
+				"invalid toolchain configuration value — explore-iterations must be a positive integer, got %s", v)).
+				At("we.toml", 1, 1).
+				WithHelp("Set explore-iterations to a positive integer."))
+			return nil, exitDiagnostic
+		}
+	}
 	// Chapter 22 R5: acquisition precedes module resolution, so a non-empty
 	// [dependencies] set stops every pipeline command here — an empty or
 	// absent section is trivially satisfied.
@@ -308,10 +325,12 @@ func (e *env) loadGraph(dir, rootKey, rootPath string, root *ast.File) ([]typech
 
 // parseManifest reads the manifest's flat string keys — the minimal
 // subset this milestone's validations need: `key = "value"` lines, with
-// blank and # lines skipped. It also counts the keys inside a
-// [dependencies] section (chapter 22 R5's face: any key there is a
-// non-empty dependency set). Richer TOML shapes arrive with the project
-// chapter's own milestone.
+// blank and # lines skipped. A key inside a [section] surfaces under its
+// dotted name ("test.explore-iterations") so section keys cannot collide
+// with top-level ones. It also counts the keys inside a [dependencies]
+// section (chapter 22 R5's face: any key there is a non-empty dependency
+// set). Richer TOML shapes arrive with the project chapter's own
+// milestone.
 func parseManifest(raw string) (map[string]string, int) {
 	m := map[string]string{}
 	deps := 0
@@ -328,6 +347,9 @@ func parseManifest(raw string) (map[string]string, int) {
 		if i := strings.Index(line, "="); i >= 0 {
 			key := strings.TrimSpace(line[:i])
 			val := strings.Trim(strings.TrimSpace(line[i+1:]), `"`)
+			if section != "" {
+				key = section + "." + key
+			}
 			m[key] = val
 			if section == "dependencies" {
 				deps++

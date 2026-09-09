@@ -136,6 +136,15 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_test_end", "declare void @__we_test_end()"},
 	{"__we_test_report", "declare void @__we_test_report(ptr, i64, ptr, i64, i64, ptr)"},
 	{"__we_test_summary", "declare void @__we_test_summary()"},
+	// M10c (design D1/D6): the extracted driver's pair — the meta carrying
+	// file/description as explicit (ptr, i64) pairs plus the declaration's
+	// line/col (the exploration guards' anchor), the drive taking the
+	// test's global ordinal and its thunk — and the fxgate's single point
+	// of judgment (the name as a (ptr, i64) pair, the pool carrying no
+	// NUL).
+	{"__we_test_meta", "declare void @__we_test_meta(ptr, i64, ptr, i64, i64, i64)"},
+	{"__we_test_drive", "declare void @__we_test_drive(i64, ptr)"},
+	{"__we_explore_fx_check", "declare void @__we_explore_fx_check(ptr, i64)"},
 }
 
 // ProgModule is one module of a program emission (design D1): the module
@@ -678,11 +687,15 @@ type mockInstall struct {
 
 // driveStep is one test's slice of the synthesized driver: the report's
 // file and description strings (raw bytes — the driver interns them at
-// emission), the wrapper the spawn names, and the mock installs in
-// source order.
+// emission), the declaration's line/col (the meta pair's anchor face),
+// the owning module's key (the drive thunk's name), the wrapper the
+// spawn names, and the mock installs in source order.
 type driveStep struct {
 	file  string
 	desc  string
+	line  int
+	col   int
+	key   string
 	wrap  string
 	mocks []mockInstall
 }
@@ -701,7 +714,8 @@ func (e *emitter) emitTestTower() *NotImplemented {
 		n := testN[tr.key]
 		testN[tr.key] = n + 1
 		e.enterModule(tr.key)
-		step := driveStep{file: tr.path, desc: tr.decl.Desc, wrap: fmt.Sprintf("@%s.wrap.%d", tr.key, n)}
+		step := driveStep{file: tr.path, desc: tr.decl.Desc, line: tr.decl.Line, col: tr.decl.Col,
+			key: tr.key, wrap: fmt.Sprintf("@%s.wrap.%d", tr.key, n)}
 		var mocks []*ast.MockDecl
 		for _, st := range tr.decl.Body.Items {
 			if md, ok := st.(*ast.MockDecl); ok {
@@ -3069,6 +3083,78 @@ func (e *emitter) classify(fd *fnDef) (fnAbi, bool) {
 	return fd.abi, fd.abiOK
 }
 
+// isCustomEffect reports whether one fn's effect segment names a custom
+// tag (M10c design D6): any tag beyond the three built-in bare keys — a
+// bare custom tag and a qualified mod.name form alike are custom (chapter
+// 16's built-ins are bare language-level tags, so a qualified tag never
+// names one). The predicate reads the declaration's own segment, no
+// typecheck help — the check tower already owns the segment's legality.
+func isCustomEffect(d *ast.FnDecl) bool {
+	for _, t := range d.EffectTags {
+		switch t {
+		case "io", "net", "time":
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// fnSlotTarget is the symbol a fn's slot holds by default (M10c design
+// D6): the passthrough gate for a custom-effect fn — reaching the gate
+// means the call took the slot's default, which means no mock was on the
+// path — and the real body for every built-in-or-pure fn (the gate is an
+// exploration face, not a calling-face change).
+func fnSlotTarget(fd *fnDef) string {
+	if isCustomEffect(fd.decl) {
+		return fmt.Sprintf("@%s.%s.fxgate", fd.key, fd.name)
+	}
+	return fmt.Sprintf("@%s.%s", fd.key, fd.name)
+}
+
+// emitFxGate emits one custom-effect fn's passthrough gate (M10c design
+// D6): the same ABI as the real define, a guard check at the entry, then
+// a direct call of the real body under its own name — never through the
+// slot, so the gate cannot re-enter itself. The check's name operand is
+// the declaration's bare name; the result register %r is fixed (the gate
+// reads no parameter environments, so a parameter literally named r —
+// the bindDefineParams spelling — is the one collision this synthesized
+// face accepts, a B-track cleanup's to own).
+func (e *emitter) emitFxGate(fd *fnDef, abi fnAbi) {
+	var ps []string
+	for i, p := range fd.decl.Params {
+		n := "%" + p.Name
+		switch abi.params[i].kind {
+		case abiDouble:
+			ps = append(ps, "double "+n)
+		case abiStr:
+			ps = append(ps, "ptr "+n+"0", "i64 "+n+"1")
+		case abiSum:
+			ps = append(ps, "i64 "+n+"0", "i64 "+n+"1")
+		case abiGc:
+			ps = append(ps, "ptr "+n)
+		default: // abiI64
+			ps = append(ps, "i64 "+n)
+		}
+	}
+	name := e.intern(fd.name)
+	e.use("__we_explore_fx_check")
+	// The forwarded arguments keep their typed spellings — the call reads
+	// exactly as the define's own parameter list.
+	call := fmt.Sprintf("call %s @%s.%s(%s)", abi.retTyp, fd.key, fd.name,
+		strings.Join(ps, ", "))
+	var body strings.Builder
+	fmt.Fprintf(&body, "  call void @__we_explore_fx_check(ptr %s, i64 %d)\n", name, len(fd.name))
+	if abi.ret == abiVoid {
+		fmt.Fprintf(&body, "  %s\n  ret void\n", call)
+	} else {
+		fmt.Fprintf(&body, "  %%r = %s\n  ret %s %%r\n", call, abi.retTyp)
+	}
+	e.thunks = append(e.thunks, fmt.Sprintf(
+		"define internal %s @%s.%s.fxgate(%s) {\nentry:\n%s}\n",
+		abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body.String()))
+}
+
 // emitFnDefine emits one program fn: the define under its
 // module-qualified symbol, the parameter environments (scalars, the
 // String double word, record pointers, the sum pair re-housed in two
@@ -3151,7 +3237,12 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
 		"define %s @%s.%s(%s) {\nentry:\n%s  ret %s\n}\n",
 		abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body, ret))
-	e.slotFor(fd.key+"."+fd.name, "@"+fd.key+"."+fd.name)
+	// A custom-effect fn's default face is its gate, emitted behind the
+	// real define under the real define's unchanged name (M10c D6).
+	if isCustomEffect(fd.decl) {
+		e.emitFxGate(fd, abi)
+	}
+	e.slotFor(fd.key+"."+fd.name, fnSlotTarget(fd))
 	return nil
 }
 
@@ -3221,7 +3312,10 @@ func (e *emitter) mockTarget(md *ast.MockDecl) (fnAbi, string, string, *NotImple
 				return fnAbi{}, "", "", bndFn()
 			}
 			slot := fd.key + "." + fd.name
-			return abi, slot, "@" + slot, nil
+			// The restore returns to the slot's default: the gate for a
+			// custom-effect fn, the real body otherwise (M10c D6 — the
+			// post-mock default is the gate again, never the real body).
+			return abi, slot, fnSlotTarget(fd), nil
 		}
 		if sk := e.resolveStd(md.TargetQual); sk != "" {
 			ent, ok := stdFnEntries[sk][md.Target]
@@ -3245,7 +3339,9 @@ func (e *emitter) mockTarget(md *ast.MockDecl) (fnAbi, string, string, *NotImple
 		return fnAbi{}, "", "", bndFn()
 	}
 	slot := fd.key + "." + fd.name
-	return abi, slot, "@" + slot, nil
+	// The unqualified face mirrors the qualified one: the restore returns
+	// to the slot's default (the gate for a custom-effect fn, M10c D6).
+	return abi, slot, fnSlotTarget(fd), nil
 }
 
 // emitMockDefine emits one mock fn under "<key>.mock.<n>" with the
@@ -3390,15 +3486,23 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	return nil
 }
 
-// emitDriver renders the recorded steps into the entry's body (design
-// D5): per test — the mock installs in source order, begin, one spawned
-// wrapper task awaited at the task boundary (the M9b handle ABI: tag 0
-// is Ok, tag 1's payload the panic-message C string), end, the restores,
-// then the report under a branch (the passing face hands a null reason);
-// the summary closes and owns the process's exit code.
+// emitDriver renders the recorded steps (design D1/D5): each test's step
+// sequence rides its own re-enterable internal thunk "<key>.drive.<n>" —
+// n the driver's global ordinal, the seed and report identity — with the
+// instruction stream the M10b inline driver carried (mock installs in
+// source order, begin, one spawned wrapper task awaited at the task
+// boundary under the M9b handle ABI, end, the restores, the report under
+// a branch whose failing arm hands the panic-message C string); the
+// entry carries one meta/drive pair per test — the meta naming the
+// declaration's line/col, the exploration guards' anchor — then the
+// summary, which owns the process's exit code. One emission form for
+// both modes: the runtime's drive face decides whether the thunk
+// re-enters.
 func (e *emitter) emitDriver() {
 	for i := range e.drives {
 		st := &e.drives[i]
+		savedBody := e.body
+		e.body = strings.Builder{}
 		for _, m := range st.mocks {
 			// The install materializes the slot even when no call site
 			// referenced it this build (a mocked-but-never-called target
@@ -3443,6 +3547,16 @@ func (e *emitter) emitDriver() {
 			f, len(st.file), d, len(st.desc), p))
 		e.inst(fmt.Sprintf("br label %%tk%dq", n))
 		e.label(fmt.Sprintf("tk%dq", n))
+		body := e.body.String()
+		e.body = savedBody
+		e.thunks = append(e.thunks, fmt.Sprintf(
+			"define internal void @%s.drive.%d() {\nentry:\n%s  ret void\n}\n",
+			st.key, i, body))
+		e.use("__we_test_meta")
+		e.inst(fmt.Sprintf("call void @__we_test_meta(ptr %s, i64 %d, ptr %s, i64 %d, i64 %d, i64 %d)",
+			f, len(st.file), d, len(st.desc), st.line, st.col))
+		e.use("__we_test_drive")
+		e.inst(fmt.Sprintf("call void @__we_test_drive(i64 %d, ptr @%s.drive.%d)", i, st.key, i))
 	}
 	e.use("__we_test_summary")
 	e.inst("call void @__we_test_summary()")
@@ -3604,7 +3718,7 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 	if len(args) != len(fd.decl.Params) {
 		return callResult{}, e.bnd()
 	}
-	slot := e.slotFor(fd.key+"."+fd.name, "@"+fd.key+"."+fd.name)
+	slot := e.slotFor(fd.key+"."+fd.name, fnSlotTarget(fd))
 	fp := e.value()
 	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
 	var ops []string

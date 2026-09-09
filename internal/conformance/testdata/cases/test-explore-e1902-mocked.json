@@ -1,0 +1,19 @@
+{
+ "name": "test-explore-e1902-mocked",
+ "args": [
+  "test",
+  ".",
+  "--explore",
+  "--iterations",
+  "3"
+ ],
+ "setup": {
+  "files": {
+   "tests/gate_test.we": "effect db\n\nfn save() effect db {\n    return\n}\n\ntest \"gate\" {\n    mock save() effect db {\n        return\n    }\n    save()\n    assert(true, \"done\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  tests/gate_test.we: gate (explore 3 iterations, 9 attempts, 1 classes)\ntotal 1, passed 1, failed 0 (0ms)\n",
+ "stderr": ""
+}

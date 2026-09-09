@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ltlvtao/welang/internal/ast"
@@ -183,6 +184,9 @@ func (e *env) runTestProject(dir string) int {
 		}
 		return code // the dependency boundary (chapter 22 R5) passes through
 	}
+	// The exploration count resolves once the manifest face has spoken
+	// (M10c design D9): flag > [test].explore-iterations > 100.
+	e.exploreIters = resolveExploreIters(e.itersSet, e.itersFlag, manifestKeys["test.explore-iterations"])
 	files, d, what, werr := collectTests(dir)
 	if d != nil {
 		e.report(*d)
@@ -296,6 +300,9 @@ func (e *env) runTestSingle(path string) int {
 	if code != exitOK {
 		return code
 	}
+	// A single-file run owns no manifest, so the count's chain stops at
+	// the flag or the built-in (M10c design D9).
+	e.exploreIters = resolveExploreIters(e.itersSet, e.itersFlag, "")
 	return e.runTestBinary(artifact, "")
 }
 
@@ -339,15 +346,13 @@ func (e *env) applyFilter(files []testFile) ([]testFile, int) {
 
 // runTestBinary executes the harness once: the child's stdio rides the
 // streams we itself were given — the report is the child's render on
-// both protocol faces, --json through the argv where the child reads it
-// — and the exit maps per the runner's protocol (chapter 21): the
-// child's 0 passes through, its 1 is the run's 1, an abort is 1 again
-// (mapTestExit; a runtime failure, not a compile one).
+// both protocol faces, --json and the exploration face through the argv
+// where the child reads them — and the exit maps per the runner's
+// protocol (chapter 21): the child's 0 passes through, its 1 is the
+// run's 1, an abort is 1 again (mapTestExit; a runtime failure, not a
+// compile one).
 func (e *env) runTestBinary(artifact, workDir string) int {
-	argv := []string{artifact}
-	if e.json {
-		argv = append(argv, "--json")
-	}
+	argv := append([]string{artifact}, e.testBinaryArgs()...)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = workDir
 	cmd.Stdin = os.Stdin
@@ -360,4 +365,39 @@ func (e *env) runTestBinary(artifact, workDir string) int {
 		return e.fsError(err)
 	}
 	return exitOK
+}
+
+// resolveExploreIters is the exploration count's default chain (M10c
+// design D9): an explicit --iterations wins, the manifest's
+// [test].explore-iterations next, the built-in 100 last. The manifest
+// value arrives already E1903-validated on the project face; the
+// defensive re-check keeps the single-file face (no manifest) and any
+// future caller honest.
+func resolveExploreIters(flagSet bool, flag int, manifest string) int {
+	if flagSet {
+		return flag
+	}
+	if n, err := strconv.Atoi(manifest); err == nil && n > 0 {
+		return n
+	}
+	return 100
+}
+
+// testBinaryArgs renders the harness argv beyond the binary's own name:
+// --json first (the M10b order), then the exploration face as a unit —
+// --explore and the resolved --iterations ride together (the manifest
+// default is resolved CLI-side before the child exists), --no-reduce
+// when given. A normal run adds nothing.
+func (e *env) testBinaryArgs() []string {
+	var args []string
+	if e.json {
+		args = append(args, "--json")
+	}
+	if e.explore {
+		args = append(args, "--explore", "--iterations", strconv.Itoa(e.exploreIters))
+		if e.noReduce {
+			args = append(args, "--no-reduce")
+		}
+	}
+	return args
 }

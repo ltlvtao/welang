@@ -27,7 +27,7 @@
 | M9b | `concurrency-run` | 第 18 章运行塔：单线程协作调度器、共享状态与 channel 原语运行时、真实时钟 timeout（虚拟钟随 M10 落地） | done 2026-09-07 |
 | M10a | `testing-check` | 第 20 章检查塔：test 模块与 test 块、mock 声明、advanceTime 定型与位置、std.test 装载 | done 2026-09-08 |
 | M10b | `testing-run` | 第 20/21 章运行塔：codegen 多函数发射拓宽、we test runner、虚拟钟、确定性测试调度、test 边界、mock 拦截 | done 2026-09-08 |
-| M10c | `testing-explore` | 第 21 章探索：交错探针、E1901/E1902 守卫、偏序归约 | pending |
+| M10c | `testing-explore` | 第 21 章探索：交错探针、E1901/E1902 守卫、偏序归约 | done 2026-09-09 |
 | M11 | `fmt-vet-doc` | 第 21 章格式化器、vet、文档生成 | pending |
 | M12 | `ffi` | 第 19 章 foreign 块与构建时链接（E1906） | pending |
 | M13 | `dependencies` | 第 22 章 MVS 解析、`we.lock`、依赖缓存、本地 registry 夹具 | pending |

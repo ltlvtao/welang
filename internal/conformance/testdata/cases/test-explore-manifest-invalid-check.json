@@ -1,0 +1,16 @@
+{
+ "name": "test-explore-manifest-invalid-check",
+ "args": [
+  "check",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n\n[test]\nexplore-iterations = 0\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "",
+ "stderr": "we.toml:1:1: error[E1903]: invalid toolchain configuration value — explore-iterations must be a positive integer, got 0\n"
+}

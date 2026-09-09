@@ -158,8 +158,14 @@ func TestGCHarness(t *testing.T) {
 }
 
 func TestIOHarness(t *testing.T) {
+	// io.c's explore-suppression branch references test.c's __we_explore_on,
+	// so the harness links the sched/test faces alongside (M10c); the io
+	// behavior under test is unchanged.
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "io.c": IOSource, "main.c": ioHarnessMain},
-		[]string{"gc.c", "io.c", "main.c"},
+		map[string]string{
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
+			"test.c": TestSource, "io.c": IOSource, "main.c": ioHarnessMain,
+		},
+		[]string{"gc.c", "sched.c", "test.c", "io.c", "main.c"},
 		"hi\nho")
 }

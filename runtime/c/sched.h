@@ -123,6 +123,62 @@ long long __we_virtual_parked(void);
 long long __we_sleep_earliest_deadline(void);
 void __we_sleep_expire(void);
 
+// The exploration face (M10c design D2/D3/D4). test.c owns the globals
+// (startup.c's argv sets them; the harnesses set them directly); sched.c
+// owns the armed pick policy and the splitmix64 stream; test.c owns the
+// trace. __we_explore_arm hands one attempt its schedule: baseline keeps
+// the FIFO face (iteration zero, and every normal run — nothing else ever
+// arms), any other arming picks a seeded random index off the ready
+// queue. The barrier queue and the clock's same-instant release stay
+// FIFO either way — chapter 20 pinned those, exploration only widens the
+// scheduler's own choice.
+extern int __we_explore_on;
+extern long long __we_explore_iters;
+extern int __we_explore_reduce;
+void __we_explore_arm(unsigned long long seed, int baseline);
+long long __we_ready_count(void);
+
+// splitmix64: the pick stream and the seed derivation. __we_rng_next is
+// the canonical generator (state advances by the golden-ratio constant,
+// the output is the mixed state); __we_explore_seed mixes the attempt's
+// identity (test ordinal n, iteration i, attempt a) into one seed — the
+// same triple always arms the same schedule.
+void __we_rng_seed(unsigned long long s);
+unsigned long long __we_rng_next(void);
+unsigned long long __we_explore_seed(long long n, long long i, long long a);
+
+// The observable trace (design D4): three events, recorded only while an
+// explored run is in flight. The actor is the task the event belongs to
+// (the sender of a completed send even when the receiver's loop completes
+// it); the target is the channel's per-run creation ordinal for the
+// channel pair, the completing task's own id for a completion. Ids are
+// normalized per run (task ids relative to the extent's spawn base, chan
+// ids from a counter zeroed with each run) so the double-run pair
+// compares equal on a deterministic test.
+enum { WE_EV_SEND = 0, WE_EV_RECV = 1, WE_EV_DONE = 2 };
+void __we_trace_event(int kind, long long target, we_task *actor);
+long long __we_trace_alloc_id(void);
+long long __we_trace_task_id(we_task *t); // the id a task carries in the current run
+
+// The verdict faces (M10c design D5/D6/D7/D8). E1901: the pair comparator
+// — pure, over stride-four quadruples (task, kind, target, seq), first
+// divergence's index or -1 — and the render (e1/e2 are the diverging
+// quadruples, NULL for the side whose trace ended; json picks the
+// protocol face; iteration and attempt arrive 1-based). The fxgate's
+// single point of judgment and its recorded reason; the POR class key
+// (the truncation flag rides); and the explored deadlock's settle
+// hand-off — sched.c's idle loop sets both, handle_await consumes the
+// flag and answers the message as the await's failure payload.
+long long __we_e1901_first_div(const long long *q0, long long n0,
+                               const long long *q1, long long n1);
+void __we_e1901_render(long long iteration, long long attempt, long long k,
+                       const long long *e1, const long long *e2, int json);
+void __we_explore_fx_check(const char *name, long long len);
+const char *__we_explore_guard_reason(void);
+unsigned long long __we_por_key(const long long *q, long long n, int truncated);
+extern int __we_explore_settle_pending;
+extern char __we_explore_settle_msg[128];
+
 // The root-window face gc.c provides (design D7).
 struct we_gc_window *__we_gc_window_new(void);
 void __we_gc_window_retire(struct we_gc_window *w);

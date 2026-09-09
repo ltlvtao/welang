@@ -1,0 +1,21 @@
+{
+ "name": "test-explore-filter",
+ "args": [
+  "test",
+  ".",
+  "--explore",
+  "--filter",
+  "beta",
+  "--iterations",
+  "2"
+ ],
+ "setup": {
+  "files": {
+   "tests/m_test.we": "test \"alpha\" {\n    assert(true, \"ok\")\n}\n\ntest \"beta\" {\n    assert(true, \"ok\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  tests/m_test.we: beta (explore 2 iterations, 5 attempts, 1 classes)\ntotal 1, passed 1, failed 0 (0ms)\n",
+ "stderr": ""
+}

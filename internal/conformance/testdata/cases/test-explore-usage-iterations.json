@@ -1,0 +1,19 @@
+{
+ "name": "test-explore-usage-iterations",
+ "args": [
+  "test",
+  ".",
+  "--explore",
+  "--iterations",
+  "abc"
+ ],
+ "setup": {
+  "files": {
+   "tests/m_test.we": "test \"quiet\" {\n    assert(true, \"ok\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+ },
+ "exit": 2,
+ "stdout": "",
+ "stderr": "we: invalid --iterations value \"abc\" (want a positive integer)\nusage: we <subcommand> [path] [options]\nsubcommands: new build check run test fmt vet doc clean version lsp\noptions: --json --color auto|always|never --verbose\n"
+}

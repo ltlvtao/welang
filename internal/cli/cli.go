@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/ltlvtao/welang/internal/diag"
@@ -64,6 +65,17 @@ type env struct {
 	// filter is we test's --filter pattern (M10b design D6): matched
 	// CLI-side, the kept tests alone ride into the harness synthesis.
 	filter string
+	// The exploration face (M10c design D9), test-scoped like --filter:
+	// --explore arms the harness's exploration mode, --no-reduce disables
+	// the POR dedup, --iterations N (both forms) pins the count. itersFlag
+	// holds the explicit value only while itersSet says one was given;
+	// exploreIters carries the resolved chain (flag > manifest > 100) once
+	// the run's manifest face has decided it.
+	explore      bool
+	noReduce     bool
+	itersFlag    int
+	itersSet     bool
+	exploreIters int
 }
 
 // Run parses args (the argv after the program name), dispatches one
@@ -140,8 +152,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 // parseOptions splits flags from positional arguments. Global options are
 // accepted anywhere after the subcommand, per `we <subcommand> [path]
 // [options]`. The subcommand's own flags — we test's --filter (M10b
-// design D6) — parse only under their subcommand; elsewhere they stay
-// unknown options.
+// design D6) and the exploration trio --explore/--iterations/--no-reduce
+// (M10c design D9) — parse only under their subcommand; elsewhere they
+// stay unknown options.
 func (e *env) parseOptions(sub string, args []string) ([]string, int) {
 	var positional []string
 	for i := 0; i < len(args); i++ {
@@ -171,6 +184,22 @@ func (e *env) parseOptions(sub string, args []string) ([]string, int) {
 			e.filter = args[i]
 		case sub == "test" && strings.HasPrefix(a, "--filter="):
 			e.filter = strings.TrimPrefix(a, "--filter=")
+		case sub == "test" && a == "--explore":
+			e.explore = true
+		case sub == "test" && a == "--no-reduce":
+			e.noReduce = true
+		case sub == "test" && a == "--iterations":
+			if i+1 >= len(args) {
+				return nil, e.usageErr("invalid --iterations value (want a positive integer)")
+			}
+			i++
+			if code := e.setIterations(args[i]); code != exitOK {
+				return nil, code
+			}
+		case sub == "test" && strings.HasPrefix(a, "--iterations="):
+			if code := e.setIterations(strings.TrimPrefix(a, "--iterations=")); code != exitOK {
+				return nil, code
+			}
 		case strings.HasPrefix(a, "--"):
 			return nil, e.usageErr("unknown option %q", a)
 		default:
@@ -187,6 +216,18 @@ func (e *env) setColor(v string) int {
 		return exitOK
 	}
 	return e.usageErr("invalid --color value %q (want auto, always, or never)", v)
+}
+
+// setIterations reads one --iterations value: a decimal positive integer
+// (M10c design D9). Anything else is the one usage-error shape — the
+// golden's pinned message.
+func (e *env) setIterations(v string) int {
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return e.usageErr("invalid --iterations value %q (want a positive integer)", v)
+	}
+	e.itersFlag, e.itersSet = n, true
+	return exitOK
 }
 
 // report renders one diagnostic on the protocol faces: under --json as an

@@ -1,0 +1,19 @@
+{
+ "name": "test-explore-io-suppressed",
+ "args": [
+  "test",
+  ".",
+  "--explore",
+  "--iterations",
+  "2"
+ ],
+ "setup": {
+  "files": {
+   "tests/m_test.we": "import std.io\n\ntest \"chatty\" {\n    io.println(\"NOISE\")\n    assert(true, \"ok\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  tests/m_test.we: chatty (explore 2 iterations, 5 attempts, 1 classes)\ntotal 1, passed 1, failed 0 (0ms)\n",
+ "stderr": ""
+}

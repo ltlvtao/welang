@@ -1,0 +1,19 @@
+{
+ "name": "test-explore-e1902",
+ "args": [
+  "test",
+  ".",
+  "--explore",
+  "--iterations",
+  "3"
+ ],
+ "setup": {
+  "files": {
+   "tests/gate_test.we": "effect db\n\nfn save() effect db {\n    return\n}\n\ntest \"gate\" {\n    save()\n    assert(true, \"done\")\n}\n",
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "fail  tests/gate_test.we: gate (explore 3 iterations, 1 attempts, 0 classes)\n  unmocked effect executed during exploration — the explored path called save, whose custom effect had no mock\ntotal 1, passed 0, failed 1 (0ms)\n",
+ "stderr": "tests/gate_test.we:7:1: error[E1902]: unmocked effect executed during exploration — the explored path called save, whose custom effect had no mock\n"
+}

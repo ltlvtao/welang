@@ -1,0 +1,18 @@
+{
+ "name": "test-explore-single-file",
+ "args": [
+  "test",
+  "solo_test.we",
+  "--explore",
+  "--iterations",
+  "2"
+ ],
+ "setup": {
+  "files": {
+   "solo_test.we": "test \"solo\" {\n    assert(true, \"ok\")\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  solo_test.we: solo (explore 2 iterations, 5 attempts, 1 classes)\ntotal 1, passed 1, failed 0 (0ms)\n",
+ "stderr": ""
+}
