@@ -82,6 +82,20 @@ func (d Diagnostic) Message() string { return d.message }
 // Code returns the registry code.
 func (d Diagnostic) Code() string { return d.code }
 
+// Severity returns the rendering level. The LSP binding (docs/lsp.md) reads
+// it to map onto the protocol's four numeric severities.
+func (d Diagnostic) Severity() Severity { return d.severity }
+
+// File returns the source file the diagnostic is positioned in ("" for
+// command-level diagnostics).
+func (d Diagnostic) File() string { return d.file }
+
+// Line returns the 1-based line (0 for command-level diagnostics).
+func (d Diagnostic) Line() int { return d.line }
+
+// Column returns the 1-based column (0 for command-level diagnostics).
+func (d Diagnostic) Column() int { return d.column }
+
 // JSON renders the diagnostic as one JSON Lines event object without a
 // trailing newline. Field order is fixed: type, severity, code, message,
 // file, line, column, help.

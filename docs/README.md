@@ -33,6 +33,7 @@ Numeric prefixes encode reading order where order matters; semantic names carry 
 | [`AGENTS.md`](../AGENTS.md) | Agent entry point (cross-tool standard): hard rules, language invariants, workflow summary, verification ladder, commit protocol, environment setup | Language requirements, roadmap state, process details |
 | [`docs/process/`](process/development-process.md) | The R&D process (single authority for how work happens) | Language behavior, change-specific decisions |
 | `docs/spec/` | Canonical language specification, versioned, plus the machine-readable diagnostic code registry `diagnostics.toml` (single entry authority for every allocated code) | Implementation decisions, migration history, execution state |
+| [`docs/lsp.md`](lsp.md) | The LSP binding document (chapter 21 R12's separate document): protocol baseline, transport, lifecycle, diagnostic mapping | Editor capabilities beyond diagnostics, any new diagnostic codes |
 | `docs/decisions/` | Long-term ADRs: status, dependencies, rejected options (created when the first ADR is needed) | Requirements, task lists |
 | `docs/roadmap/` | Strategy, milestones, change catalog, execution state (created when the roadmap outgrows `openspec/changes/`) | Requirements, field-level design |
 | [`openspec/`](../openspec/README.md) | Change management: active/archived changes with proposal/spec-delta/design/tasks artifacts; repo artifact checkers (`validate.py` for change structure, `docs_sync.py` for bilingual pairing) | Long-term authority of any fact (changes are process increments) |

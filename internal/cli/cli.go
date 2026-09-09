@@ -52,7 +52,7 @@ var subcommands = map[string]struct {
 	"doc":     {takesPath: true, implemented: true},
 	"clean":   {takesPath: true, implemented: true},
 	"version": {takesPath: false, implemented: true},
-	"lsp":     {takesPath: true},
+	"lsp":     {takesPath: true, implemented: true},
 }
 
 // env carries one run's parsed global options and output streams.
@@ -155,6 +155,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 			path = positional[0]
 		}
 		return e.runTest(path, info)
+	case "lsp":
+		return e.runLsp()
 	}
 	// Unreachable: every implemented subcommand is handled above.
 	return e.usageErr("unknown subcommand %q", name)

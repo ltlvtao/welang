@@ -68,23 +68,40 @@ func (e *env) loadFile(path string) (*ast.File, int) {
 	if err != nil {
 		return nil, e.fsError(err)
 	}
-	file, d, ni := parser.Parse(path, src)
-	if d != nil {
-		e.report(*d)
+	file, ds, boundary := checkSrc(path, src)
+	if len(ds) > 0 {
+		e.report(ds[0])
 		return nil, exitDiagnostic
 	}
+	if boundary != "" {
+		return nil, e.boundary(boundary)
+	}
+	return file, exitOK
+}
+
+// checkSrc runs the single-file pipeline's shared core over in-memory
+// source text: parse, then the type stage in single-file mode. loadFile
+// (check and friends, from disk) and the language server (an open
+// document's text) call the same stages, so the same text draws the same
+// verdict on either face. It returns the file on a clean run, at most the
+// one diagnostic the pipeline stopped at, or a non-empty boundary string
+// for a ratified-but-unimplemented form — reporting is the caller's face.
+func checkSrc(path string, src []byte) (*ast.File, []diag.Diagnostic, string) {
+	file, d, ni := parser.Parse(path, src)
+	if d != nil {
+		return nil, []diag.Diagnostic{*d}, ""
+	}
 	if ni != nil {
-		return nil, e.boundary(ni.What)
+		return nil, nil, ni.What
 	}
 	td, tni := typecheck.Check(file, path, typecheck.SingleFile)
 	if td != nil {
-		e.report(*td)
-		return nil, exitDiagnostic
+		return nil, []diag.Diagnostic{*td}, ""
 	}
 	if tni != nil {
-		return nil, e.boundary(tni.What)
+		return nil, nil, tni.What
 	}
-	return file, exitOK
+	return file, nil, ""
 }
 
 // loadProject runs the project pipeline up through the type stage
