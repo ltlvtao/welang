@@ -1,0 +1,18 @@
+{
+  "name": "check-ch12-closure-tail-value",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn apply(f: fn(Int64, Int64) -> Int64, a: Int64, b: Int64) -> Int64 {\n    return f(a, b)\n}\n\nfn f() -> Int64 {\n    let pick = |a: Int64, b: Int64| if a > b { a } else { b }\n    let rank = |n: Int64| match n {\n        0 => 10\n        _ => 20\n    }\n    let sum: fn(Int64, Int64) -> Int64 = |a, b| { if a > b { a } else { b } }\n    return apply(pick, 1, 2) + rank(0) + apply(sum, 3, 4)\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn apply(f: fn(Int64, Int64) -> Int64, a: Int64, b: Int64) -> Int64 {\n    return f(a, b)\n}\n\nfn f() -> Int64 {\n    let pick = |a: Int64, b: Int64| if a > b { a } else { b }\n    let rank = |n: Int64| match n {\n        0 => 10\n        _ => 20\n    }\n    let sum: fn(Int64, Int64) -> Int64 = |a, b| { if a > b { a } else { b } }\n    return apply(pick, 1, 2) + rank(0) + apply(sum, 3, 4)\n}\n"
+  }
+}

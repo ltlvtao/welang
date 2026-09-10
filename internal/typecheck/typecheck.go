@@ -4855,8 +4855,15 @@ func (c *checker) walkItems(items []ast.Stmt, mode walkMode) Type {
 			// if and match in statement position name what was dropped in
 			// their own words, anchored at the keyword (the arms, the
 			// arm bodies) — the generic wordings below never fire for
-			// them (a stop already left this loop).
-			if dropped := mode != walkFn || !last || c.fnRet == nil; dropped {
+			// them (a stop already left this loop). A tail that carries
+			// the block's value is not a statement position: a plain
+			// block's final item is its value, and a fn body's faces the
+			// declared return — a value-category tail there is the return
+			// value, never a drop (chapter 12 makes a closure's body a
+			// function body by the same rule, which is why `|a, b| if a >
+			// b { a } else { b }` is a closure returning its arm).
+			dropped := !last || mode == walkControl || (mode == walkFn && c.fnRet == nil)
+			if dropped {
 				if _, never := t.(neverType); !never && !isUnit(t) {
 					switch ix := st.Expr.(type) {
 					case *ast.If:

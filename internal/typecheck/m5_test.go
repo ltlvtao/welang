@@ -163,6 +163,14 @@ func TestClosures(t *testing.T) {
 	wantOK(t, "fn f() -> Int64 {\n    let inc: fn(Int64) -> Int64 = |x| x + 1\n    return inc(1)\n}\n")
 	wantOK(t, "fn apply(f: fn(Int64) -> Int64, v: Int64) -> Int64 {\n    return f(v)\n}\n\nfn f() -> Int64 {\n    return apply(|x| x * 2, 5)\n}\n")
 	wantOK(t, "fn f() -> Int64 {\n    let pick = fn(c: Bool) -> Int64 { return if c { 1 } else { 2 } }\n    return pick(true)\n}\n")
+	// A closure's body is a function body (chapter 12): its final expression
+	// is the closure's return value, so an if or a match there is a value,
+	// never a dropped statement — the discard rule binds the *statement*
+	// positions, which a body tail is not.
+	wantOK(t, "fn f() -> Int64 {\n    let pick = |a: Int64, b: Int64| if a > b { a } else { b }\n    return pick(1, 2)\n}\n")
+	wantOK(t, "fn f() -> Int64 {\n    let pick: fn(Int64, Int64) -> Int64 = |a, b| { if a > b { a } else { b } }\n    return pick(1, 2)\n}\n")
+	wantOK(t, "fn f() -> Int64 {\n    let pick = |n: Int64| match n {\n        0 => 1\n        _ => 2\n    }\n    return pick(0)\n}\n")
+	wantOK(t, "fn apply(f: fn(Int64, Int64) -> Int64, a: Int64, b: Int64) -> Int64 {\n    return f(a, b)\n}\n\nfn f() -> Int64 {\n    return apply(|a, b| if a > b { a } else { b }, 1, 2)\n}\n")
 	// Bare parameters need an expected function type.
 	wantDiag(t, "fn f() {\n    let g = |x| x\n}\n",
 		"E1001", "the parameters are bare and no explicit function type is expected", 2, 13)
