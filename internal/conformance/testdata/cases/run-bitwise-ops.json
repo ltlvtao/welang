@@ -1,0 +1,16 @@
+{
+  "name": "run-bitwise-ops",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var k: Int64 = 3\n    let a = 12 & 10\n    let b = 12 | 3\n    let c = 12 ^ 5\n    let lo = 1 << k\n    let r = 256 >> k\n    let neg = 0 - 8\n    let asr = neg >> 1\n    if a == 8 { io.println(\"and-ok\") } else { io.println(\"and-bad\") }\n    if b == 15 { io.println(\"or-ok\") } else { io.println(\"or-bad\") }\n    if c == 9 { io.println(\"xor-ok\") } else { io.println(\"xor-bad\") }\n    if lo == 8 { io.println(\"shl-ok\") } else { io.println(\"shl-bad\") }\n    if r == 32 { io.println(\"shr-ok\") } else { io.println(\"shr-bad\") }\n    if asr == 0 - 4 { io.println(\"ashr-ok\") } else { io.println(\"ashr-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "and-ok\nor-ok\nxor-ok\nshl-ok\nshr-ok\nashr-ok\n",
+  "stderr": ""
+}

@@ -99,17 +99,12 @@ func TestTrapCalibration(t *testing.T) {
 			return rep(s, `return "we-bench"`, `return "we-bench!"`)
 		}},
 		// ---- control-04 (parityClass) ----
-		{"control-04", "modulo-decline", BucketTestMalformed, func(s string) string {
-			return rep(s, `pub fn parityClass(n: Int64) -> Int64 {
-    var m: Int64 = n
-    while m >= 2 {
-        m = m - 2
-    }
-    return m
-}`, `pub fn parityClass(n: Int64) -> Int64 {
-    return n % 2
-}`)
-		}},
+		// control-04's "modulo decline" case retired with the T3
+		// expression value forms (codegen-mono design D2): `%` and `/`
+		// emit checked arithmetic now, so the mutated reference is a clean
+		// program rather than a test-malformed one. The task's traps.md
+		// entry went with it. What remains calibrated for control-04 is
+		// the loop-condition off-by-one below.
 		{"control-04", "loop-condition-off-by-one", BucketLatent, func(s string) string {
 			return rep(s, "while m >= 2 {", "while m > 2 {")
 		}},
@@ -118,7 +113,7 @@ func TestTrapCalibration(t *testing.T) {
 		// let or a parameter emits the value-correct equivalent form, so
 		// the mutated reference is a clean program, not a trap. The
 		// task's traps.md entry went with it. What remains calibrated for
-		// control-04 is the modulo decline above and the off-by-one below.
+		// control-04 is the off-by-one below.
 		// ---- ctxpass-01 (scaledMerge) ----
 		{"ctxpass-01", "task-captures-var-e1603", BucketRejected, func(s string) string {
 			return rep(s, "    let b = base", "    var b: Int64 = base")

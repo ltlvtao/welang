@@ -1,0 +1,16 @@
+{
+  "name": "run-div-mod-values",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var d: Int64 = 2\n    let q = 10 / d\n    let m = 10 % d\n    if q == 5 { io.println(\"div-ok\") } else { io.println(\"div-bad\") }\n    if m == 0 { io.println(\"mod-ok\") } else { io.println(\"mod-bad\") }\n    let neg = 0 - 7\n    let mneg = neg % 2\n    if mneg == 0 - 1 { io.println(\"modneg-ok\") } else { io.println(\"modneg-bad\") }\n    let qneg = neg / 2\n    if qneg == 0 - 3 { io.println(\"divneg-ok\") } else { io.println(\"divneg-bad\") }\n    let c = 17 % 5\n    if c == 2 { io.println(\"constmod-ok\") } else { io.println(\"constmod-bad\") }\n    let e = 17 / 5\n    if e == 3 { io.println(\"constdiv-ok\") } else { io.println(\"constdiv-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "div-ok\nmod-ok\nmodneg-ok\ndivneg-ok\nconstmod-ok\nconstdiv-ok\n",
+  "stderr": ""
+}

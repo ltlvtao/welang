@@ -1,0 +1,16 @@
+{
+  "name": "run-call-in-operand",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn bump(n: Int64) -> Int64 {\n    return n + 1\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let v = bump(5) + 1\n    if v == 7 { io.println(\"add-ok\") } else { io.println(\"add-bad\") }\n    if bump(5) == 6 { io.println(\"cmp-ok\") } else { io.println(\"cmp-bad\") }\n    if !(bump(0) == 1) { io.println(\"not-bad\") } else { io.println(\"not-ok\") }\n    let w = bump(bump(1) + 1) + bump(2)\n    if w == 7 { io.println(\"nested-ok\") } else { io.println(\"nested-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "add-ok\ncmp-ok\nnot-ok\nnested-ok\n",
+  "stderr": ""
+}

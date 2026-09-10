@@ -1,0 +1,16 @@
+{
+  "name": "run-rune-binding",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let c = 'a'\n    let nl = '\\n'\n    let u = '\\u{48}'\n    let e = '\\''\n    io.println(\"rune-bound\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "rune-bound\n",
+  "stderr": ""
+}

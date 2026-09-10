@@ -1,0 +1,16 @@
+{
+  "name": "run-value-forms",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = 3\n    let k = if a > 1 { 10 } else { 20 }\n    if k == 10 { io.println(\"if-ok\") } else { io.println(\"if-bad\") }\n    let j = if a > 5 { 1 } else if a > 2 { 2 } else { 3 }\n    if j == 2 { io.println(\"chain-ok\") } else { io.println(\"chain-bad\") }\n    let b = {\n        let t = a + 1\n        t * 2\n    }\n    if b == 8 { io.println(\"blk-ok\") } else { io.println(\"blk-bad\") }\n    let _ = if a > 1 { io.println(\"unit1\") } else { io.println(\"unit2\") }\n    let r = scope timeout(1000) { 5 }\n    let n = match r {\n        Ok(x) => x\n        Err(_) => 0 - 1\n    }\n    if n == 5 { io.println(\"match-ok\") } else { io.println(\"match-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "if-ok\nchain-ok\nblk-ok\nunit1\nmatch-ok\n",
+  "stderr": ""
+}

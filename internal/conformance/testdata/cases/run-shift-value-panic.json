@@ -1,0 +1,16 @@
+{
+  "name": "run-shift-value-panic",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var k: Int64 = 2\n    let big = 1 << 62\n    let lo = big << k\n    io.println(\"unreachable\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: Int64 shift overflow\n"
+}

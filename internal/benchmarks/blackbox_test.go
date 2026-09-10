@@ -32,15 +32,21 @@ func TestBlackboxBucketParity(t *testing.T) {
 		{"latent", "control-01", map[string]string{"src/main.we": attemptSeriesLatent}},
 		{"rejected", "control-01", map[string]string{"src/main.we": attemptSeriesE0501}},
 		{"boundary", "control-01", map[string]string{"src/main.we": attemptSeriesBoundary}},
-		{"test-malformed", "control-04", attemptFiles(t, "control-04", func(src string) string {
-			return strings.Replace(src, `pub fn parityClass(n: Int64) -> Int64 {
-    var m: Int64 = n
-    while m >= 2 {
-        m = m - 2
+		// The test-malformed shape needs an attempt that checks clean and
+		// then fails the test stage's compile. control-04's modulo carrier
+		// died with the codegen-mono expression set (T3: `%` and `/` are
+		// checked arithmetic now, so `return n % 2` is a clean program),
+		// leaving control-03's string-equality decline — a boundary until
+		// the string chain lands — as the corpus's live carrier.
+		{"test-malformed", "control-03", attemptFiles(t, "control-03", func(src string) string {
+			return strings.Replace(src, `pub fn echo(s: String) -> String {
+    return s
+}`, `pub fn echo(s: String) -> String {
+    var r: String = s
+    if s == "mirror" {
+        r = "mirror-x"
     }
-    return m
-}`, `pub fn parityClass(n: Int64) -> Int64 {
-    return n % 2
+    return r
 }`, 1)
 		})},
 	}

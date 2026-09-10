@@ -1,0 +1,16 @@
+{
+  "name": "run-logic-short-circuit",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var z: Int64 = 0\n    if z != 0 && 10 / z == 1 { io.println(\"and-bad\") } else { io.println(\"and-ok\") }\n    if z == 0 || 10 / z == 1 { io.println(\"or-ok\") } else { io.println(\"or-bad\") }\n    var w: Int64 = 4\n    if w != 0 && 10 / w == 2 { io.println(\"take-ok\") } else { io.println(\"take-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "and-ok\nor-ok\ntake-ok\n",
+  "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+  "name": "run-unary-ops",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let t = true\n    let nt = !t\n    if nt == false { io.println(\"not-ok\") } else { io.println(\"not-bad\") }\n    let x = 5\n    let nx = -x\n    if nx == 0 - 5 { io.println(\"neg-ok\") } else { io.println(\"neg-bad\") }\n    let bx = ~x\n    if bx == 0 - 6 { io.println(\"bnot-ok\") } else { io.println(\"bnot-bad\") }\n    let z = 0\n    let nz = -z\n    if nz == 0 { io.println(\"negz-ok\") } else { io.println(\"negz-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "not-ok\nneg-ok\nbnot-ok\nnegz-ok\n",
+  "stderr": ""
+}

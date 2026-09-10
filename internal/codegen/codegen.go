@@ -281,7 +281,17 @@ type emitter struct {
 	prims   map[string]string
 	thunks  []string // finished callback and task defines
 	ovfs    []string // overflow report constants
+	divzs   []string // zero-divisor report constants
 	blocks  int      // fresh block-label suffix
+	// curBlock is the label of the block the running body is emitting
+	// into: the entry block until a label() opens another. A phi that
+	// joins a subexpression's branches names its predecessors from here
+	// (emitLogic): the block reaching the join is the one the operand's
+	// emission ended in, which its own control flow (a division guard, a
+	// nested value form) may have left several blocks past the one the
+	// operand opened. Like every other body-scoped field it is saved and
+	// restored around the nested bodies emission swaps in.
+	curBlock string
 
 	concAlias map[string]bool // the std.concurrent import's alias set
 	defers    []ast.Block     // a body's defer blocks, emission inverted
@@ -511,7 +521,16 @@ func (e *emitter) inst(s string) { e.body.WriteString("  " + s + "\n") }
 // instruction ever lands after one.
 func (e *emitter) label(s string) {
 	e.diverged = false
+	e.curBlock = s
 	e.body.WriteString(s + ":\n")
+}
+
+// beginBody starts a fresh body buffer, whose first block is the entry
+// label the define format writes (see bodyText) — the one block no
+// label() call announces, and so the one curBlock must be told about.
+func (e *emitter) beginBody() {
+	e.body = strings.Builder{}
+	e.curBlock = "entry"
 }
 func (e *emitter) value() string  { v := "v" + strconv.Itoa(e.fresh); e.fresh++; return v }
 func (e *emitter) use(sym string) { e.declUsed[sym] = true }
@@ -990,7 +1009,7 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 				e.strEnv[s.Name] = strBinding{data: data, length: len(data)}
 			}
 			return nil
-		case "int", "bool", "float":
+		case "int", "bool", "float", "rune":
 			op, isF, ok := e.numImmediate(init)
 			if !ok {
 				return e.bnd()
@@ -1052,21 +1071,11 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			e.gcEnv[s.Name] = gcBinding{rec: rkey, reg: reg}
 		}
 		return nil
-	case *ast.Binary:
-		op, isF, ni := e.emitNumExpr(init)
-		if ni != nil {
-			return ni
-		}
-		if s.Name != "_" {
-			if e.assigned[s.Name] {
-				e.bindScalarSlot(s.Name, op, isF)
-				return nil
-			}
-			// The SSA face drops the value's domain (design D10-1, T11's
-			// fix); a slot has to carry it, so only that path reads it.
-			e.scalars[s.Name] = scalarSlot{operand: op}
-		}
-		return nil
+	case *ast.Binary, *ast.Unary, *ast.If, *ast.Match, *ast.BlockExpr:
+		// The operator family and the value-position control forms bind
+		// through one path: the operand carries its domain into the slot
+		// (or the SSA face) exactly as a literal's does.
+		return e.bindNumericValue(s.Name, s.Init)
 	case *ast.Prop:
 		res, ni := e.emitQuestion(init)
 		if ni != nil {
@@ -1103,6 +1112,55 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 	default:
 		return e.bnd()
 	}
+}
+
+// bindNumericValue binds one numeric value expression (the operator
+// family, the unary family, the value-position control forms) under name:
+// a name the body assigns takes a slot, and both faces carry the value's
+// domain — a float binding stays a float through its SSA operand as much
+// as through its slot (design D10-1: a dropped domain left every later
+// consumer spelling i64 over a double register).
+func (e *emitter) bindNumericValue(name string, x ast.Expr) *NotImplemented {
+	res, ni := e.emitNumericValue(x)
+	if ni != nil {
+		return ni
+	}
+	switch res.kind {
+	case ckVoid:
+		// A valueless form binds only the discard (an if whose arms run
+		// for their effect); a name has nothing to hold.
+		if name != "_" {
+			return e.bnd()
+		}
+		return nil
+	case ckI64:
+	default:
+		return e.bnd()
+	}
+	if name == "_" {
+		return nil
+	}
+	if e.assigned[name] {
+		e.bindScalarSlot(name, res.i64, res.isFloat)
+		return nil
+	}
+	e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat}
+	return nil
+}
+
+// emitNumericValue emits one numeric value expression: a value-position
+// control form joins through its result slot (and may carry no value at
+// all), everything else is the numeric set's own operand.
+func (e *emitter) emitNumericValue(x ast.Expr) (callResult, *NotImplemented) {
+	switch x.(type) {
+	case *ast.If, *ast.Match, *ast.BlockExpr:
+		return e.emitValueForm(x)
+	}
+	op, isF, ni := e.emitNumExpr(x)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	return callResult{kind: ckI64, i64: op, isFloat: isF}, nil
 }
 
 // bindResult stores one call-shaped value under the binding's name (the
@@ -1164,9 +1222,9 @@ func (e *emitter) emitExprStmt(x ast.Expr) *NotImplemented {
 		// (E0605), so codegen never sees a non-unit tail.
 		return e.emitBlockStmts(v.Block.Items)
 	case *ast.If:
-		return e.emitIf(v)
+		return e.emitIf(v, nil)
 	case *ast.Match:
-		return e.emitMatch(v)
+		return e.emitMatch(v, nil)
 	case *ast.SelectExpr:
 		_, ni := e.emitSelect(v)
 		return ni
@@ -1273,13 +1331,22 @@ func (e *emitter) isLocalName(name string) bool {
 	return ok
 }
 
-// numImmediate renders a numeric literal as an IR operand: ints and bools
-// as i64 immediates, floats as the exact double hex bits — the bare hex
-// form, the consumer spells the type (every use site knows the domain
-// from the isFloat flag; a prefixed operand here would double the type
-// spelling there. Found while pinning the M10b float call face — no
+// numImmediate renders a numeric literal as an IR operand: ints, bools,
+// and runes as i64 immediates, floats as the exact double hex bits — the
+// bare hex form, the consumer spells the type (every use site knows the
+// domain from the isFloat flag; a prefixed operand here would double the
+// type spelling there. Found while pinning the M10b float call face — no
 // prior golden reached a float path).
 func (e *emitter) numImmediate(l *ast.Literal) (string, bool, bool) {
+	if l.Kind == "rune" {
+		// A rune is its code point in the i64 domain — Rune has no
+		// storage form of its own (design D2).
+		r, ok := decodeRuneLiteral(l.Text)
+		if !ok {
+			return "", false, false
+		}
+		return strconv.FormatInt(r, 10), false, true
+	}
 	if l.Kind == "float" {
 		text := l.Text
 		for _, suf := range []string{"f64", "f32", "F64", "F32"} {
@@ -1323,19 +1390,258 @@ func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
 			return op, isF, ni
 		}
 		return "", false, e.bnd()
+	case *ast.Unary:
+		return e.emitUnary(v)
 	case *ast.Binary:
 		switch v.Op {
 		case "+", "-", "*":
 			return e.emitOverflowArith(v)
+		case "/", "%":
+			return e.emitDivMod(v)
 		case "<", "<=", ">", ">=", "==", "!=":
 			return e.emitCompare(v)
 		case "&&", "||":
 			return e.emitLogic(v)
+		case "&", "|", "^", "<<", ">>":
+			return e.emitBitwise(v)
 		}
 		return "", false, e.bnd()
+	case *ast.Call:
+		// The operand-position call (design D2): a user fn's i64-domain
+		// result feeds whatever operator surrounds the call, at any
+		// nesting depth.
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return "", false, ni
+		}
+		if res.kind != ckI64 {
+			return "", false, e.bnd()
+		}
+		return res.i64, res.isFloat, nil
+	case *ast.If, *ast.Match, *ast.BlockExpr:
+		// The value-position control forms (design D2): their arms join
+		// through a result slot, and the loaded value is an operand like
+		// any other.
+		res, ni := e.emitValueForm(v)
+		if ni != nil {
+			return "", false, ni
+		}
+		if res.kind != ckI64 {
+			return "", false, e.bnd()
+		}
+		return res.i64, res.isFloat, nil
 	default:
 		return "", false, e.bnd()
 	}
+}
+
+// spelledInt reports the value of an integer literal the source spells —
+// a divisor the emitter can check before it emits anything.
+func spelledInt(x ast.Expr) (int64, bool) {
+	lit, ok := x.(*ast.Literal)
+	if !ok || lit.Kind != "int" {
+		return 0, false
+	}
+	imm, ok := scalarImmediate(lit)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(imm, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// emitUnary emits the prefix family (chapter 2's unary level). `!` is the
+// boolean domain's zero test, widened back into the i64 domain the
+// bindings carry; `~` is the all-ones xor, total by construction; `-` is
+// the checked subtraction from zero, because negating the minimum value
+// overflows — chapter 7's integer arithmetic is checked, and floats ride
+// IEEE (fneg, no trap).
+func (e *emitter) emitUnary(u *ast.Unary) (string, bool, *NotImplemented) {
+	op, isF, ni := e.emitNumExpr(u.X)
+	if ni != nil {
+		return "", false, ni
+	}
+	switch u.Op {
+	case "!":
+		if isF {
+			return "", false, e.bnd()
+		}
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, 0", v, op))
+		z := e.value()
+		e.inst(fmt.Sprintf("%%%s = zext i1 %%%s to i64", z, v))
+		return "%" + z, false, nil
+	case "-":
+		if isF {
+			v := e.value()
+			e.inst(fmt.Sprintf("%%%s = fneg double %s", v, op))
+			return "%" + v, true, nil
+		}
+		return e.emitCheckedIntr("llvm.ssub.with.overflow.i64", "Int64 neg overflow", "0", op), false, nil
+	case "~":
+		if isF {
+			return "", false, e.bnd()
+		}
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = xor i64 %s, -1", v, op))
+		return "%" + v, false, nil
+	}
+	return "", false, e.bnd()
+}
+
+// emitDivMod emits `/` and `%` (design D2). LLVM leaves both the zero
+// divisor and the minimum-value-by-minus-one pair undefined, while
+// chapter 7's arithmetic is checked to the last value, so the emitter
+// carries the guards itself: a zero divisor runs the task-panic tail
+// rather than reaching the division, and `/` traps the one pair whose
+// quotient overflows. `%` needs no overflow guard — that pair's remainder
+// is exactly zero, and `a srem 1` is `a srem -1`'s value without the
+// undefined pair, so a select on the divisor closes it in one
+// instruction. A divisor the source spells was checked at compile time
+// (chapter 7's constant fold, E0502) and takes the bare division: the
+// benchmark tasks' `n % 2` body is one srem. Floats follow chapter 7's
+// IEEE rule — fdiv and frem, no trap face.
+func (e *emitter) emitDivMod(b *ast.Binary) (string, bool, *NotImplemented) {
+	a, af, ni := e.emitNumExpr(b.L)
+	if ni != nil {
+		return "", false, ni
+	}
+	c, cf, ni := e.emitNumExpr(b.R)
+	if ni != nil {
+		return "", false, ni
+	}
+	if af != cf {
+		return "", false, e.bnd()
+	}
+	flop, iop := "fdiv", "sdiv"
+	if b.Op == "%" {
+		flop, iop = "frem", "srem"
+	}
+	if af {
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = %s double %s, %s", v, flop, a, c))
+		return "%" + v, true, nil
+	}
+	if n, ok := spelledInt(b.R); ok && n != 0 && n != -1 {
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, iop, a, c))
+		return "%" + v, false, nil
+	}
+	bl := e.blocks
+	e.blocks++
+	divz := fmt.Sprintf("divz%d", bl)
+	divk := fmt.Sprintf("divk%d", bl)
+	z := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, 0", z, c))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", z, divz, divk))
+	e.label(divz)
+	zn := fmt.Sprintf("@.dvz%d", len(e.divzs))
+	e.divzs = append(e.divzs, msgConst(zn, "division by zero"))
+	e.use("__we_task_fail")
+	e.inst(fmt.Sprintf("call void @__we_task_fail(ptr %s)", zn))
+	e.inst("unreachable")
+	e.label(divk)
+	if b.Op == "%" {
+		m1 := e.value()
+		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, -1", m1, c))
+		safe := e.value()
+		e.inst(fmt.Sprintf("%%%s = select i1 %%%s, i64 1, i64 %s", safe, m1, c))
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = %s i64 %s, %%%s", v, iop, a, safe))
+		return "%" + v, false, nil
+	}
+	// The minimum value by -1: LLVM's other undefined division pair, and
+	// an overflow chapter 7's checked arithmetic reports like any other.
+	mn := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, -9223372036854775808", mn, a))
+	m1 := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, -1", m1, c))
+	both := e.value()
+	e.inst(fmt.Sprintf("%%%s = and i1 %%%s, %%%s", both, mn, m1))
+	ob := e.blocks
+	e.blocks++
+	dovf := fmt.Sprintf("dovf%d", ob)
+	dofk := fmt.Sprintf("dofk%d", ob)
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", both, dovf, dofk))
+	e.label(dovf)
+	e.trap("Int64 div overflow")
+	e.label(dofk)
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, iop, a, c))
+	return "%" + v, false, nil
+}
+
+// emitBitwise emits the binary bit family — chapter 2's shift level and
+// the `& | ^` level. The three logicals are total over the integer
+// domain, but the shifts carry chapter 7's checked posture on both
+// edges: LLVM's shift is poison for an amount at or past the width, and
+// a left shift that drops a bit off the top is the silent wrap the
+// chapter forbids. `>>` is the arithmetic shift — the sign-preserving
+// reading of a signed operand — and loses only the low bits, which is
+// what a right shift means; the round-trip check is a left shift's
+// alone. Floats have no domain here and stop at the boundary.
+func (e *emitter) emitBitwise(b *ast.Binary) (string, bool, *NotImplemented) {
+	a, af, ni := e.emitNumExpr(b.L)
+	if ni != nil {
+		return "", false, ni
+	}
+	c, cf, ni := e.emitNumExpr(b.R)
+	if ni != nil {
+		return "", false, ni
+	}
+	if af || cf {
+		return "", false, e.bnd()
+	}
+	if b.Op != "<<" && b.Op != ">>" {
+		op := map[string]string{"&": "and", "|": "or", "^": "xor"}[b.Op]
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, op, a, c))
+		return "%" + v, false, nil
+	}
+	op := "shl"
+	if b.Op == ">>" {
+		op = "ashr"
+	}
+	bl := e.blocks
+	e.blocks += 2
+	shk := fmt.Sprintf("shk%d", bl)
+	sho := fmt.Sprintf("sho%d", bl)
+	in := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp ult i64 %s, 64", in, c))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", in, shk, sho))
+	e.label(sho)
+	e.trap("Int64 shift overflow")
+	e.label(shk)
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, op, a, c))
+	if b.Op == ">>" {
+		return "%" + v, false, nil
+	}
+	bk := e.value()
+	e.inst(fmt.Sprintf("%%%s = ashr i64 %%%s, %s", bk, v, c))
+	same := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %%%s, %s", same, bk, a))
+	svk := fmt.Sprintf("svk%d", bl+1)
+	svf := fmt.Sprintf("svf%d", bl+1)
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", same, svk, svf))
+	e.label(svf)
+	e.trap("Int64 shift overflow")
+	e.label(svk)
+	return "%" + v, false, nil
+}
+
+// trap emits chapter 14's termination tail: the runtime prints msg and
+// the process aborts. The caller reaches this block only on the failing
+// edge, so the block ends unreachable.
+func (e *emitter) trap(msg string) {
+	e.use("__we_task_fail")
+	cn := fmt.Sprintf("@.ovf%d", len(e.ovfs))
+	e.ovfs = append(e.ovfs, msgConst(cn, msg))
+	e.inst(fmt.Sprintf("call void @__we_task_fail(ptr %s)", cn))
+	e.inst("unreachable")
 }
 
 func (e *emitter) loadNum(slot string, isFloat bool) string {
@@ -1374,6 +1680,17 @@ func (e *emitter) emitOverflowArith(b *ast.Binary) (string, bool, *NotImplemente
 		"-": "llvm.ssub.with.overflow.i64",
 		"*": "llvm.smul.with.overflow.i64",
 	}[b.Op]
+	return e.emitCheckedIntr(intr, "Int64 "+opName[b.Op]+" overflow", a, c), false, nil
+}
+
+// emitCheckedIntr emits `a <intr> c` in chapter 7's checked form: the
+// intrinsic reports the overflow bit, a failing branch runs the
+// task-panic tail, and only the checked value flows on into the
+// continuation the branch opens. `-x` and the division guards ride the
+// same shape. `msg` is the report text: chapter 14's trap names the
+// operation (`Int64 add overflow` and siblings), so each checked
+// operation carries its own message rather than one shared text.
+func (e *emitter) emitCheckedIntr(intr, msg, a, c string) string {
 	pair := e.value()
 	e.use(intr)
 	e.inst(fmt.Sprintf("%%%s = call { i64, i1 } @%s(i64 %s, i64 %s)", pair, intr, a, c))
@@ -1385,14 +1702,20 @@ func (e *emitter) emitOverflowArith(b *ast.Binary) (string, bool, *NotImplemente
 	e.blocks++
 	e.inst(fmt.Sprintf("br i1 %%%s, label %%ovf%d, label %%cont%d", ov, bl, bl))
 	e.label(fmt.Sprintf("ovf%d", bl))
-	e.use("__we_task_fail")
-	cn := fmt.Sprintf("@.ovf%d", len(e.ovfs))
-	e.ovfs = append(e.ovfs, cn+` = private unnamed_addr constant [17 x i8] c"integer overflow\00"`)
-	e.inst(fmt.Sprintf("call void @__we_task_fail(ptr %s)", cn))
-	e.inst("unreachable")
+	e.trap(msg)
 	e.label(fmt.Sprintf("cont%d", bl))
-	return "%" + res, false, nil
+	return "%" + res
 }
+
+// msgConst formats a trap-report string constant: the NUL-terminated
+// byte array the runtime prints after `Panicked: `.
+func msgConst(name, msg string) string {
+	return fmt.Sprintf("%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"", name, len(msg)+1, irEscape(msg))
+}
+
+// opName spells each checked operator as chapter 14's trap names it:
+// `Int64 add overflow` and siblings, one word per operator.
+var opName = map[string]string{"+": "add", "-": "sub", "*": "mul", "/": "div"}
 
 var icmpPred = map[string]string{"<": "slt", "<=": "sle", ">": "sgt", ">=": "sge", "==": "eq", "!=": "ne"}
 var fcmpPred = map[string]string{"<": "olt", "<=": "ole", ">": "ogt", ">=": "oge", "==": "oeq", "!=": "one"}
@@ -1422,35 +1745,65 @@ func (e *emitter) emitCompare(b *ast.Binary) (string, bool, *NotImplemented) {
 	return "%" + z, false, nil
 }
 
-// emitLogic emits && / || as and/or over the i64-domain booleans. Both
-// operands are side-effect-free numeric forms by construction (calls
-// stop at the numeric expression set), so the non-branching form equals
-// the short-circuit one here.
+// emitLogic emits && / || in the short-circuit form (design D2): the left
+// operand decides, and only the path the language names evaluates the
+// right one — an operand that divides, calls, or panics runs exactly when
+// the source says it does (the two-operand and/or form was safe only
+// while no operand could have an effect, which the operand-position call
+// ends). Both paths meet at a phi carrying the i64-domain boolean.
 func (e *emitter) emitLogic(b *ast.Binary) (string, bool, *NotImplemented) {
 	a, af, ni := e.emitNumExpr(b.L)
-	if ni != nil {
+	if ni != nil || af {
 		return "", false, ni
 	}
-	c, cf, ni := e.emitNumExpr(b.R)
-	if ni != nil {
-		return "", false, ni
+	bl := e.blocks
+	e.blocks++
+	prefix := fmt.Sprintf("lgc%d", bl)
+	rhsL, shortL, joinL := prefix+"rhs", prefix+"short", prefix+"join"
+	// The short path's answer: the operand that decided it.
+	short := "0"
+	if b.Op == "||" {
+		short = "1"
 	}
-	if af || cf {
-		return "", false, e.bnd()
+	thenL, elseL := rhsL, shortL
+	if b.Op == "||" {
+		thenL, elseL = shortL, rhsL
 	}
 	av := e.value()
 	e.inst(fmt.Sprintf("%%%s = icmp ne i64 %s, 0", av, a))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", av, thenL, elseL))
+	e.label(rhsL)
+	c, cf, ni := e.emitNumExpr(b.R)
+	if ni != nil || cf {
+		return "", false, ni
+	}
 	cv := e.value()
 	e.inst(fmt.Sprintf("%%%s = icmp ne i64 %s, 0", cv, c))
-	op := "and i1"
-	if b.Op == "||" {
-		op = "or i1"
+	rz := e.value()
+	e.inst(fmt.Sprintf("%%%s = zext i1 %%%s to i64", rz, cv))
+	// The phi names the block each path actually reaches the join from —
+	// not the label each path opened. An operand with control flow of its
+	// own (a division guard, a nested value form, a call with a trap)
+	// leaves its emission in a block several labels past rhsL, and LLVM
+	// requires every phi entry to name a real predecessor.
+	rhsPred, shortPred := e.curBlock, ""
+	rhsFalls := !e.diverged
+	if rhsFalls {
+		e.inst(fmt.Sprintf("br label %%%s", joinL))
 	}
-	r := e.value()
-	e.inst(fmt.Sprintf("%%%s = %s %%%s, %%%s", r, op, av, cv))
-	z := e.value()
-	e.inst(fmt.Sprintf("%%%s = zext i1 %%%s to i64", z, r))
-	return "%" + z, false, nil
+	e.label(shortL)
+	shortPred = e.curBlock
+	e.inst(fmt.Sprintf("br label %%%s", joinL))
+	e.label(joinL)
+	v := e.value()
+	if rhsFalls {
+		e.inst(fmt.Sprintf("%%%s = phi i64 [ %%%s, %%%s ], [ %s, %%%s ]", v, rz, rhsPred, short, shortPred))
+	} else {
+		// The right operand's block already ended in its own terminator:
+		// the join is reached from the deciding path alone.
+		e.inst(fmt.Sprintf("%%%s = phi i64 [ %s, %%%s ]", v, short, shortPred))
+	}
+	return "%" + v, false, nil
 }
 
 // emitVarBinding emits a numeric var: the alloca is the name's storage,
@@ -1980,11 +2333,11 @@ func (e *emitter) emitCallback(cl *ast.Closure) (string, *NotImplemented) {
 	}
 	savedCtx, savedScalars, savedBody := e.ctx, e.scalars, e.body
 	savedAllocas, savedAssigned := e.allocas, e.assigned
-	savedDiverged := e.diverged
+	savedDiverged, savedCur := e.diverged, e.curBlock
 	savedExit, savedInExit := e.exit, e.inExit
 	e.ctx = ctxCallback
 	e.scalars = map[string]scalarSlot{cl.Params[0].Name: {operand: "%v0"}}
-	e.body = strings.Builder{}
+	e.beginBody()
 	e.allocas = nil
 	e.assigned = make(map[string]bool)
 	e.diverged = false
@@ -1997,6 +2350,7 @@ func (e *emitter) emitCallback(cl *ast.Closure) (string, *NotImplemented) {
 	cb := e.bodyText()
 	diverged := e.diverged
 	e.body, e.ctx, e.scalars, e.diverged = savedBody, savedCtx, savedScalars, savedDiverged
+	e.curBlock = savedCur
 	e.allocas, e.assigned = savedAllocas, savedAssigned
 	e.exit, e.inExit = savedExit, savedInExit
 	if ni != nil || diverged {
@@ -2077,6 +2431,128 @@ func (e *emitter) popEnv() {
 	e.scalars, e.strEnv, e.gcEnv, e.sums2, e.prims = f.scalars, f.strEnv, f.gcEnv, f.sums2, f.prims
 }
 
+// valueForm is one value-position expression's join (design D2): the arms
+// compute their values, each stores into the form's result slot, and the
+// join loads it. The slot is reserved by the first arm that produces a
+// value — an alloca's text splices in behind the entry label whenever it
+// is requested, so where the reservation happens is unobservable — and
+// every later arm writes that same slot. An expression whose arms produce
+// no value at all is unit and reserves nothing; one that mixes valued and
+// valueless arms has no single value to load (a mismatch the check face
+// rules out) and stops at the body word.
+type valueForm struct {
+	slot    string
+	isFloat bool
+	unit    bool
+}
+
+// emitValueForm emits one value-position expression and returns its value:
+// the if/match/block forms whose arms produce i64- or double-domain
+// values. The load lands after the form's join — the outermost join for a
+// chain — which is exactly where the consumption site reads it.
+func (e *emitter) emitValueForm(x ast.Expr) (callResult, *NotImplemented) {
+	vf := &valueForm{}
+	var ni *NotImplemented
+	switch v := x.(type) {
+	case *ast.If:
+		ni = e.emitIf(v, vf)
+	case *ast.Match:
+		ni = e.emitMatch(v, vf)
+	case *ast.BlockExpr:
+		ni = e.emitArmBlock(v.Block.Items, vf)
+	default:
+		return callResult{}, e.bnd()
+	}
+	if ni != nil {
+		return callResult{}, ni
+	}
+	if vf.slot == "" {
+		return callResult{kind: ckVoid}, nil
+	}
+	if vf.unit {
+		return callResult{}, e.bnd()
+	}
+	return callResult{kind: ckI64, i64: e.loadNum(vf.slot, vf.isFloat), isFloat: vf.isFloat}, nil
+}
+
+// put writes one arm's value into the form's result slot, reserving the
+// slot the first time. An arm whose expression carries no value — a
+// valueless call, an io call — leaves the sink untouched and marks the
+// form unit.
+func (vf *valueForm) put(e *emitter, res callResult) *NotImplemented {
+	switch res.kind {
+	case ckVoid, ckIo:
+		vf.unit = true
+		return nil
+	case ckI64:
+		typ := "i64"
+		if res.isFloat {
+			typ = "double"
+		}
+		if vf.slot == "" {
+			vf.slot, vf.isFloat = e.slot(typ), res.isFloat
+		} else if vf.isFloat != res.isFloat {
+			return e.bnd()
+		}
+		e.inst(fmt.Sprintf("store %s %s, ptr %s", typ, res.i64, vf.slot))
+		return nil
+	}
+	// Strings, records, and sums have value forms of their own (design
+	// D3/D4/D8); the result-slot join is the numeric set's.
+	return e.bnd()
+}
+
+// emitArmBlock emits one arm's block in a value form: every statement but
+// the tail walks as usual, then the tail — the block's value — computes
+// into the form's sink. A block whose last item is not an expression
+// carries no value: it is unit, and the arm stores nothing.
+func (e *emitter) emitArmBlock(items []ast.Stmt, vf *valueForm) *NotImplemented {
+	e.pushEnv()
+	defer e.popEnv()
+	tail := ast.Expr(nil)
+	if n := len(items); n > 0 {
+		if es, ok := items[n-1].(*ast.ExprStmt); ok {
+			tail = es.Expr
+			items = items[:n-1]
+		}
+	}
+	for _, st := range items {
+		if ni := e.emitStmt(st); ni != nil {
+			return ni
+		}
+	}
+	if tail == nil || e.diverged {
+		return nil
+	}
+	return e.storeValue(tail, vf)
+}
+
+// storeValue computes one value-position expression into the form's sink:
+// a nested control form joins through the same sink, and anything else is
+// the numeric set's own operand (which reaches the operand-position call
+// and the unary family in turn).
+func (e *emitter) storeValue(x ast.Expr, vf *valueForm) *NotImplemented {
+	switch v := x.(type) {
+	case *ast.If:
+		return e.emitIf(v, vf)
+	case *ast.Match:
+		return e.emitMatch(v, vf)
+	case *ast.BlockExpr:
+		return e.emitArmBlock(v.Block.Items, vf)
+	case *ast.Call:
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return ni
+		}
+		return vf.put(e, res)
+	}
+	op, isF, ni := e.emitNumExpr(x)
+	if ni != nil {
+		return ni
+	}
+	return vf.put(e, callResult{kind: ckI64, i64: op, isFloat: isF})
+}
+
 // emitBlockStmts emits a nested block's statements: a block introduces no
 // boundary of its own — the statements walk in order, and a return at any
 // depth is the enclosing body's own exit (emitReturn carries the exit
@@ -2094,8 +2570,11 @@ func (e *emitter) emitBlockStmts(items []ast.Stmt) *NotImplemented {
 }
 
 // emitIf emits the conditional: then plus optional else (a block or a
-// nested else-if), both arms joining one continuation label.
-func (e *emitter) emitIf(s *ast.If) *NotImplemented {
+// nested else-if), both arms joining one continuation label. With a value
+// form each arm computes its value into the form's sink rather than
+// running as statements (design D2) — one shape, two faces: the arms
+// differ in what they leave behind, not in how control reaches the join.
+func (e *emitter) emitIf(s *ast.If, vf *valueForm) *NotImplemented {
 	c, ni := e.condI64(s.Cond)
 	if ni != nil {
 		return ni
@@ -2115,8 +2594,15 @@ func (e *emitter) emitIf(s *ast.If) *NotImplemented {
 	}
 	e.inst(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", c, thenL, elseL))
 	e.label(thenL)
-	if ni := e.emitBlockStmts(s.Then.Items); ni != nil {
+	if ni := e.emitIfArm(s.Then.Items, vf); ni != nil {
 		return ni
+	}
+	if vf != nil && s.Else == nil && vf.slot != "" {
+		// A valueless else alongside a valued then has no single value:
+		// the else path reaches the join without storing. The check face
+		// rules the shape out — a valueless if is unit — so this is the
+		// boundary's defensive face.
+		return e.bnd()
 	}
 	// The join branch is guarded: an arm that ended diverged (unreachable,
 	// or a return/break once those land) already terminated its block —
@@ -2127,12 +2613,13 @@ func (e *emitter) emitIf(s *ast.If) *NotImplemented {
 	}
 	if s.Else != nil {
 		e.label(elseL)
-		if els, ok := s.Else.(*ast.BlockExpr); ok {
-			if ni := e.emitBlockStmts(els.Block.Items); ni != nil {
+		switch els := s.Else.(type) {
+		case *ast.BlockExpr:
+			if ni := e.emitIfArm(els.Block.Items, vf); ni != nil {
 				return ni
 			}
-		} else if inner, ok := s.Else.(*ast.If); ok {
-			if ni := e.emitIf(inner); ni != nil {
+		case *ast.If:
+			if ni := e.emitIf(els, vf); ni != nil {
 				return ni
 			}
 			// The nested if already closed on its own join; branch to
@@ -2144,6 +2631,15 @@ func (e *emitter) emitIf(s *ast.If) *NotImplemented {
 	}
 	e.label(join)
 	return nil
+}
+
+// emitIfArm emits one if arm: as statements when no value form is live,
+// else as a value arm whose tail computes into the form's sink.
+func (e *emitter) emitIfArm(items []ast.Stmt, vf *valueForm) *NotImplemented {
+	if vf == nil {
+		return e.emitBlockStmts(items)
+	}
+	return e.emitArmBlock(items, vf)
 }
 
 // exitKind names the enclosing body's return protocol (T2 deep returns,
@@ -2501,7 +2997,7 @@ func (e *emitter) emitStep(cur string) string {
 // runtime's return codes), the wildcard arm as the default, and every
 // arm joins one continuation. Payload bindings (Some(x)) load the
 // payload word into the scalar domain.
-func (e *emitter) emitMatch(s *ast.Match) *NotImplemented {
+func (e *emitter) emitMatch(s *ast.Match, vf *valueForm) *NotImplemented {
 	id, ok := s.Scrutinee.(*ast.Ident)
 	if !ok {
 		return e.bnd()
@@ -2527,8 +3023,10 @@ func (e *emitter) emitMatch(s *ast.Match) *NotImplemented {
 			}
 			// The default arm: everything left falls in — the previous
 			// arm's fall-through block is already open (labeled at its
-			// close), so the body emits here without reopening it.
-			if ni := e.emitMatchArm(arm, slot); ni != nil {
+			// close), so the body emits here without reopening it. A
+			// false guard there leaves the match without a value, which
+			// only the join can carry.
+			if ni := e.emitMatchArm(arm, slot, join, vf); ni != nil {
 				return ni
 			}
 			if !e.diverged {
@@ -2553,7 +3051,7 @@ func (e *emitter) emitMatch(s *ast.Match) *NotImplemented {
 		next := fmt.Sprintf("mtest%d_%d", n, i)
 		e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, armL, next))
 		e.label(armL)
-		if ni := e.emitMatchArm(arm, slot); ni != nil {
+		if ni := e.emitMatchArm(arm, slot, next, vf); ni != nil {
 			return ni
 		}
 		if !e.diverged {
@@ -2571,13 +3069,18 @@ func (e *emitter) emitMatch(s *ast.Match) *NotImplemented {
 	return nil
 }
 
-// emitMatchArm emits one arm's body; a PatVariant payload binding loads
-// the payload word first. The whole arm is one block scope — the payload
-// binding and everything the body registers roll back when the arm
-// closes, so no arm name is readable past the join (the follow-up #16
+// emitMatchArm emits one arm; a PatVariant payload binding loads the
+// payload word first. A guarded arm then evaluates its condition — only
+// now, after the pattern matched (chapter 4's laziness), and inside the
+// frame that carries the pattern's bindings — and a false condition
+// falls through to the next arm's test. With a value form the body stores
+// its value into the form's sink. The whole arm is one block scope — the
+// payload binding and everything the body registers roll back when the
+// arm closes, so no arm name is readable past the join (the follow-up #16
 // leak this frame seals).
-func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot) *NotImplemented {
+func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot, guardFalseL string, vf *valueForm) *NotImplemented {
 	e.pushEnv()
+	defer e.popEnv()
 	if pv, ok := arm.Pat.(*ast.PatVariant); ok && len(pv.Args) == 1 {
 		if b, ok := pv.Args[0].(*ast.PatBinding); ok && b.Name != "_" {
 			op := e.loadNum(slot.pay, false)
@@ -2588,13 +3091,38 @@ func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot) *NotImplemented {
 			}
 		}
 	}
-	blk, ok := arm.Body.(*ast.BlockExpr)
-	if !ok {
-		return e.bnd() // arm bodies are blocks in the M9b set
+	if arm.Guard != nil {
+		if e.diverged {
+			return nil
+		}
+		c, ni := e.condI64(arm.Guard)
+		if ni != nil {
+			return ni
+		}
+		bodyL := fmt.Sprintf("mbody%d", e.blocks)
+		e.blocks++
+		e.inst(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", c, bodyL, guardFalseL))
+		e.label(bodyL)
 	}
-	ni := e.emitBlockStmts(blk.Block.Items)
-	e.popEnv()
-	return ni
+	return e.emitMatchBody(arm.Body, vf)
+}
+
+// emitMatchBody emits one arm's body: a block body runs as an arm block
+// (statements then tail), any other body is the arm's one expression.
+// Without a value form the arm is a statement and the block's tail, if it
+// carries one, is emitted as a statement like any other item.
+func (e *emitter) emitMatchBody(body ast.Expr, vf *valueForm) *NotImplemented {
+	blk, isBlock := body.(*ast.BlockExpr)
+	if vf == nil {
+		if !isBlock {
+			return e.bnd() // a statement arm's body is a block in the M9b set
+		}
+		return e.emitBlockStmts(blk.Block.Items)
+	}
+	if isBlock {
+		return e.emitArmBlock(blk.Block.Items, vf)
+	}
+	return e.storeValue(body, vf)
 }
 
 // emitPanic emits `panic("msg")`: the NUL-terminated message constant
@@ -3135,6 +3663,7 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	// at task end), so the thunk tail returns without popping.
 	name := fmt.Sprintf("@.task%d", len(e.thunks))
 	savedCtx, savedBody := e.ctx, e.body
+	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
@@ -3149,13 +3678,13 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
-		e.diverged = savedDiverged
+		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxTask
-	e.body = strings.Builder{}
+	e.beginBody()
 	e.allocas = nil
 	e.assigned = make(map[string]bool)
 	e.diverged = false
@@ -3243,16 +3772,12 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 	e.use("__we_scope_enter")
 	sc := e.value()
 	e.inst(fmt.Sprintf("%%%s = call ptr @__we_scope_enter(i64 %s, i64 %d)", sc, dl, ca))
-	bodyVal := "0"
 	items := s.Body.Items
+	tail := ast.Expr(nil)
 	if valueForm && len(items) > 0 {
 		if es, ok := items[len(items)-1].(*ast.ExprStmt); ok {
-			if _, isCall := es.Expr.(*ast.Call); !isCall {
-				if op, _, ni := e.emitNumExpr(es.Expr); ni == nil {
-					bodyVal = op
-					items = items[:len(items)-1]
-				}
-			}
+			tail = es.Expr
+			items = items[:len(items)-1]
 		}
 	}
 	// The scope body is one block scope: bindings made inside (tasks,
@@ -3263,6 +3788,27 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 	for _, st := range items {
 		if ni := e.emitStmt(st); ni != nil {
 			return callResult{}, ni
+		}
+	}
+	// The tail is the scope's value and it belongs to the body: it runs
+	// after every body statement and inside the body's own environment.
+	// Reading it before the body — which is what the emitter used to do —
+	// yields the value the body opened with, not the one it left (defect
+	// D10-2: legal IR, wrong value).
+	bodyVal := "0"
+	if tail != nil && !e.diverged {
+		res, ni := e.emitNumericValue(tail)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		switch {
+		case res.kind == ckVoid:
+			// A valueless tail: the body ran for its effect, the payload
+			// word stays zero (the tag carries the outcome).
+		case res.kind == ckI64 && !res.isFloat:
+			bodyVal = res.i64
+		default:
+			return callResult{}, e.bnd() // a payload the sum's word cannot carry
 		}
 	}
 	e.popEnv()
@@ -4202,6 +4748,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	e.enterModule(fd.key)
 
 	savedCtx, savedBody := e.ctx, e.body
+	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
@@ -4216,13 +4763,13 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
-		e.diverged = savedDiverged
+		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
-	e.body = strings.Builder{}
+	e.beginBody()
 	e.allocas = nil
 	e.assigned = make(map[string]bool)
 	e.diverged = false
@@ -4425,6 +4972,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	}
 
 	savedCtx, savedBody := e.ctx, e.body
+	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
@@ -4439,13 +4987,13 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
-		e.diverged = savedDiverged
+		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
-	e.body = strings.Builder{}
+	e.beginBody()
 	e.allocas = nil
 	e.assigned = make(map[string]bool)
 	e.diverged = false
@@ -4520,6 +5068,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 // mock declarations ride ahead of this as their own defines.
 func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplemented {
 	savedCtx, savedBody := e.ctx, e.body
+	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
@@ -4534,13 +5083,13 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
-		e.diverged = savedDiverged
+		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
-	e.body = strings.Builder{}
+	e.beginBody()
 	e.allocas = nil
 	e.assigned = make(map[string]bool)
 	e.diverged = false
@@ -4612,8 +5161,8 @@ func (e *emitter) emitDriver() {
 	for i := range e.drives {
 		st := &e.drives[i]
 		savedBody, savedAllocas := e.body, e.allocas
-		savedAssigned := e.assigned
-		e.body = strings.Builder{}
+		savedAssigned, savedCur := e.assigned, e.curBlock
+		e.beginBody()
 		e.allocas, e.assigned = nil, make(map[string]bool)
 		for _, m := range st.mocks {
 			// The install materializes the slot even when no call site
@@ -4660,6 +5209,7 @@ func (e *emitter) emitDriver() {
 		e.label(fmt.Sprintf("tk%dq", n))
 		body := e.bodyText()
 		e.body, e.allocas, e.assigned = savedBody, savedAllocas, savedAssigned
+		e.curBlock = savedCur
 		e.thunks = append(e.thunks, fmt.Sprintf(
 			"define internal void @%s.drive.%d() {\nentry:\n%s  ret void\n}\n",
 			st.key, i, body))
@@ -5108,6 +5658,9 @@ func (e *emitter) render(module string) string {
 	if len(e.ovfs) > 0 {
 		groups = append(groups, e.ovfs)
 	}
+	if len(e.divzs) > 0 {
+		groups = append(groups, e.divzs)
+	}
 	if len(e.panics) > 0 {
 		groups = append(groups, e.panics)
 	}
@@ -5175,6 +5728,30 @@ func isStringPayloadVariant(sums map[string]map[string][]ast.TypeRef, key string
 	}
 	str, ok := payload[0].(*ast.NamedType)
 	return ok && str.Qual == "" && str.Name == "String" && len(str.Args) == 0
+}
+
+// decodeRuneLiteral resolves a rune literal (Text holds the source slice,
+// quotes included) to its code point. The escape machine is the string
+// literal's — chapter 1's set is closed and shared — applied to the one
+// character the literal spells: the decoded bytes must be exactly one
+// valid UTF-8 sequence. The lexer has already validated the syntax, so
+// every other path resolves.
+func decodeRuneLiteral(text string) (int64, bool) {
+	if len(text) < 3 || text[0] != '\'' || text[len(text)-1] != '\'' {
+		return 0, false
+	}
+	data, ok := decodeStringLiteral(`"` + text[1:len(text)-1] + `"`)
+	if !ok {
+		return 0, false
+	}
+	r, size := utf8.DecodeRuneInString(data)
+	if r == utf8.RuneError && size <= 1 {
+		return 0, false
+	}
+	if size != len(data) {
+		return 0, false
+	}
+	return int64(r), true
 }
 
 // decodeStringLiteral resolves the chapter 1 escape set of a raw string

@@ -1,0 +1,16 @@
+{
+  "name": "run-scope-value-order",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var n: Int64 = 0\n    let r = scope timeout(1000) {\n        n = n + 1\n        n\n    }\n    let v = match r {\n        Ok(x) => x\n        Err(_) => 0 - 1\n    }\n    if v == 1 { io.println(\"tail-ok\") } else { io.println(\"tail-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "tail-ok\n",
+  "stderr": ""
+}

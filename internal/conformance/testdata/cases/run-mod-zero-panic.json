@@ -1,0 +1,16 @@
+{
+  "name": "run-mod-zero-panic",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var d: Int64 = 2\n    d = d - 2\n    let m = 10 % d\n    io.println(\"unreachable\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: division by zero\n"
+}

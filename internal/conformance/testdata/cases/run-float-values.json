@@ -1,0 +1,16 @@
+{
+  "name": "run-float-values",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let h = 1.5 + 0.5\n    if h == 2.0 { io.println(\"fadd-ok\") } else { io.println(\"fadd-bad\") }\n    let q = 7.0 / 2.0\n    if q == 3.5 { io.println(\"fdiv-ok\") } else { io.println(\"fdiv-bad\") }\n    let m = 7.0 % 2.0\n    if m == 1.0 { io.println(\"fmod-ok\") } else { io.println(\"fmod-bad\") }\n    let nf = -1.5\n    if nf == 0.0 - 1.5 { io.println(\"fneg-ok\") } else { io.println(\"fneg-bad\") }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "fadd-ok\nfdiv-ok\nfmod-ok\nfneg-ok\n",
+  "stderr": ""
+}
