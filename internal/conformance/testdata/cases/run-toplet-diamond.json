@@ -1,0 +1,19 @@
+{
+  "name": "run-toplet-diamond",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport u1\nimport u2\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(\"${u1.a} ${u2.b}\")\n    return Ok(())\n}\n",
+      "src/u1.we": "import u3\n\npub fn addone() -> Int64 {\n    return u3.base + 1\n}\n\npub let a = addone()\n",
+      "src/u2.we": "import u3\n\npub fn addtwo() -> Int64 {\n    return u3.more + 1\n}\n\npub let b = addtwo()\n",
+      "src/u3.we": "pub let base = 40\npub let more = base + 1\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "41 42\n",
+  "stderr": ""
+}

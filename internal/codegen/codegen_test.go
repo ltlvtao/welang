@@ -208,9 +208,21 @@ func TestBoundaryWhats(t *testing.T) {
 			"",
 		},
 		{
-			"top-level binding",
-			appendItem(okModule(), &ast.TopLet{Binding: ast.Binding{Kw: "let", Name: "greeting"}}),
+			// The T8-1 row. A scalar binding owns its global and emits
+			// clean; a carrier is the face that still stops, so the row
+			// carries a String — the shape the boundary word now covers.
+			"carrier top-level binding",
+			appendItem(okModule(), &ast.TopLet{Binding: ast.Binding{
+				Kw: "let", Name: "greeting", Typ: named("String"), Init: strLit(`"hi"`),
+			}}),
 			"top-level value bindings in code generation",
+		},
+		{
+			"scalar top-level binding",
+			appendItem(okModule(), &ast.TopLet{Binding: ast.Binding{
+				Kw: "let", Name: "answer", Typ: named("Int64"), Init: intLit("42"),
+			}}),
+			"",
 		},
 	}
 	for _, c := range cases {

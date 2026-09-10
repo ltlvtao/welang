@@ -1,0 +1,16 @@
+{
+  "name": "run-toplet-domains",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(\"${a} ${b} ${c} ${f} ${flag} ${ch} ${big}\")\n    return Ok(())\n}\n\nlet a = 2\nlet b = a * 10\nlet c = b + a + 1\nlet f: Float64 = 2.5\nlet flag: Bool = true\nlet ch: Rune = 'A'\nlet big: UInt64 = 9000000000u64\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "2 20 23 2.5 true A 9000000000\n",
+  "stderr": ""
+}

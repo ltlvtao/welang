@@ -449,6 +449,18 @@ type emitter struct {
 	curKey     string // the module whose body is being walked/emitted
 	curImports map[string]string
 
+	// T8-1 module-level bindings (design D7). A scalar binding owns one
+	// global apiece — `@<key>.<name>`, spelled by its qualified symbol,
+	// which is also the read face's key — and topLets holds every module's
+	// bindings in the order the inits run them: pass one walks the modules
+	// in load order, so the slice is chapter 15's post-order with source
+	// order inside each module. A binding outside the scalar word face
+	// stops in pass one, so nothing here holds one.
+	topLets     []topLetRef
+	topScalar   map[string]topScalarSlot
+	topGlobals  []string
+	initEmitted map[string]bool
+
 	// T5 method table (design D4). A method is keyed by its head type's
 	// module-qualified key plus the method name — the receiver's record
 	// names the head, so a call site resolves by what it already knows.
@@ -916,37 +928,39 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		return "", bndMain() // defensive: an empty program
 	}
 	e := &emitter{
-		sums:       make(map[string]map[string][]ast.TypeRef),
-		sumsOrd:    make(map[string][]string),
-		records:    make(map[string]*ast.RecordDecl),
-		strEnv:     make(map[string]strBinding),
-		gcEnv:      make(map[string]gcBinding),
-		listEnv:    make(map[string]listBinding),
-		tupEnv:     make(map[string]tupBinding),
-		ntEnv:      make(map[string]string),
-		newtypes:   make(map[string]ast.TypeRef),
-		strPool:    make(map[string]string),
-		usedRecs:   make(map[string]bool),
-		declUsed:   make(map[string]bool),
-		ctx:        ctxMain,
-		exit:       &exitSite{kind: exitMain},
-		assigned:   make(map[string]bool),
-		scalars:    make(map[string]scalarSlot),
-		sums2:      make(map[string]sumSlot),
-		prims:      make(map[string]string),
-		fnEnv:      make(map[string]fnValue),
-		modKeys:    make(map[string]bool),
-		modImports: make(map[string]map[string]string),
-		modStd:     make(map[string]map[string]string),
-		modConc:    make(map[string]map[string]bool),
-		fnTable:    make(map[string]*fnDef),
-		slotSeen:   make(map[string]bool),
-		opaques:    make(map[string]bool),
-		methods:    make(map[string]*fnDef),
-		ifaceDefs:  make(map[string]*ast.InterfaceDecl),
-		ifaceHeads: make(map[string][]string),
-		ifaceSeen:  make(map[string]map[string]bool),
-		mode:       mode,
+		sums:        make(map[string]map[string][]ast.TypeRef),
+		sumsOrd:     make(map[string][]string),
+		records:     make(map[string]*ast.RecordDecl),
+		strEnv:      make(map[string]strBinding),
+		gcEnv:       make(map[string]gcBinding),
+		listEnv:     make(map[string]listBinding),
+		tupEnv:      make(map[string]tupBinding),
+		ntEnv:       make(map[string]string),
+		newtypes:    make(map[string]ast.TypeRef),
+		strPool:     make(map[string]string),
+		usedRecs:    make(map[string]bool),
+		declUsed:    make(map[string]bool),
+		ctx:         ctxMain,
+		exit:        &exitSite{kind: exitMain},
+		assigned:    make(map[string]bool),
+		scalars:     make(map[string]scalarSlot),
+		sums2:       make(map[string]sumSlot),
+		prims:       make(map[string]string),
+		fnEnv:       make(map[string]fnValue),
+		modKeys:     make(map[string]bool),
+		modImports:  make(map[string]map[string]string),
+		modStd:      make(map[string]map[string]string),
+		modConc:     make(map[string]map[string]bool),
+		fnTable:     make(map[string]*fnDef),
+		slotSeen:    make(map[string]bool),
+		topScalar:   make(map[string]topScalarSlot),
+		initEmitted: make(map[string]bool),
+		opaques:     make(map[string]bool),
+		methods:     make(map[string]*fnDef),
+		ifaceDefs:   make(map[string]*ast.InterfaceDecl),
+		ifaceHeads:  make(map[string][]string),
+		ifaceSeen:   make(map[string]map[string]bool),
+		mode:        mode,
 	}
 	root := mods[len(mods)-1]
 	e.rootKey, e.rootID = root.Key, root.ID
@@ -985,7 +999,9 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				e.fns = append(e.fns, *fd)
 				e.fnTable[m.Key+"."+d.Name] = fd
 			case *ast.TopLet:
-				return "", &NotImplemented{What: bndTopLets}
+				if ni := e.collectTopLet(m.Key, d); ni != nil {
+					return "", ni
+				}
 			case *ast.RecordDecl:
 				key := m.Key + "." + d.Name
 				if _, seen := e.records[key]; !seen {
@@ -1111,6 +1127,10 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 	// v0 there — then every fn define, each under the snapshot protocol
 	// the task thunks use (its own local environments and gc window).
 	e.collectDefaults()
+	// The module inits open the entry body, ahead of its own statements
+	// (chapter 15: every initializer runs before main does). The calls
+	// allocate no value numbers, so the entry's numbering is untouched.
+	e.emitInitCalls()
 	if mode == ModeBuild {
 		if entry == nil {
 			// Defensive: Project-mode typecheck rejects a missing main (E1305).
@@ -1143,6 +1163,12 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		if ni := e.emitFnDefine(&e.fns[i]); ni != nil {
 			return "", ni
 		}
+	}
+	// The module inits (T8-1) ride the fn group ahead of __we_main: they
+	// emit after the entry so the entry's value numbering is the entry's
+	// own, and their bodies call through the fn table like any other.
+	if ni := e.emitTopLetInits(); ni != nil {
+		return "", ni
 	}
 	// The method table's defines (design D4), in collection order: an
 	// impl's own methods first, then the defaults an interface contributes
@@ -1443,6 +1469,12 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			}
 			e.gcEnv[s.Name] = v
 			return nil
+		}
+		if ts, ok := e.topName(init.Name); ok {
+			// A module-level binding read (T8-1) — a copy of its value, not
+			// an alias of its storage: the global is the binding's, and the
+			// new name holds the value it read there.
+			return e.bindResult(s.Name, e.topRead(ts))
 		}
 		return e.bnd()
 	case *ast.Closure:
@@ -1885,6 +1917,11 @@ func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
 			// A task body reads an enclosing scalar through its env slot.
 			op, isF, ni := e.loadCapture(v.Name)
 			return op, isF, ni
+		}
+		if ts, ok := e.topName(v.Name); ok {
+			// A module-level binding (T8-1): one load of its global.
+			res := e.topRead(ts)
+			return res.i64, res.isFloat, nil
 		}
 		return "", false, e.bnd()
 	case *ast.Unary:
@@ -2493,7 +2530,12 @@ func (e *emitter) argIsScalar(x ast.Expr) bool {
 	case *ast.Literal:
 		return v.Kind == "int" || v.Kind == "bool"
 	case *ast.Ident:
-		_, ok := e.scalars[v.Name]
+		if _, ok := e.scalars[v.Name]; ok {
+			return true
+		}
+		// A module-level scalar binding (T8-1) is an i64 operand like any
+		// other, so println routes it to the numeric renderer.
+		_, ok := e.topName(v.Name)
 		return ok
 	case *ast.Binary:
 		// A `+` over two String operands is the concatenation (chapter
@@ -5350,6 +5392,262 @@ func (e *emitter) emitStep(cur string) string {
 	return "%" + v
 }
 
+// --- T8-1 module-level bindings (design D7, chapter 15 R5) ----------------
+
+// topLetRef is one collected module-level binding: the module it belongs
+// to, and the declaration whose initializer the module's init runs.
+type topLetRef struct {
+	key  string
+	decl *ast.TopLet
+}
+
+// topScalarSlot is one scalar binding's storage face: the qualified
+// symbol it is spelled and read under, the domain it holds, and the name
+// the interpolation domain carries onward.
+type topScalarSlot struct {
+	sym     string
+	kind    strKind
+	isFloat bool
+}
+
+// collectTopLet takes one module-level binding into the init plan. The
+// domain is fixed here, before anything emits, because the global's LLVM
+// type has to be known to every body that reads it — and the reading
+// bodies are emitted in an order the binding's own module need not precede.
+// The classification is the emitter's ordinary static one over the
+// initializer, and a binding whose annotation names a base type takes the
+// annotation's domain instead, exactly as a `let` statement's does.
+//
+// The face's stop is the scalar word. A String is a pair, and a record, a
+// list or anything else the static classification cannot reach is a
+// carrier the collector must be able to find: both are D7's global root
+// table — T8-2's face — or the composites', so both stop here rather than
+// emit a global no root scan can see.
+func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
+	e.topLets = append(e.topLets, topLetRef{key: key, decl: d})
+	name := d.Binding.Name
+	if name == "_" {
+		// The discard binds nothing — but it still evaluates (chapter 6),
+		// so the module keeps its init and the initializer runs there.
+		return nil
+	}
+	kind := baseStrKind(baseTypeName(d.Binding.Typ))
+	if kind == skNone {
+		kind = e.valueKind(d.Binding.Init)
+	}
+	if kind == skNone || kind == skStr {
+		return &NotImplemented{What: bndTopLets}
+	}
+	sym := key + "." + name
+	e.topScalar[sym] = topScalarSlot{
+		sym:     sym,
+		kind:    kind,
+		isFloat: kind == skF64,
+	}
+	typ := "i64"
+	zero := "0"
+	if kind == skF64 {
+		typ, zero = "double", "0.0"
+	}
+	e.topGlobals = append(e.topGlobals, fmt.Sprintf("@%s = internal global %s %s", sym, typ, zero))
+	return nil
+}
+
+// topName resolves a bare name to the module-level binding the walked
+// module holds under it. A local of the same name wins everywhere this is
+// consulted, the shadowing chapter 6 gives every inner scope.
+func (e *emitter) topName(name string) (topScalarSlot, bool) {
+	ts, ok := e.topScalar[e.curKey+"."+name]
+	return ts, ok
+}
+
+// topMember resolves a qualified member expression — `util.base` — to the
+// module-level binding it names. The qualifier resolves through the walked
+// module's imports first and by module key second, exactly as a qualified
+// call's does, and a qualifier that is a local name is no module at all.
+func (e *emitter) topMember(m *ast.Member) (topScalarSlot, bool) {
+	id, ok := m.Recv.(*ast.Ident)
+	if !ok || e.isLocalName(id.Name) {
+		return topScalarSlot{}, false
+	}
+	k := e.resolveQual(id.Name)
+	if k == "" {
+		return topScalarSlot{}, false
+	}
+	ts, ok := e.topScalar[k+"."+m.Name]
+	return ts, ok
+}
+
+// topRead loads one module-level binding's value: the global its
+// initializer stored, read back in the domain the binding fixed. The read
+// face is the storage face — one load, no copy — so a fn body, a later
+// initializer of the same module and a reading module all see the value
+// the init wrote, and nothing can drift between them.
+func (e *emitter) topRead(ts topScalarSlot) callResult {
+	typ := "i64"
+	if ts.isFloat {
+		typ = "double"
+	}
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = load %s, ptr @%s", v, typ, ts.sym))
+	return callResult{kind: ckI64, i64: "%" + v, isFloat: ts.isFloat, typeName: strKindName(ts.kind)}
+}
+
+// emitInitCalls opens the entry body with the module inits in load order.
+// The calls ride the head of __we_main rather than startup.c's own body:
+// the module set is a compile-time fact no fixed C file can name, and the
+// observable shape chapter 15 fixes — every initializer runs once, in
+// post-order, before the root main body — is exactly this. They allocate
+// no value numbers and emit no terminator, so a program with no top-level
+// binding passes through here with its entry body byte-identical.
+func (e *emitter) emitInitCalls() {
+	for _, ref := range e.topLets {
+		if e.initEmitted[ref.key] {
+			continue
+		}
+		e.initEmitted[ref.key] = true
+		e.inst(fmt.Sprintf("call void @%s.init()", ref.key))
+	}
+}
+
+// emitInitDefine emits one module's `@<key>.init`: the module's
+// top-level initializers in source order, under the same body protocol a
+// fn define uses — its own environments and its own value buffer — with
+// the entry's exit site, so a panic or a trap inside an initializer takes
+// the task-fail tail and aborts the process (chapter 15 R5: there is no
+// capture boundary before main).
+func (e *emitter) emitInitDefine(key string, lets []*ast.TopLet) *NotImplemented {
+	e.enterModule(key)
+	savedCtx, savedBody := e.ctx, e.body
+	savedCur := e.curBlock
+	savedAllocas, savedAssigned := e.allocas, e.assigned
+	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedFns := e.fnEnv
+	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedList := e.listEnv
+	savedTup, savedNt := e.tupEnv, e.ntEnv
+	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedFrames := e.frames
+	savedDiverged := e.diverged
+	savedExit, savedInExit := e.exit, e.inExit
+	savedLoops, savedScopes := e.loopFrames, e.scopeLive
+	savedRes, savedNest := e.resFrames, e.nest
+	restore := func() {
+		e.ctx, e.body = savedCtx, savedBody
+		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.fnEnv = savedFns
+		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.listEnv = savedList
+		e.tupEnv, e.ntEnv = savedTup, savedNt
+		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.frames = savedFrames
+		e.diverged, e.curBlock = savedDiverged, savedCur
+		e.exit, e.inExit = savedExit, savedInExit
+		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.resFrames, e.nest = savedRes, savedNest
+		e.allocas, e.assigned = savedAllocas, savedAssigned
+	}
+	e.ctx = ctxMain
+	e.beginBody()
+	e.allocas = nil
+	e.assigned = make(map[string]bool)
+	e.diverged = false
+	e.scalars = make(map[string]scalarSlot)
+	e.fnEnv = make(map[string]fnValue)
+	e.sums2 = make(map[string]sumSlot)
+	e.prims = make(map[string]string)
+	e.strEnv = make(map[string]strBinding)
+	e.listEnv = make(map[string]listBinding)
+	e.gcEnv = make(map[string]gcBinding)
+	e.tupEnv = make(map[string]tupBinding)
+	e.ntEnv = make(map[string]string)
+	e.defers = nil
+	e.caps = nil
+	e.pushes = 0
+	e.exit = &exitSite{kind: exitMain}
+	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	e.resFrames, e.nest = nil, 0
+	for _, d := range lets {
+		if ni := e.emitTopLetInit(key, d); ni != nil {
+			restore()
+			return ni
+		}
+	}
+	if !e.diverged {
+		e.inst("ret void")
+	}
+	body := e.bodyText()
+	restore()
+	e.fnsDone = append(e.fnsDone, "define void @"+key+".init() {\nentry:\n"+body+"}\n")
+	return nil
+}
+
+// emitTopLetInit emits one binding's initializer and stores its value into
+// the binding's global. The initializer binds under its own name through
+// the ordinary `let` path — so every value face that path accepts is
+// accepted here — and the face it left is then re-read from the environment
+// and stored; the name is dropped from the environment afterwards, because
+// the global, not the SSA operand, is the binding's storage and every later
+// read must take the same load.
+func (e *emitter) emitTopLetInit(key string, d *ast.TopLet) *NotImplemented {
+	b := &d.Binding
+	ts, isScalar := e.topScalar[key+"."+b.Name]
+	if b.Name == "_" {
+		// The discard evaluates and binds nothing.
+		return e.emitLetBinding(b)
+	}
+	if !isScalar {
+		return e.bnd() // unreachable: a non-scalar binding stopped in pass one
+	}
+	if ni := e.emitLetBinding(b); ni != nil {
+		return ni
+	}
+	slot, ok := e.scalars[b.Name]
+	if !ok {
+		// The initializer emitted a face that is not a scalar word — the
+		// classification that admitted this binding named a scalar, so the
+		// two disagree and the honest answer is the boundary, not a store
+		// of whatever the other face happened to be.
+		return e.bnd()
+	}
+	delete(e.scalars, b.Name)
+	op := slot.operand
+	if slot.alloca != "" {
+		op = e.loadNum(slot.alloca, slot.isFloat)
+	}
+	if slot.isFloat != ts.isFloat {
+		return e.bnd()
+	}
+	typ := "i64"
+	if ts.isFloat {
+		typ = "double"
+	}
+	e.inst(fmt.Sprintf("store %s %s, ptr @%s", typ, op, ts.sym))
+	return nil
+}
+
+// emitTopLetInits emits every collected module's init define, in load
+// order, and returns the module groups the entry's calls walk. The defines
+// are emitted after the entry body so the entry's value numbering still
+// starts at v0 (the widening's byte-identical guarantee), and they land in
+// the fn group ahead of __we_main.
+func (e *emitter) emitTopLetInits() *NotImplemented {
+	byKey := map[string][]*ast.TopLet{}
+	var order []string
+	for _, ref := range e.topLets {
+		if _, seen := byKey[ref.key]; !seen {
+			order = append(order, ref.key)
+		}
+		byKey[ref.key] = append(byKey[ref.key], ref.decl)
+	}
+	for _, k := range order {
+		if ni := e.emitInitDefine(k, byKey[k]); ni != nil {
+			return ni
+		}
+	}
+	return nil
+}
+
 // emitMatch emits the two-slot sum match: load the discriminant, test
 // each variant arm in order (the variant table maps names to the
 // runtime's return codes), the wildcard arm as the default, and every
@@ -6803,6 +7101,12 @@ func (e *emitter) loadTupleElem(agg string, el tupleElem) (callResult, *NotImple
 }
 
 func (e *emitter) emitMemberValue(m *ast.Member) (callResult, *NotImplemented) {
+	if ts, ok := e.topMember(m); ok {
+		// A qualified module-level binding read (T8-1): `util.base` is one
+		// load of that module's global, the same face the owning module's
+		// own bodies take.
+		return e.topRead(ts), nil
+	}
 	if id, ok := m.Recv.(*ast.Ident); ok {
 		if _, is := e.ntEnv[id.Name]; is {
 			// A newtype value's one member is `.value` (chapter 8): the
@@ -7006,6 +7310,11 @@ func (e *emitter) valueKind(x ast.Expr) strKind {
 		if s, ok := e.scalars[v.Name]; ok {
 			return s.kind
 		}
+		// A module-level binding (T8-1) carries the domain its global was
+		// typed with, so a reader classifies it without emitting.
+		if ts, ok := e.topName(v.Name); ok {
+			return ts.kind
+		}
 		return skNone
 	case *ast.Member:
 		return e.memberKind(v)
@@ -7137,6 +7446,11 @@ func strMemberKind(method string) strKind {
 // domain): a String field is skStr, a scalar field is its declared base
 // type's kind, and a nested record's pointer is outside the domain.
 func (e *emitter) memberKind(m *ast.Member) strKind {
+	if ts, ok := e.topMember(m); ok {
+		// A qualified module-level binding read (T8-1) carries its global's
+		// domain.
+		return ts.kind
+	}
 	if id, ok := m.Recv.(*ast.Ident); ok {
 		if _, is := e.ntEnv[id.Name]; is {
 			// The unwrap's domain is the underlying's — for a scalar
@@ -9662,6 +9976,9 @@ func (e *emitter) render(module string) string {
 	}
 	if len(e.slots) > 0 {
 		groups = append(groups, e.slots)
+	}
+	if len(e.topGlobals) > 0 {
+		groups = append(groups, e.topGlobals)
 	}
 	if len(e.foreignDecls) > 0 {
 		groups = append(groups, e.foreignDecls)

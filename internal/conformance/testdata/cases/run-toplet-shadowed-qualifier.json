@@ -1,0 +1,17 @@
+{
+  "name": "run-toplet-shadowed-qualifier",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport u1\n\npub type AppError = Failed(String)\n\nrecord Box { base: Int64 }\n\npub fn main() effect io -> Result<(), AppError> {\n    let u1 = Box { base: 7 }\n    io.println(\"${u1.base}\")\n    return Ok(())\n}\n",
+      "src/u1.we": "pub let base = 3\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "7\n",
+  "stderr": ""
+}

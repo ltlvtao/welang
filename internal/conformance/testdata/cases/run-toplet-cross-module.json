@@ -1,0 +1,18 @@
+{
+  "name": "run-toplet-cross-module",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport u2\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(\"x=${u2.deeper}\")\n    let x = u2.deeper\n    io.println(\"y=${x}\")\n    return Ok(())\n}\n",
+      "src/u1.we": "pub fn one() -> Int64 {\n    return 1\n}\n\npub let base = one()\n",
+      "src/u2.we": "import u1\n\npub fn two() -> Int64 {\n    return u1.base + 1\n}\n\npub let deeper = two()\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "x=2\ny=2\n",
+  "stderr": ""
+}

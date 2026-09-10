@@ -1,0 +1,18 @@
+{
+  "name": "run-toplet-load-order",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport u2\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(\"${u2.deeper} ${base}\")\n    return Ok(())\n}\n\nlet base = 10\n",
+      "src/u1.we": "pub fn one() -> Int64 {\n    return 1\n}\n\npub let mid = one() + 40\n",
+      "src/u2.we": "import u1\n\npub fn two() -> Int64 {\n    return u1.mid + 1\n}\n\npub let deeper = two() + 100\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "142 10\n",
+  "stderr": ""
+}
