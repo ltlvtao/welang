@@ -1,0 +1,16 @@
+{
+  "name": "run-for-list",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let sum = 0\n    for x in xs { sum = sum + x }\n    if sum == 6 { io.println(\"sum-ok\") } else { io.println(\"sum-bad\") }\n\n    let c = 0\n    for x in xs { c = c + 1 }\n    if c == 3 { io.println(\"again-ok\") } else { io.println(\"again-bad\") }\n\n    let b = 0\n    for x in xs {\n        if x == 2 { break }\n        b = b + 1\n    }\n    if b == 1 { io.println(\"break-ok\") } else { io.println(\"break-bad\") }\n\n    let k = 0\n    for x in xs {\n        if x == 2 { continue }\n        k = k + 1\n    }\n    if k == 2 { io.println(\"cont-ok\") } else { io.println(\"cont-bad\") }\n\n    let d = 0\n    for x in [4, 5] { d = d + x }\n    if d == 9 { io.println(\"direct-ok\") } else { io.println(\"direct-bad\") }\n\n    let n = 0\n    for _ in xs { n = n + 1 }\n    if n == 3 { io.println(\"blank-ok\") } else { io.println(\"blank-bad\") }\n\n    let e = 0\n    for x in xs {\n        for y in xs { e = e + 1 }\n    }\n    if e == 9 { io.println(\"nested-ok\") } else { io.println(\"nested-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "sum-ok\nagain-ok\nbreak-ok\ncont-ok\ndirect-ok\nblank-ok\nnested-ok\n",
+  "stderr": ""
+}

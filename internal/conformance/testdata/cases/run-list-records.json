@@ -1,0 +1,16 @@
+{
+  "name": "run-list-records",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\nbyval record Val { n: Int64 }\n\nimpl Cell {\n    fn bump(mut self) {\n        self.n = self.n + 10\n    }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let cs = [Cell { n: 1 }, Cell { n: 2 }]\n    let acc = 0\n    for c in cs { acc = acc + c.n }\n    if acc == 3 { io.println(\"gc-sum-ok\") } else { io.println(\"gc-sum-bad\") }\n\n    for c in cs { c.bump() }\n    let after = 0\n    for c in cs { after = after + c.n }\n    if after == 23 { io.println(\"gc-share-ok\") } else { io.println(\"gc-share-bad\") }\n\n    let vs = [Val { n: 1 }, Val { n: 2 }]\n    let kept = 0\n    for v in vs { kept = kept + v.n }\n    if kept == 3 { io.println(\"val-read-ok\") } else { io.println(\"val-read-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "gc-sum-ok\ngc-share-ok\nval-read-ok\n",
+  "stderr": ""
+}

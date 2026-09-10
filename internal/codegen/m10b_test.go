@@ -347,13 +347,24 @@ func TestM10bBndStops(t *testing.T) {
 		t.Fatalf("generic: want %q, got %+v", bndGenericFns, ni)
 	}
 
-	// The fn body pin re-anchored at T4-3: for-over-Range and the String
-	// walk are both emitted now, so the stop is the source the build still
-	// refuses — the List source, whose carrier arrives with T7.
+	// The fn body pin re-anchored at T7-2: the Range, String, and List
+	// sources are all emitted now — the List literal that anchored this
+	// pin through T4-3 and T6 is the T7-2 widening itself — so the stop
+	// is the source the build still refuses. The listing below is what
+	// that source is at the check face: a user impl of Iterable, whose
+	// protocol runs through the interface's own machinery. At the
+	// emission face the rule the pin states is the one that holds here —
+	// the source is an Ident this build has no List binding for, so the
+	// walk it would need does not exist.
 	forBody := ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
+		recDecl("CountIter", "gc", fld("n", "Int64")),
+		recDecl("Range2", "gc", fld("n", "Int64")),
+		implDecl("Iterator<Int64>", "CountIter",
+			method("next", ast.RecvMutSelf, "Option<Int64>", retValue(ident("None")))),
+		implDecl("Iterable<Int64>", "Range2",
+			method("iterator", ast.RecvSelf, "CountIter", retValue(construct("CountIter", init1("n", intLit("0")))))),
 		pubFn("looped", nil, nil,
-			&ast.ForStmt{Pat: &ast.PatBinding{Name: "c"},
-				Iter: &ast.ListLit{Elems: []ast.Expr{intLit("1")}}},
+			&ast.ForStmt{Pat: &ast.PatBinding{Name: "c"}, Iter: ident("r")},
 			&ast.Return{}),
 		appError(),
 		mainDecl(

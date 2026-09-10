@@ -1,0 +1,16 @@
+{
+  "name": "test-fn-body-for-list",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "tests/m_test.we": "import std.io\n\nfn looped() effect io {\n    for x in [1, 2, 3] {\n        io.println(\"tick\")\n    }\n    return\n}\n\ntest \"looped\" {\n    looped()\n    assert(true, \"done\")\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "tick\ntick\ntick\npass  tests/m_test.we: looped (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

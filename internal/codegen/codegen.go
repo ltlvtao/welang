@@ -165,6 +165,16 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_str_of_f64", "declare %struct.we_str @__we_str_of_f64(double)"},
 	{"__we_str_of_bool", "declare %struct.we_str @__we_str_of_bool(i64)"},
 	{"__we_str_of_rune", "declare %struct.we_str @__we_str_of_rune(i64)"},
+	// T7 (design D6): the List carrier, appended under the same discipline
+	// — a program that builds no list declares none. The constructor takes
+	// the capacity and the element trace, push answers the list's identity
+	// (growth moves the block), and get's word is the element's own face:
+	// a scalar's value or a gc handle.
+	{"__we_list_new", "declare ptr @__we_list_new(i64, i64)"},
+	{"__we_list_push", "declare ptr @__we_list_push(ptr, i64)"},
+	{"__we_list_get", "declare i64 @__we_list_get(ptr, i64)"},
+	{"__we_list_len", "declare i64 @__we_list_len(ptr)"},
+	{"__we_list_snap", "declare ptr @__we_list_snap(ptr)"},
 }
 
 // ProgModule is one module of a program emission (design D1): the module
@@ -268,6 +278,29 @@ type gcBinding struct {
 	reg string
 }
 
+// listBinding is one List value's handle (design D6): the carrier pointer
+// plus the element face its type fixed. Nothing in the value itself says
+// what the carrier holds — its descriptor covers "words that are
+// references", not the element's own domain — so the face rides the
+// environment, exactly as a tuple's element shapes ride tupBinding.
+type listBinding struct {
+	reg  string // the carrier pointer: a creation's register or a literal's
+	elem listElem
+}
+
+// listElem is one List's element face: the single word an element occupies
+// in the carrier. A scalar face is its interpolation domain (the word IS
+// the value; a Float64 rides as its bit pattern); a gc face is the
+// module-qualified record key the handle points at, whose element slots
+// the carrier's descriptor traces. Everything else — a String's two words,
+// a sum's two, a tuple's several, a fn value, a nested collection — has no
+// one-word face and stops at the body boundary.
+type listElem struct {
+	kind strKind
+	rec  string
+	gc   bool
+}
+
 // fnValue is one bound function value (design D5): the single pointer a
 // binding holds — a gc carrier whose first word is the thunk's code
 // pointer and whose second is its capture environment (null when the
@@ -332,6 +365,11 @@ type emitter struct {
 
 	strEnv map[string]strBinding
 	gcEnv  map[string]gcBinding
+	// listEnv holds a List binding's handle: the carrier pointer plus the
+	// element face its type fixed (design D6). Like the tuple's shapes it
+	// is a static fact the value does not carry, so the typecheck-time
+	// knowledge has to ride the environment to the iteration site.
+	listEnv map[string]listBinding
 	// tupEnv holds a tuple binding's handle: the stack aggregate that IS
 	// the tuple value, plus the shape its elements were classified with.
 	tupEnv map[string]tupBinding
@@ -883,6 +921,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		records:    make(map[string]*ast.RecordDecl),
 		strEnv:     make(map[string]strBinding),
 		gcEnv:      make(map[string]gcBinding),
+		listEnv:    make(map[string]listBinding),
 		tupEnv:     make(map[string]tupBinding),
 		ntEnv:      make(map[string]string),
 		newtypes:   make(map[string]ast.TypeRef),
@@ -1340,6 +1379,12 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 		if s.Name == "_" {
 			return nil
 		}
+		// A List is a gc-category type (chapter 17): binding it shares the
+		// carrier, exactly as the aliased reference it is.
+		if b, ok := e.listEnv[init.Name]; ok {
+			e.listEnv[s.Name] = b
+			return nil
+		}
 		if k, is := e.ntEnv[init.Name]; is {
 			e.ntEnv[s.Name] = k
 		}
@@ -1428,6 +1473,18 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 		}
 		if s.Name != "_" {
 			e.gcEnv[s.Name] = gcBinding{rec: rkey, reg: reg}
+		}
+		return nil
+	case *ast.ListLit:
+		// A list literal builds its carrier here (design D6); the name
+		// holds the pointer and the element face its type fixed, which is
+		// what a later iteration or element read needs to know.
+		reg, face, ni := e.emitListLit(init, s.Typ)
+		if ni != nil {
+			return ni
+		}
+		if s.Name != "_" {
+			e.listEnv[s.Name] = listBinding{reg: reg, elem: face}
 		}
 		return nil
 	case *ast.Member:
@@ -3465,6 +3522,7 @@ func (e *emitter) emitClosure(cl *ast.Closure, expected *fnAbi) (closureParts, f
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedList := e.listEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -3479,6 +3537,7 @@ func (e *emitter) emitClosure(cl *ast.Closure, expected *fnAbi) (closureParts, f
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.listEnv = savedList
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -3498,6 +3557,7 @@ func (e *emitter) emitClosure(cl *ast.Closure, expected *fnAbi) (closureParts, f
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
+	e.listEnv = make(map[string]listBinding)
 	e.gcEnv = make(map[string]gcBinding)
 	e.tupEnv = make(map[string]tupBinding)
 	e.ntEnv = make(map[string]string)
@@ -3776,6 +3836,7 @@ type envFrame struct {
 	scalars map[string]scalarSlot
 	strEnv  map[string]strBinding
 	gcEnv   map[string]gcBinding
+	listEnv map[string]listBinding
 	tupEnv  map[string]tupBinding
 	ntEnv   map[string]string
 	sums2   map[string]sumSlot
@@ -3788,11 +3849,13 @@ type envFrame struct {
 func (e *emitter) pushEnv() {
 	e.frames = append(e.frames, envFrame{
 		scalars: e.scalars, strEnv: e.strEnv, gcEnv: e.gcEnv,
-		tupEnv: e.tupEnv, ntEnv: e.ntEnv, sums2: e.sums2, prims: e.prims,
+		listEnv: e.listEnv,
+		tupEnv:  e.tupEnv, ntEnv: e.ntEnv, sums2: e.sums2, prims: e.prims,
 	})
 	e.scalars = maps.Clone(e.scalars)
 	e.strEnv = maps.Clone(e.strEnv)
 	e.gcEnv = maps.Clone(e.gcEnv)
+	e.listEnv = maps.Clone(e.listEnv)
 	e.tupEnv = maps.Clone(e.tupEnv)
 	e.ntEnv = maps.Clone(e.ntEnv)
 	e.sums2 = maps.Clone(e.sums2)
@@ -3803,7 +3866,7 @@ func (e *emitter) pushEnv() {
 func (e *emitter) popEnv() {
 	f := e.frames[len(e.frames)-1]
 	e.frames = e.frames[:len(e.frames)-1]
-	e.scalars, e.strEnv, e.gcEnv, e.tupEnv, e.ntEnv = f.scalars, f.strEnv, f.gcEnv, f.tupEnv, f.ntEnv
+	e.scalars, e.strEnv, e.gcEnv, e.listEnv, e.tupEnv, e.ntEnv = f.scalars, f.strEnv, f.gcEnv, f.listEnv, f.tupEnv, f.ntEnv
 	e.sums2, e.prims = f.sums2, f.prims
 }
 
@@ -4339,14 +4402,18 @@ func (e *emitter) emitLoop(s *ast.Loop) *NotImplemented {
 // design D6 first named; the two are observationally identical for a
 // Range (see for_test.go's header for the argument), and the counted loop
 // needs neither the collection carrier nor a heap. The String source
-// walks its code points (T4-3). A List source needs its carrier (T7) and
-// stops at this build's body boundary.
+// walks its code points (T4-3). The List source walks its carrier's
+// snapshot (T7-2); every other source — a Set, a Map, a user impl, a bare
+// iterator — stops at this build's body boundary.
 func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
 	if rng, ok := s.Iter.(*ast.Binary); ok && rng.Op == ".." {
 		return e.emitForRange(s, rng)
 	}
 	if e.valueKind(s.Iter) == skStr {
 		return e.emitForString(s)
+	}
+	if _, ok := e.listFaceOf(s.Iter); ok {
+		return e.emitForList(s)
 	}
 	return e.bnd()
 }
@@ -4476,6 +4543,149 @@ func (e *emitter) emitForString(s *ast.ForStmt) *NotImplemented {
 	return nil
 }
 
+// emitForList emits `for pat in <list>`: chapter 17's snapshot iteration
+// (design D6). The source is read once — the carrier pointer, from a
+// binding's environment face or from a literal built right here — and its
+// snapshot is taken before the head opens, so the sequence the walk sees
+// is the one fixed at the call: an element added after it, through any
+// alias, is not seen. The snapshot is a gc object and is rooted for the
+// whole walk. The index lives in a slot reserved for the loop (the same
+// shape the Range and String walks take), so the element binding is fresh
+// each pass and the body's own writes cannot disturb the sequence; the
+// element call runs in the body on this pass's index, and the head
+// pattern binds the word it answers.
+func (e *emitter) emitForList(s *ast.ForStmt) *NotImplemented {
+	src, face, ni := e.listSource(s.Iter)
+	if ni != nil {
+		return ni
+	}
+	e.use("__we_list_snap")
+	e.use("__we_list_len")
+	e.use("__we_list_get")
+	e.use("__we_root_push")
+	e.pushes++
+	snap := e.value()
+	e.inst(fmt.Sprintf("%%%s = call ptr @__we_list_snap(ptr %s)", snap, src))
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", snap))
+	n := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 @__we_list_len(ptr %%%s)", n, snap))
+	blk := e.blocks
+	e.blocks++
+	head := fmt.Sprintf("forhead%d", blk)
+	body := fmt.Sprintf("forbody%d", blk)
+	step := fmt.Sprintf("forcont%d", blk)
+	exit := fmt.Sprintf("forexit%d", blk)
+	counter := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", counter))
+	e.inst(fmt.Sprintf("br label %%%s", head))
+	e.label(head)
+	cur := e.loadNum(counter, false)
+	cmp := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp slt i64 %s, %%%s", cmp, cur, n))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", cmp, body, exit))
+	e.label(body)
+	w := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 @__we_list_get(ptr %%%s, i64 %s)", w, snap, cur))
+	e.pushEnv()
+	defer e.popEnv()
+	if ni := e.bindForListElem(s.Pat, "%"+w, face); ni != nil {
+		return ni
+	}
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, depth: e.nest})
+	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+		return ni
+	}
+	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", step))
+	}
+	e.label(step)
+	next := e.emitStep(e.loadNum(counter, false))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", next, counter))
+	e.inst(fmt.Sprintf("br label %%%s", head))
+	e.label(exit)
+	return nil
+}
+
+// listSource yields a for statement's List source: the carrier pointer and
+// the element face. A named binding reads its environment face — the
+// binding site already rooted the carrier, so nothing is owed here — and a
+// literal builds one at its own position, source order intact (the
+// literal's elements run before the snapshot is taken, which is what makes
+// the walk's sequence the one the source expression denotes).
+func (e *emitter) listSource(x ast.Expr) (string, listElem, *NotImplemented) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		if b, ok := e.listEnv[v.Name]; ok {
+			return b.reg, b.elem, nil
+		}
+	case *ast.ListLit:
+		return e.emitListLit(v, nil)
+	}
+	return "", listElem{}, e.bnd()
+}
+
+// listFaceOf classifies a for statement's source without emitting: the
+// element face where the source is a List binding or a list literal, false
+// for every other iterable — the dispatch a for statement needs before it
+// picks a walk.
+func (e *emitter) listFaceOf(x ast.Expr) (listElem, bool) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		b, ok := e.listEnv[v.Name]
+		return b.elem, ok
+	case *ast.ListLit:
+		return e.listElemFace(nil, v)
+	}
+	return listElem{}, false
+}
+
+// bindForListElem binds one pass's element — the one word the carrier
+// answered — under the head pattern. A scalar face binds as any scalar
+// does (the body assigns it, so it takes a slot; otherwise it keeps the
+// register the element arrived in), a Float64 face converts the word's bit
+// pattern back to the double it holds, and a gc face binds the record
+// reference its handle names — copied when the record is a value-category
+// one, chapter 8's rule for every binding of a value. A gc binding the
+// body assigns has no slot to write (chapter 8's gc records bind by
+// reference; the emitter's slot face for them is the B-track's), so the
+// loop stops at the body boundary rather than dropping the write.
+func (e *emitter) bindForListElem(pat ast.Pattern, word string, face listElem) *NotImplemented {
+	switch p := pat.(type) {
+	case *ast.PatWildcard:
+		return nil
+	case *ast.PatBinding:
+		if p.Name == "_" {
+			return nil
+		}
+		if face.gc {
+			if e.assigned[p.Name] {
+				return e.bnd()
+			}
+			reg := e.wordPtr(word)
+			if r, ok := e.records[face.rec]; ok && r.Cat == "value" {
+				reg = e.emitRecCopy(reg, face.rec)
+			}
+			e.gcEnv[p.Name] = gcBinding{rec: face.rec, reg: reg}
+			return nil
+		}
+		op, isF := word, false
+		if face.kind == skF64 {
+			v := e.value()
+			e.inst(fmt.Sprintf("%%%s = bitcast i64 %s to double", v, word))
+			op, isF = "%"+v, true
+		}
+		if e.assigned[p.Name] {
+			e.bindScalarSlot(p.Name, op, isF, face.kind)
+			return nil
+		}
+		e.scalars[p.Name] = scalarSlot{operand: op, isFloat: isF, kind: face.kind}
+		return nil
+	default:
+		return e.bnd()
+	}
+}
+
 // bindForPattern binds one pass's element under the head pattern. `_`
 // binds nothing. A name binds like any other scalar binding: the body
 // assigns it, so it takes a slot; otherwise it stays the register the
@@ -4500,6 +4710,177 @@ func (e *emitter) bindForPattern(pat ast.Pattern, op string, kind strKind) *NotI
 	default:
 		return e.bnd()
 	}
+}
+
+// emitListLit emits one list literal (design D6): the carrier opens with
+// the element count as its capacity, the elements run in source order —
+// each stored as the one word its face occupies — and the pushed
+// identity's register is what the value is. The pre-size is what makes
+// the walk of the pushes simple: with capacity equal to the count no push
+// can reach the growth branch, so the block never moves. The roots are
+// pushed anyway for both ends of that chain — the creation and the final
+// identity — because the rooting rule is what makes the literal safe
+// under a collection triggered by any element expression that allocates,
+// and it must not rest on an arithmetic coincidence a later widening
+// could break.
+//
+// The element face comes from the annotation where the position carries
+// one — the only source an empty literal has, chapter 17's E1501 — and
+// from the first element's own form otherwise; the check stage has
+// already held every later element to the first one's type (E0501), and
+// the emission re-checks each against the face it fixed.
+func (e *emitter) emitListLit(x *ast.ListLit, typ ast.TypeRef) (string, listElem, *NotImplemented) {
+	face, ok := e.listElemFace(typ, x)
+	if !ok {
+		return "", listElem{}, e.bnd()
+	}
+	e.use("__we_list_new")
+	e.use("__we_list_push")
+	e.use("__we_root_push")
+	e.pushes++
+	traced := 0
+	if face.gc {
+		traced = 1
+	}
+	reg := "%" + e.value()
+	e.inst(fmt.Sprintf("%s = call ptr @__we_list_new(i64 %d, i64 %d)", reg, len(x.Elems), traced))
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
+	cur := reg
+	for _, el := range x.Elems {
+		w, ni := e.emitListElemValue(el, face)
+		if ni != nil {
+			return "", listElem{}, ni
+		}
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr @__we_list_push(ptr %s, i64 %s)", v, cur, w))
+		cur = "%" + v
+	}
+	if len(x.Elems) > 0 {
+		e.pushes++
+		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", cur))
+	}
+	return cur, face, nil
+}
+
+// emitListElemValue emits one element as the one word its face occupies: a
+// scalar's value, a Float64's bit pattern, or a gc handle. The word is the
+// same width whatever the face, which is the carrier's whole layout
+// contract; a conversion the operator family cannot answer — a float where
+// the face holds an integer, or the reverse — stops at the boundary
+// rather than storing a reinterpretation of the wrong domain.
+func (e *emitter) emitListElemValue(x ast.Expr, face listElem) (string, *NotImplemented) {
+	if face.gc {
+		reg, key, ni := e.emitRecordValue(x)
+		if ni != nil {
+			return "", ni
+		}
+		if key != face.rec {
+			return "", e.bnd()
+		}
+		return e.ptrWord(reg), nil
+	}
+	op, isF, ni := e.emitNumExpr(x)
+	if ni != nil {
+		return "", ni
+	}
+	if face.kind == skF64 {
+		if !isF {
+			return "", e.bnd()
+		}
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = bitcast double %s to i64", v, op))
+		return "%" + v, nil
+	}
+	if isF {
+		return "", e.bnd()
+	}
+	return op, nil
+}
+
+// listElemFace fixes a list literal's element face. The annotation names
+// it where the literal's position carries one — the type is the only
+// source an empty literal has — and the first element's own expression
+// names it otherwise. A face the carrier cannot hold in one word, and an
+// empty literal with no annotation to read (which the check stage already
+// rejects, E1501), report false.
+func (e *emitter) listElemFace(typ ast.TypeRef, x *ast.ListLit) (listElem, bool) {
+	if n, ok := typ.(*ast.NamedType); ok && n.Qual == "" && n.Name == "List" && len(n.Args) == 1 {
+		return e.elemFaceOfType(n.Args[0])
+	}
+	if len(x.Elems) == 0 {
+		return listElem{}, false
+	}
+	return e.elemFaceOfExpr(x.Elems[0])
+}
+
+// elemFaceOfType reads one element type's face through the ABI classifier
+// — which already erases newtype wrappers and resolves a record's
+// module-qualified key — and keeps the families the one-word carrier can
+// hold: the integer family, Bool, Rune, Float64 (as its bit pattern), and
+// a record's handle. A String is two words, a sum two, a tuple several, a
+// fn value a carrier of its own, and a nested collection a carrier whose
+// own element face would have to be written down too; all of them report
+// false.
+func (e *emitter) elemFaceOfType(t ast.TypeRef) (listElem, bool) {
+	t = e.derefNewtype(t)
+	kind, key, ok := e.classType(t)
+	if !ok {
+		return listElem{}, false
+	}
+	switch kind {
+	case abiI64:
+		k := baseStrKind(baseTypeName(t))
+		if k == skNone {
+			return listElem{}, false
+		}
+		return listElem{kind: k}, true
+	case abiDouble:
+		return listElem{kind: skF64}, true
+	case abiGc:
+		return listElem{rec: key, gc: true}, true
+	}
+	return listElem{}, false
+}
+
+// elemFaceOfExpr reads one element expression's face where the expression's
+// own form fixes it: its interpolation domain for a scalar, and its record
+// for a gc value. Nothing is emitted — the walk runs before the carrier
+// exists, and each element is emitted exactly once, later, from the face
+// this fixed.
+func (e *emitter) elemFaceOfExpr(x ast.Expr) (listElem, bool) {
+	if k := e.valueKind(x); k != skNone {
+		return listElem{kind: k}, true
+	}
+	if key, ok := e.recordKeyOf(x); ok {
+		return listElem{rec: key, gc: true}, true
+	}
+	return listElem{}, false
+}
+
+// recordKeyOf statically names the record an expression denotes where its
+// own form says so — a gc binding, a construction in this module or a
+// qualified one that resolves. A form whose record only the emission could
+// name (a call's result, a field read) reports false; nothing here emits.
+func (e *emitter) recordKeyOf(x ast.Expr) (string, bool) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		g, ok := e.gcEnv[v.Name]
+		return g.rec, ok
+	case *ast.Construct:
+		key := e.curKey
+		if v.Qual != "" {
+			key = e.resolveQual(v.Qual)
+			if key == "" {
+				return "", false
+			}
+		}
+		rec, ok := e.records[key+"."+v.Name]
+		if !ok || len(rec.TypeParams) != 0 || len(v.TypeArgs) != 0 {
+			return "", false
+		}
+		return key + "." + rec.Name, true
+	}
+	return "", false
 }
 
 // emitStep advances the loop counter by one. The add is unchecked because
@@ -5190,6 +5571,7 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedList := e.listEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -5202,6 +5584,7 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.listEnv = savedList
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -5221,6 +5604,7 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
+	e.listEnv = make(map[string]listBinding)
 	e.gcEnv = make(map[string]gcBinding)
 	e.tupEnv = make(map[string]tupBinding)
 	e.ntEnv = make(map[string]string)
@@ -7663,6 +8047,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedList := e.listEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -7675,6 +8060,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.listEnv = savedList
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -7694,6 +8080,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
+	e.listEnv = make(map[string]listBinding)
 	e.gcEnv = make(map[string]gcBinding)
 	e.tupEnv = make(map[string]tupBinding)
 	e.ntEnv = make(map[string]string)
@@ -7912,6 +8299,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedList := e.listEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -7924,6 +8312,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.listEnv = savedList
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -7943,6 +8332,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
+	e.listEnv = make(map[string]listBinding)
 	e.gcEnv = make(map[string]gcBinding)
 	e.tupEnv = make(map[string]tupBinding)
 	e.ntEnv = make(map[string]string)
@@ -8018,6 +8408,7 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedList := e.listEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -8030,6 +8421,7 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.listEnv = savedList
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -8049,6 +8441,7 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
+	e.listEnv = make(map[string]listBinding)
 	e.gcEnv = make(map[string]gcBinding)
 	e.tupEnv = make(map[string]tupBinding)
 	e.ntEnv = make(map[string]string)
