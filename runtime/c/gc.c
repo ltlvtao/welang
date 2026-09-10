@@ -223,11 +223,21 @@ void *__we_alloc(long long n) {
                 *prev = rest;
                 *(void **)rest = next;
                 ((u64 *)rest)[1] |= 1; // the split remainder enters the list
-            } else {
-                *prev = next;
+                p = f;
+                break;
             }
-            p = f;
-            break;
+            if (rem == 0) {
+                *prev = next;
+                p = f;
+                break;
+            }
+            // rem == 8: an 8-byte sliver cannot hold a header of its own,
+            // so the block is no use here. Handing it over whole is not an
+            // option either — every byte of a chunk's used prefix must stay
+            // covered by one block header, because sweep walks those
+            // prefixes by size word, and the caller's descriptor is read
+            // against that same word. Left for a request it fits exactly
+            // (this branch) or one it splits cleanly (the branch above).
         }
         prev = (void **)f;
         f = next;

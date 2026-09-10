@@ -1,14 +1,20 @@
 package weruntime
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ltlvtao/welang/internal/version"
 )
+
+// harnessRun bounds one C harness run: these finish in milliseconds, so
+// the bound only ever fires on a runtime defect that spins.
+const harnessRun = 60 * time.Second
 
 // The C harness (design D6/D7): the runtime sources compile with the pinned
 // clang and answer for their contracts — the allocation ABI and header
@@ -41,6 +47,7 @@ static const long long map_parent[] = {3};
 static const long long map_leaf[] = {0};
 
 int main(void) {
+    setvbuf(stdout, 0, _IONBF, 0); /* a spinning collector must not take the failure lines with it */
     __we_gc_boot();
 
     /* Allocation basics: distinct non-null blocks; the allocator writes
@@ -79,6 +86,26 @@ int main(void) {
        succeeds again. */
     char *again = __we_alloc(32);
     CHECK(again != 0);
+
+    /* A free block eight bytes too big is left for a request it fits.
+       The sliver cannot hold a header of its own, so handing the block
+       over would mean rewriting its size word — and the sweep walks
+       chunk prefixes by that word, so eight unframed bytes put every
+       later frame out of step (this harness hung there). The block
+       stays available for a request that fits it exactly or splits
+       cleanly. */
+    char *donor = __we_alloc(48);
+    __we_free(donor);
+    char *x = __we_alloc(40);
+    CHECK(x != donor);
+    char *y = __we_alloc(32); /* 48 splits into 32 + a 16-byte block */
+    CHECK(y == donor);
+    *(long long *)(y + 16) = 777;
+    __we_root_push(y);
+    /* The walk stays in step: the unrooted blocks die, the rooted one
+       keeps its payload. */
+    CHECK(__we_gc_collect() == 2);
+    CHECK(*(long long *)(y + 16) == 777);
 
     if (failures == 0) {
         printf("gc harness: all checks passed\n");
@@ -125,7 +152,8 @@ func pinnedClang(t *testing.T) string {
 
 // compileAndRun writes the given sources (compile order = the inputs
 // slice), compiles them with the pinned clang, runs the binary, and
-// compares stdout byte-for-byte.
+// compares stdout byte-for-byte. The run is bounded: a runtime defect
+// that spins reports as this harness's failure, not as a stalled suite.
 func compileAndRun(t *testing.T, sources map[string]string, inputs []string, wantStdout string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -141,12 +169,14 @@ func compileAndRun(t *testing.T, sources map[string]string, inputs []string, wan
 	if out, err := exec.Command(pinnedClang(t), args...).CombinedOutput(); err != nil {
 		t.Fatalf("clang compile: %v\n%s", err, out)
 	}
-	got, err := exec.Command(filepath.Join(dir, "harness")).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), harnessRun)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, filepath.Join(dir, "harness")).Output()
 	if err != nil {
-		t.Fatalf("harness run: %v\nstdout: %s", err, got)
+		t.Fatalf("harness run: %v\nstdout: %s", err, out)
 	}
-	if string(got) != wantStdout {
-		t.Fatalf("stdout mismatch:\nwant: %q\ngot:  %q", wantStdout, got)
+	if string(out) != wantStdout {
+		t.Fatalf("stdout mismatch:\nwant: %q\ngot:  %q", wantStdout, string(out))
 	}
 }
 
