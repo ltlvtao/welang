@@ -1,0 +1,17 @@
+{
+  "name": "run-toplet-string-cross-module",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport u1\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(u1.base)\n    io.println(u1.tail)\n    let copy = u1.base\n    io.println(copy)\n    return Ok(())\n}\n",
+      "src/u1.we": "pub let base: String = \"ok\"\npub let tail: String = base + \"-u1\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "ok\nok-u1\nok\n",
+  "stderr": ""
+}

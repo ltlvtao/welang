@@ -1,0 +1,16 @@
+{
+  "name": "run-toplet-string",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nlet greeting: String = \"hi\"\nlet shout: String = greeting + \"!\"\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(greeting)\n    io.println(shout)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "hi\nhi!\n",
+  "stderr": ""
+}

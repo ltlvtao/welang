@@ -449,15 +449,16 @@ type emitter struct {
 	curKey     string // the module whose body is being walked/emitted
 	curImports map[string]string
 
-	// T8-1 module-level bindings (design D7). A scalar binding owns one
-	// global apiece — `@<key>.<name>`, spelled by its qualified symbol,
-	// which is also the read face's key — and topLets holds every module's
-	// bindings in the order the inits run them: pass one walks the modules
-	// in load order, so the slice is chapter 15's post-order with source
-	// order inside each module. A binding outside the scalar word face
-	// stops in pass one, so nothing here holds one.
+	// T8-1/T8-2 module-level bindings (design D7). A binding owns its own
+	// globals — `@<key>.<name>` for a scalar word, `@<key>.<name>.{p,len}`
+	// for a String's pair (T8-2A) — spelled by its qualified symbol, which
+	// is also the read face's key. topLets holds every module's bindings in
+	// the order the inits run them: pass one walks the modules in load
+	// order, so the slice is chapter 15's post-order with source order
+	// inside each module. A binding whose storage shape no root scan can
+	// see yet — a gc record or a list handle — stops in pass one.
 	topLets     []topLetRef
-	topScalar   map[string]topScalarSlot
+	topSlots    map[string]topSlot
 	topGlobals  []string
 	initEmitted map[string]bool
 
@@ -953,7 +954,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		modConc:     make(map[string]map[string]bool),
 		fnTable:     make(map[string]*fnDef),
 		slotSeen:    make(map[string]bool),
-		topScalar:   make(map[string]topScalarSlot),
+		topSlots:    make(map[string]topSlot),
 		initEmitted: make(map[string]bool),
 		opaques:     make(map[string]bool),
 		methods:     make(map[string]*fnDef),
@@ -1919,7 +1920,12 @@ func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
 			return op, isF, ni
 		}
 		if ts, ok := e.topName(v.Name); ok {
-			// A module-level binding (T8-1): one load of its global.
+			// A module-level binding (T8-1): one load of its global. A
+			// String binding's global is a pair, not a word — it is no
+			// numeric operand, and the boundary is the honest answer.
+			if ts.str {
+				return "", false, e.bnd()
+			}
 			res := e.topRead(ts)
 			return res.i64, res.isFloat, nil
 		}
@@ -2534,9 +2540,10 @@ func (e *emitter) argIsScalar(x ast.Expr) bool {
 			return true
 		}
 		// A module-level scalar binding (T8-1) is an i64 operand like any
-		// other, so println routes it to the numeric renderer.
-		_, ok := e.topName(v.Name)
-		return ok
+		// other, so println routes it to the numeric renderer — its String
+		// sibling is a byte pair and routes the other way (T8-2).
+		ts, ok := e.topName(v.Name)
+		return ok && !ts.str
 	case *ast.Binary:
 		// A `+` over two String operands is the concatenation (chapter
 		// 10's closed operator set), not a numeric form: the
@@ -5392,7 +5399,7 @@ func (e *emitter) emitStep(cur string) string {
 	return "%" + v
 }
 
-// --- T8-1 module-level bindings (design D7, chapter 15 R5) ----------------
+// --- T8-1/T8-2 module-level bindings (design D7, chapter 15 R5) -----------
 
 // topLetRef is one collected module-level binding: the module it belongs
 // to, and the declaration whose initializer the module's init runs.
@@ -5401,28 +5408,32 @@ type topLetRef struct {
 	decl *ast.TopLet
 }
 
-// topScalarSlot is one scalar binding's storage face: the qualified
-// symbol it is spelled and read under, the domain it holds, and the name
-// the interpolation domain carries onward.
-type topScalarSlot struct {
+// topSlot is one module-level binding's storage face: the qualified symbol
+// it is spelled and read under, the domain it holds, and which of the two
+// storage shapes it owns — one scalar global, or the pair of globals a
+// String's (ptr, len) takes.
+type topSlot struct {
 	sym     string
 	kind    strKind
 	isFloat bool
+	str     bool
 }
 
 // collectTopLet takes one module-level binding into the init plan. The
-// domain is fixed here, before anything emits, because the global's LLVM
-// type has to be known to every body that reads it — and the reading
+// domain is fixed here, before anything emits, because the globals' LLVM
+// types have to be known to every body that reads them — and the reading
 // bodies are emitted in an order the binding's own module need not precede.
 // The classification is the emitter's ordinary static one over the
 // initializer, and a binding whose annotation names a base type takes the
 // annotation's domain instead, exactly as a `let` statement's does.
 //
-// The face's stop is the scalar word. A String is a pair, and a record, a
-// list or anything else the static classification cannot reach is a
-// carrier the collector must be able to find: both are D7's global root
-// table — T8-2's face — or the composites', so both stop here rather than
-// emit a global no root scan can see.
+// The face covers the scalar word and the String pair. A String needs no
+// gc root at all — design D3's storage ruling puts its bytes in a private
+// constant or a malloc'd buffer, neither of them a collectable block, so a
+// global holding one is a global the collector must NOT be told about. A gc
+// record or a list is the other case, and it stops here until its global
+// can be registered: a handle in a global no root scan can see is a
+// use-after-free waiting for the first collection.
 func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 	e.topLets = append(e.topLets, topLetRef{key: key, decl: d})
 	name := d.Binding.Name
@@ -5435,14 +5446,24 @@ func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 	if kind == skNone {
 		kind = e.valueKind(d.Binding.Init)
 	}
-	if kind == skNone || kind == skStr {
+	if kind == skNone {
 		return &NotImplemented{What: bndTopLets}
 	}
 	sym := key + "." + name
-	e.topScalar[sym] = topScalarSlot{
+	e.topSlots[sym] = topSlot{
 		sym:     sym,
 		kind:    kind,
 		isFloat: kind == skF64,
+		str:     kind == skStr,
+	}
+	if kind == skStr {
+		// The pair takes one global per word: two loads are the whole read
+		// face, the same shape a scalar binding's single load has, and no
+		// aggregate unpacking stands between a binding and its value.
+		e.topGlobals = append(e.topGlobals,
+			fmt.Sprintf("@%s.p = internal global ptr null", sym),
+			fmt.Sprintf("@%s.len = internal global i64 0", sym))
+		return nil
 	}
 	typ := "i64"
 	zero := "0"
@@ -5456,8 +5477,8 @@ func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 // topName resolves a bare name to the module-level binding the walked
 // module holds under it. A local of the same name wins everywhere this is
 // consulted, the shadowing chapter 6 gives every inner scope.
-func (e *emitter) topName(name string) (topScalarSlot, bool) {
-	ts, ok := e.topScalar[e.curKey+"."+name]
+func (e *emitter) topName(name string) (topSlot, bool) {
+	ts, ok := e.topSlots[e.curKey+"."+name]
 	return ts, ok
 }
 
@@ -5465,25 +5486,32 @@ func (e *emitter) topName(name string) (topScalarSlot, bool) {
 // module-level binding it names. The qualifier resolves through the walked
 // module's imports first and by module key second, exactly as a qualified
 // call's does, and a qualifier that is a local name is no module at all.
-func (e *emitter) topMember(m *ast.Member) (topScalarSlot, bool) {
+func (e *emitter) topMember(m *ast.Member) (topSlot, bool) {
 	id, ok := m.Recv.(*ast.Ident)
 	if !ok || e.isLocalName(id.Name) {
-		return topScalarSlot{}, false
+		return topSlot{}, false
 	}
 	k := e.resolveQual(id.Name)
 	if k == "" {
-		return topScalarSlot{}, false
+		return topSlot{}, false
 	}
-	ts, ok := e.topScalar[k+"."+m.Name]
+	ts, ok := e.topSlots[k+"."+m.Name]
 	return ts, ok
 }
 
 // topRead loads one module-level binding's value: the global its
 // initializer stored, read back in the domain the binding fixed. The read
-// face is the storage face — one load, no copy — so a fn body, a later
-// initializer of the same module and a reading module all see the value
-// the init wrote, and nothing can drift between them.
-func (e *emitter) topRead(ts topScalarSlot) callResult {
+// face is the storage face — the binding's own globals, no copy — so a fn
+// body, a later initializer of the same module and a reading module all see
+// the value the init wrote, and nothing can drift between them.
+func (e *emitter) topRead(ts topSlot) callResult {
+	if ts.str {
+		p := e.value()
+		e.inst(fmt.Sprintf("%%%s = load ptr, ptr @%s.p", p, ts.sym))
+		l := e.value()
+		e.inst(fmt.Sprintf("%%%s = load i64, ptr @%s.len", l, ts.sym))
+		return callResult{kind: ckStr, strBind: strBinding{dataOp: "%" + p, lenOp: "%" + l}}
+	}
 	typ := "i64"
 	if ts.isFloat {
 		typ = "double"
@@ -5583,24 +5611,45 @@ func (e *emitter) emitInitDefine(key string, lets []*ast.TopLet) *NotImplemented
 }
 
 // emitTopLetInit emits one binding's initializer and stores its value into
-// the binding's global. The initializer binds under its own name through
+// the binding's globals. The initializer binds under its own name through
 // the ordinary `let` path — so every value face that path accepts is
 // accepted here — and the face it left is then re-read from the environment
 // and stored; the name is dropped from the environment afterwards, because
-// the global, not the SSA operand, is the binding's storage and every later
-// read must take the same load.
+// the globals, not the SSA operands, are the binding's storage and every
+// later read must take the same loads. Both storage shapes hold a face the
+// environment names: a scalar word, or a String's pair.
 func (e *emitter) emitTopLetInit(key string, d *ast.TopLet) *NotImplemented {
 	b := &d.Binding
-	ts, isScalar := e.topScalar[key+"."+b.Name]
+	ts, isTop := e.topSlots[key+"."+b.Name]
 	if b.Name == "_" {
 		// The discard evaluates and binds nothing.
 		return e.emitLetBinding(b)
 	}
-	if !isScalar {
-		return e.bnd() // unreachable: a non-scalar binding stopped in pass one
+	if !isTop {
+		return e.bnd() // unreachable: an unclassified binding stopped in pass one
 	}
 	if ni := e.emitLetBinding(b); ni != nil {
 		return ni
+	}
+	if ts.str {
+		bind, ok := e.strEnv[b.Name]
+		if !ok {
+			// The initializer emitted a face that is not a String — the
+			// classification that admitted this binding named one, so the
+			// two disagree and the honest answer is the boundary, not a
+			// store of whatever the other face happened to be.
+			return e.bnd()
+		}
+		delete(e.strEnv, b.Name)
+		p, l := bind.dataOp, bind.lenOp
+		if p == "" {
+			// A literal's bytes are still decoded; the store is a use, so
+			// the constant pool entry is minted here (the M8 discipline).
+			p, l = e.intern(bind.data), strconv.Itoa(bind.length)
+		}
+		e.inst(fmt.Sprintf("store ptr %s, ptr @%s.p", p, ts.sym))
+		e.inst(fmt.Sprintf("store i64 %s, ptr @%s.len", l, ts.sym))
+		return nil
 	}
 	slot, ok := e.scalars[b.Name]
 	if !ok {
@@ -6765,6 +6814,12 @@ func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 	case *ast.Ident:
 		b, ok := e.strEnv[v.Name]
 		if !ok {
+			if ts, isTop := e.topName(v.Name); isTop && ts.str {
+				// A module-level String binding (T8-2): its globals are the
+				// pair's storage, so the read is the two loads.
+				r := e.topRead(ts)
+				return r.strBind.dataOp, r.strBind.lenOp, nil
+			}
 			return "", "", e.bnd()
 		}
 		if b.dataOp != "" {
@@ -6772,6 +6827,8 @@ func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 		}
 		return e.intern(b.data), strconv.Itoa(b.length), nil
 	case *ast.Member:
+		// The chain read resolves a qualified module-level binding itself
+		// (emitMemberValue's T8-1 hook), so the String face is here already.
 		return e.emitFieldChainString(v)
 	default:
 		return "", "", e.bnd()

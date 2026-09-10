@@ -325,21 +325,6 @@ func TestTopLetDiscardBindsNoGlobal(t *testing.T) {
 	wantNoIR(t, ir, "@main._", "a discard binds nothing")
 }
 
-// TestTopLetStringStops: a String binding's value is a pair, and a
-// heap-built one is a pointer the collector must find — D7's global root
-// table, which is T8-2's face rather than this one's.
-func TestTopLetStringStops(t *testing.T) {
-	_, ni := EmitProgram(ModeBuild, []ProgModule{topProg([]ast.Item{
-		topLetDecl("greeting", named("String"), strLit(`"hi"`)),
-	})})
-	if ni == nil {
-		t.Fatal("a String binding is not the scalar word face")
-	}
-	if ni.What != "top-level value bindings in code generation" {
-		t.Fatalf("boundary word: %q", ni.What)
-	}
-}
-
 // TestTopLetListStops: a list binding is a carrier handle — same face,
 // same stop.
 func TestTopLetListStops(t *testing.T) {

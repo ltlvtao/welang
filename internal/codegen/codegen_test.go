@@ -208,12 +208,23 @@ func TestBoundaryWhats(t *testing.T) {
 			"",
 		},
 		{
-			// The T8-1 row. A scalar binding owns its global and emits
-			// clean; a carrier is the face that still stops, so the row
-			// carries a String — the shape the boundary word now covers.
-			"carrier top-level binding",
+			// The T8-2 row. A String binding owns its pair of globals and
+			// emits clean, like a scalar's — the two shapes differ in word
+			// count, not in whether the face is covered.
+			"String top-level binding",
 			appendItem(okModule(), &ast.TopLet{Binding: ast.Binding{
 				Kw: "let", Name: "greeting", Typ: named("String"), Init: strLit(`"hi"`),
+			}}),
+			"",
+		},
+		{
+			// A handle into a collectable block is the face that still
+			// stops: its global is a gc root, and no root table can see it
+			// yet (T8-2's other half).
+			"gc carrier top-level binding",
+			appendItem(okModule(), &ast.TopLet{Binding: ast.Binding{
+				Kw: "let", Name: "xs", Typ: &ast.NamedType{Name: "List", Args: []ast.TypeRef{named("Int64")}},
+				Init: &ast.ListLit{Elems: []ast.Expr{intLit("1")}},
 			}}),
 			"top-level value bindings in code generation",
 		},

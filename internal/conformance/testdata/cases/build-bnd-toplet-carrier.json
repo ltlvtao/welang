@@ -10,7 +10,7 @@
       "src/main.we": "let greeting: String = \"hi\"\n\npub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: top-level value bindings in code generation are not implemented in this reference build yet\n"
+  "stderr": ""
 }
