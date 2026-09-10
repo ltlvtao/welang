@@ -1,0 +1,16 @@
+{
+  "name": "run-for-string",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    for c in \"abc\" {\n        io.println(\"${c}\")\n    }\n    for c in \"héllo\" {\n        io.println(\"${c}\")\n    }\n    for c in \"\" {\n        io.println(\"never\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "a\nb\nc\nh\né\nl\nl\no\n",
+  "stderr": ""
+}

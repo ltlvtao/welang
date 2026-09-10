@@ -937,6 +937,108 @@ func (p *parser) foreignRecordItem(pub bool, cat string, head lex.Token) *ast.Re
 	return d
 }
 
+// parseHoles reads one string literal's interpolation holes into the
+// tree (chapter 1's `${ … }` regions): the literal's decoded runs land in
+// Segs and one parsed expression per hole in Holes. A literal without a
+// hole keeps the plain shape. The scan already balanced the braces and
+// validated the literal's own escapes, so the only failures left are the
+// hole expressions' — reported at their source position.
+func (p *parser) parseHoles(lit *ast.Literal) {
+	regions := lex.Holes(p.name, lit.Text, lit.Line, lit.Col)
+	if len(regions) == 0 {
+		return
+	}
+	inner := lit.Text[1 : len(lit.Text)-1]
+	// A hole's span indexes the token's own Text; the inner text is that
+	// text without its quotes, so every offset shifts by one. The span
+	// covers `${ … }` whole: the run before a hole ends at its `$`, the
+	// region text is what sits between the braces, and the next run
+	// resumes after the `}`.
+	segs := make([]string, 0, len(regions)+1)
+	holes := make([]ast.Expr, 0, len(regions))
+	prev := 0
+	for _, r := range regions {
+		segs = append(segs, decodeLiteralRun(inner[prev:r.Start-1]))
+		holes = append(holes, p.parseHole(lit.Text[r.Start+2:r.End-1], r))
+		prev = r.End - 1
+	}
+	segs = append(segs, decodeLiteralRun(inner[prev:]))
+	lit.Segs, lit.Holes = segs, holes
+}
+
+// parseHole parses one hole region's expression. The region is lexed with
+// its position rebased onto the literal's own coordinates, so both the
+// lexer's diagnostics and the child parser's carry file positions.
+func (p *parser) parseHole(region string, r lex.HoleRegion) ast.Expr {
+	toks, first := lex.ScanAt(p.name, []byte(region), r.Line, r.Col)
+	if first != nil {
+		panic(stop{*first})
+	}
+	if len(toks) == 1 {
+		p.fail(r.Line, r.Col, "E0105",
+			"invalid interpolation hole — the ${} region is empty; a hole holds one expression")
+	}
+	// A child parser shares the file name and the enclosing context the
+	// expression's own diagnostics need (the value-site word, the nesting
+	// depth budget); its failures panic out through Parse's recover.
+	sub := &parser{
+		name: p.name, toks: toks, valSite: p.valSite, depth: p.depth,
+		fns: p.fns, names: map[string]int{},
+	}
+	x := sub.parseExpr(valueCtx)
+	if !sub.atEnd() {
+		sub.failTok(sub.cur(), "E0105",
+			fmt.Sprintf("unexpected token — %q follows the interpolation hole's expression; a hole holds exactly one expression", sub.cur().Text))
+	}
+	return x
+}
+
+// decodeLiteralRun decodes one run of a literal's inner text — a segment
+// between holes — under chapter 1's closed escape set. It is descText's
+// decode loop, split out for the interpolated form; the lexer validated
+// the escapes, so the malformed-escape arms stay as total fallbacks.
+func decodeLiteralRun(run string) string {
+	var b strings.Builder
+	for i := 0; i < len(run); i++ {
+		c := run[i]
+		if c != '\\' {
+			b.WriteByte(c)
+			continue
+		}
+		i++
+		if i >= len(run) {
+			return run
+		}
+		switch run[i] {
+		case 'n':
+			b.WriteByte('\n')
+		case 't':
+			b.WriteByte('\t')
+		case 'r':
+			b.WriteByte('\r')
+		case '0':
+			b.WriteByte(0)
+		case '\\':
+			b.WriteByte('\\')
+		case '"':
+			b.WriteByte('"')
+		case '\'':
+			b.WriteByte('\'')
+		case 'u':
+			r, end, ok := parseUEscape(run, i)
+			if !ok || !utf8.ValidRune(r) {
+				return run
+			}
+			var buf [4]byte
+			b.Write(buf[:utf8.EncodeRune(buf[:], r)])
+			i = end
+		default:
+			return run
+		}
+	}
+	return b.String()
+}
+
 // descText carries a test description literal (chapter 20): a plain
 // literal decoded to its bytes, an interpolated one riding its inner text
 // verbatim — the ${} holes make whole-literal decoding impossible and the
@@ -3452,7 +3554,11 @@ func (p *parser) parsePrimary(ctx exprCtx) ast.Expr {
 		return &ast.Ident{Name: t.Text, Line: t.Line, Col: t.Col}
 	case lex.KindInt, lex.KindFloat, lex.KindString, lex.KindRune:
 		p.next()
-		return &ast.Literal{Kind: t.Kind, Text: t.Text, Line: t.Line, Col: t.Col}
+		lit := &ast.Literal{Kind: t.Kind, Text: t.Text, Line: t.Line, Col: t.Col}
+		if t.Kind == lex.KindString {
+			p.parseHoles(lit)
+		}
+		return lit
 	case lex.KindKeyword:
 		switch t.Text {
 		case "true", "false":

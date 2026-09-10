@@ -151,6 +151,21 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_test_meta", "declare void @__we_test_meta(ptr, i64, ptr, i64, i64, i64)"},
 	{"__we_test_drive", "declare void @__we_test_drive(i64, ptr)"},
 	{"__we_explore_fx_check", "declare void @__we_explore_fx_check(ptr, i64)"},
+	// T4 (design D3): the String family, appended under the same
+	// discipline — a program that builds no string declares none. The
+	// value-to-string converters return the two-word struct the C side
+	// returns in registers, so the pair comes out of extractvalue (the
+	// type line rides render() with the record structs).
+	{"__we_str_concat", "declare %struct.we_str @__we_str_concat(ptr, i64, ptr, i64)"},
+	{"__we_str_eq", "declare i64 @__we_str_eq(ptr, i64, ptr, i64)"},
+	{"__we_str_runecount", "declare i64 @__we_str_runecount(ptr, i64)"},
+	{"__we_str_charat", "declare i64 @__we_str_charat(ptr, i64, i64)"},
+	{"__we_str_byteslice", "declare %struct.we_str @__we_str_byteslice(ptr, i64, i64, i64)"},
+	{"__we_str_of_i64", "declare %struct.we_str @__we_str_of_i64(i64)"},
+	{"__we_str_of_u64", "declare %struct.we_str @__we_str_of_u64(i64)"},
+	{"__we_str_of_f64", "declare %struct.we_str @__we_str_of_f64(double)"},
+	{"__we_str_of_bool", "declare %struct.we_str @__we_str_of_bool(i64)"},
+	{"__we_str_of_rune", "declare %struct.we_str @__we_str_of_rune(i64)"},
 }
 
 // ProgModule is one module of a program emission (design D1): the module
@@ -182,7 +197,8 @@ const (
 // one Bool, sleep takes one Int64).
 type stdEntry struct {
 	sym string
-	ret bool // yields i64
+	ret bool   // yields i64
+	typ string // the entry's declared base type name, where it yields one
 }
 
 // stdFnEntries is the closed std fn-entry table (design D3): entries are
@@ -201,7 +217,7 @@ var stdFnEntries = map[string]map[string]stdEntry{
 		"assertFalse": {sym: "__we_assert_false"},
 	},
 	"time": {
-		"now":   {sym: "__we_time_now", ret: true},
+		"now":   {sym: "__we_time_now", ret: true, typ: "Int64"},
 		"sleep": {sym: "__we_time_sleep"},
 	},
 }
@@ -269,6 +285,11 @@ type emitter struct {
 	usedRecs map[string]bool
 	declUsed map[string]bool
 	errConst string
+
+	// strStruct records that some body calls the String family, whose
+	// value-to-string members return design D3's two-word pair as a
+	// struct: render() then emits the named type ahead of the bodies.
+	strStruct bool
 
 	body   strings.Builder
 	fresh  int
@@ -494,6 +515,12 @@ type scalarSlot struct {
 	operand string // the read-only face's value ("%v3" or "5")
 	alloca  string // the addressable face's memory slot ("%v7")
 	isFloat bool
+	// kind classifies the slot in design D3's interpolation domain where
+	// the binding site knew it statically — the annotation, the
+	// initializer's literal kind, a callee's declared return type.
+	// skNone means the slot's provenance is not statically decidable:
+	// rendering an interpolation hole of it stops at the boundary.
+	kind strKind
 }
 
 // sumSlot is one Option/Result value: the two-word {tag, payload} of
@@ -1001,9 +1028,15 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 	case *ast.Literal:
 		switch init.Kind {
 		case "string":
+			if len(init.Holes) > 0 {
+				// An interpolated literal computes its value at the
+				// binding (the holes' expressions run here); the pair it
+				// leaves is what the name holds.
+				return e.bindStringValue(s.Name, init)
+			}
 			data, ok := decodeStringLiteral(init.Text)
 			if !ok {
-				return e.bnd() // interpolation has no M9b emission
+				return e.bnd()
 			}
 			if s.Name != "_" {
 				e.strEnv[s.Name] = strBinding{data: data, length: len(data)}
@@ -1014,12 +1047,19 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			if !ok {
 				return e.bnd()
 			}
+			// The annotation names the bound type where it carries one;
+			// otherwise the literal's own kind does (design D3's domain:
+			// `let n: UInt64 = 5` renders unsigned).
+			kind := baseStrKind(baseTypeName(s.Typ))
+			if kind == skNone {
+				kind = literalStrKind(init)
+			}
 			if s.Name != "_" {
 				if e.assigned[s.Name] {
-					e.bindScalarSlot(s.Name, op, isF)
+					e.bindScalarSlot(s.Name, op, isF, kind)
 					return nil
 				}
-				e.scalars[s.Name] = scalarSlot{operand: op, isFloat: isF}
+				e.scalars[s.Name] = scalarSlot{operand: op, isFloat: isF, kind: kind}
 			}
 			return nil
 		default:
@@ -1043,7 +1083,7 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 				if v.alloca != "" {
 					op = e.loadNum(v.alloca, v.isFloat)
 				}
-				e.bindScalarSlot(s.Name, op, v.isFloat)
+				e.bindScalarSlot(s.Name, op, v.isFloat, v.kind)
 				return nil
 			}
 			e.scalars[s.Name] = v
@@ -1121,6 +1161,11 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 // as through its slot (design D10-1: a dropped domain left every later
 // consumer spelling i64 over a double register).
 func (e *emitter) bindNumericValue(name string, x ast.Expr) *NotImplemented {
+	if e.valueKind(x) == skStr {
+		// A String value expression — the concatenation, a String-returning
+		// call, an interpolated literal — binds its pair, not a number.
+		return e.bindStringValue(name, x)
+	}
 	res, ni := e.emitNumericValue(x)
 	if ni != nil {
 		return ni
@@ -1140,11 +1185,32 @@ func (e *emitter) bindNumericValue(name string, x ast.Expr) *NotImplemented {
 	if name == "_" {
 		return nil
 	}
+	// The classification is the value's own (the same one an
+	// interpolation hole reads), so a name bound from an expression
+	// carries its domain onward: `let n = x + 1` renders as the integer
+	// `x` was.
+	kind := e.valueKind(x)
 	if e.assigned[name] {
-		e.bindScalarSlot(name, res.i64, res.isFloat)
+		e.bindScalarSlot(name, res.i64, res.isFloat, kind)
 		return nil
 	}
-	e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat}
+	e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat, kind: kind}
+	return nil
+}
+
+// bindStringValue binds one String-valued expression under name (the
+// concatenation, an interpolated literal, a call whose declared return is
+// a String). The emission happens here — the holes' expressions and the
+// call run at the binding — and the name holds the resulting operand pair.
+// The discard still emits: a hole may call, and calls have effects.
+func (e *emitter) bindStringValue(name string, x ast.Expr) *NotImplemented {
+	res, ni := e.emitHole(x)
+	if ni != nil {
+		return ni
+	}
+	if name != "_" {
+		e.strEnv[name] = res.strBind
+	}
 	return nil
 }
 
@@ -1176,11 +1242,15 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 		return nil
 	case ckI64:
 		if name != "_" {
+			// The callee's declaration fixed the type where it named one
+			// (a program fn's return, a String member's result): the
+			// binding carries it for the interpolation domain.
+			kind := baseStrKind(res.typeName)
 			if e.assigned[name] {
-				e.bindScalarSlot(name, res.i64, res.isFloat)
+				e.bindScalarSlot(name, res.i64, res.isFloat, kind)
 				return nil
 			}
-			e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat}
+			e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat, kind: kind}
 		}
 		return nil
 	case ckPrim:
@@ -1307,6 +1377,10 @@ type callResult struct {
 	strBind strBinding // the ckStr operand pair
 	gcReg   string     // the ckGc pointer operand
 	recKey  string     // the ckGc record's module-qualified key
+	// typeName is the result's base-type name where the callee's
+	// declaration fixed it (design D3's interpolation domain); empty when
+	// the call's face does not carry one.
+	typeName string
 }
 
 // isLocalName reports whether name is bound in the current body — locals
@@ -1723,6 +1797,11 @@ var fcmpPred = map[string]string{"<": "olt", "<=": "ole", ">": "ogt", ">=": "oge
 // emitCompare widens the boolean result into the i64 domain (design D8's
 // Bool-as-i64 register rule).
 func (e *emitter) emitCompare(b *ast.Binary) (string, bool, *NotImplemented) {
+	if b.Op == "==" || b.Op == "!=" {
+		if k := e.strCompare(b); k != "" {
+			return k, false, nil
+		}
+	}
 	a, af, ni := e.emitNumExpr(b.L)
 	if ni != nil {
 		return "", false, ni
@@ -1743,6 +1822,39 @@ func (e *emitter) emitCompare(b *ast.Binary) (string, bool, *NotImplemented) {
 	z := e.value()
 	e.inst(fmt.Sprintf("%%%s = zext i1 %%%s to i64", z, v))
 	return "%" + z, false, nil
+}
+
+// strCompare emits `==`/`!=` over two String operands (chapter 10: the
+// equality operators compare base types, and String is one) — by bytes and
+// length, the runtime's own comparison. "" reports that the operands are
+// not a String pair, which leaves the numeric face to emitCompare.
+func (e *emitter) strCompare(b *ast.Binary) string {
+	if e.valueKind(b.L) != skStr || e.valueKind(b.R) != skStr {
+		return ""
+	}
+	ap, al, ni := e.emitStringExpr(b.L)
+	if ni != nil {
+		return ""
+	}
+	bp, bl, ni := e.emitStringExpr(b.R)
+	if ni != nil {
+		return ""
+	}
+	e.use("__we_str_eq")
+	eq := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 @__we_str_eq(ptr %s, i64 %s, ptr %s, i64 %s)", eq, ap, al, bp, bl))
+	// The runtime answers 1/0 in the i64 domain; `==` is that answer being
+	// non-zero and `!=` its being zero, and the result widens like every
+	// other boolean (design D8's Bool-as-i64 register rule).
+	cmp := e.value()
+	pred := "ne"
+	if b.Op == "!=" {
+		pred = "eq"
+	}
+	e.inst(fmt.Sprintf("%%%s = icmp %s i64 %%%s, 0", cmp, pred, eq))
+	z := e.value()
+	e.inst(fmt.Sprintf("%%%s = zext i1 %%%s to i64", z, cmp))
+	return "%" + z
 }
 
 // emitLogic emits && / || in the short-circuit form (design D2): the left
@@ -1840,7 +1952,7 @@ func (e *emitter) emitVarBinding(s *ast.Binding) *NotImplemented {
 		e.inst(fmt.Sprintf("store i64 %s, ptr %s", op, slot))
 	}
 	if s.Name != "_" {
-		e.scalars[s.Name] = scalarSlot{alloca: slot, isFloat: isF}
+		e.scalars[s.Name] = scalarSlot{alloca: slot, isFloat: isF, kind: baseStrKind(t.Name)}
 	}
 	return nil
 }
@@ -1950,7 +2062,11 @@ func (e *emitter) argIsScalar(x ast.Expr) bool {
 		_, ok := e.scalars[v.Name]
 		return ok
 	case *ast.Binary:
-		return true
+		// A `+` over two String operands is the concatenation (chapter
+		// 10's closed operator set), not a numeric form: the
+		// classification decides, so the shortcut leaves it to the String
+		// face rather than handing a byte pair to the i64 renderer.
+		return e.valueKind(v) != skStr
 	default:
 		return false
 	}
@@ -2053,6 +2169,12 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			return e.emitPrimCall("%"+v, fn.Name, call.Args)
 		}
 	}
+	if e.valueKind(fn.Recv) == skStr {
+		// A chapter 17 String member over a String receiver (T4). The
+		// classification gates it, so a receiver outside the domain falls
+		// through to the qualifier faces below.
+		return e.emitStrMember(fn.Recv, fn.Name, call.Args)
+	}
 	if recv, ok := fn.Recv.(*ast.Ident); ok && !e.isLocalName(recv.Name) {
 		// A program module's fn: the qualifier resolves through the walked
 		// module's imports first, then by the module's own key (the
@@ -2118,7 +2240,9 @@ func (e *emitter) emitStdEntryCall(name string, ent stdEntry, args []ast.Expr) (
 		}
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = call i64 %%%s()", v, fp))
-		return callResult{kind: ckI64, i64: "%" + v}, nil
+		// The restated entry table carries the base type (both ret entries
+		// are Int64: the clock, chapter 20).
+		return callResult{kind: ckI64, i64: "%" + v, typeName: ent.typ}, nil
 	}
 	if len(args) != 1 {
 		return callResult{}, e.bnd()
@@ -2885,18 +3009,25 @@ func (e *emitter) emitLoop(s *ast.Loop) *NotImplemented {
 // source emits as a counted loop rather than the materialized array
 // design D6 first named; the two are observationally identical for a
 // Range (see for_test.go's header for the argument), and the counted loop
-// needs neither the collection carrier nor a heap. Both bounds evaluate
-// here, in source order, before the head block opens, so a body that
-// assigns through a name the bound read cannot change the count; the
-// counter itself lives in a slot reserved for the whole body and is not
-// nameable from source, so nothing the body does can disturb the
-// sequence. A String source needs the runtime's rune walk (T4) and a
-// List its carrier (T7); both stop at this build's body boundary.
+// needs neither the collection carrier nor a heap. The String source
+// walks its code points (T4-3). A List source needs its carrier (T7) and
+// stops at this build's body boundary.
 func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
-	rng, ok := s.Iter.(*ast.Binary)
-	if !ok || rng.Op != ".." {
-		return e.bnd()
+	if rng, ok := s.Iter.(*ast.Binary); ok && rng.Op == ".." {
+		return e.emitForRange(s, rng)
 	}
+	if e.valueKind(s.Iter) == skStr {
+		return e.emitForString(s)
+	}
+	return e.bnd()
+}
+
+// emitForRange emits the counted Range loop: both bounds evaluate here, in
+// source order, before the head block opens, so a body that assigns
+// through a name the bound read cannot change the count; the counter
+// itself lives in a slot reserved for the whole body and is not nameable
+// from source, so nothing the body does can disturb the sequence.
+func (e *emitter) emitForRange(s *ast.ForStmt, rng *ast.Binary) *NotImplemented {
 	lo, lof, ni := e.emitNumExpr(rng.L)
 	if ni != nil {
 		return ni
@@ -2932,7 +3063,7 @@ func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
 	// counter's.
 	e.pushEnv()
 	defer e.popEnv()
-	if ni := e.bindForPattern(s.Pat, cur); ni != nil {
+	if ni := e.bindForPattern(s.Pat, cur, skI64); ni != nil {
 		return ni
 	}
 	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, scopeAt: len(e.scopeLive)})
@@ -2955,12 +3086,75 @@ func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
 	return nil
 }
 
+// emitForString emits `for c in s` over a String source: the value is read
+// once — its two words stay registers for the whole walk — and the
+// chapter 17 access pair drives the iteration. runeCount fixes the count of
+// code points ahead of the head, and each pass takes one code point by
+// index, so a multi-byte value walks once per code point rather than once
+// per byte; an empty value's count is zero, so the body never runs. The
+// index lives in a slot reserved for the whole walk (the same shape the
+// Range loop's counter takes), so the element binding is fresh each pass
+// and the source is never re-evaluated. A String's bytes are not gc
+// objects (design D3 as corrected at T4), so the pair needs no root.
+func (e *emitter) emitForString(s *ast.ForStmt) *NotImplemented {
+	p, l, ni := e.emitStringExpr(s.Iter)
+	if ni != nil {
+		return ni
+	}
+	n := e.blocks
+	e.blocks++
+	head := fmt.Sprintf("forhead%d", n)
+	body := fmt.Sprintf("forbody%d", n)
+	step := fmt.Sprintf("forcont%d", n)
+	exit := fmt.Sprintf("forexit%d", n)
+	e.use("__we_str_runecount")
+	e.use("__we_str_charat")
+	count := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 @__we_str_runecount(ptr %s, i64 %s)", count, p, l))
+	counter := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", counter))
+	e.inst(fmt.Sprintf("br label %%%s", head))
+	e.label(head)
+	cur := e.loadNum(counter, false)
+	cmp := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp slt i64 %s, %%%s", cmp, cur, count))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", cmp, body, exit))
+	e.label(body)
+	// The element call runs here, in the body, on this pass's index: the
+	// walk reads one code point per pass and the binding names it.
+	ch := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 @__we_str_charat(ptr %s, i64 %s, i64 %s)", ch, p, l, cur))
+	e.pushEnv()
+	defer e.popEnv()
+	if ni := e.bindForPattern(s.Pat, "%"+ch, skRune); ni != nil {
+		return ni
+	}
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, scopeAt: len(e.scopeLive)})
+	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+		return ni
+	}
+	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", step))
+	}
+	// The step is its own block because continue lands on it: a continue
+	// that skipped the step would spin on one code point forever.
+	e.label(step)
+	next := e.emitStep(e.loadNum(counter, false))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", next, counter))
+	e.inst(fmt.Sprintf("br label %%%s", head))
+	e.label(exit)
+	return nil
+}
+
 // bindForPattern binds one pass's element under the head pattern. `_`
 // binds nothing. A name binds like any other scalar binding: the body
 // assigns it, so it takes a slot; otherwise it stays the register the
-// element arrived in. Other head shapes (the tuple head of T2-c, the
-// scope resource) are not this build's.
-func (e *emitter) bindForPattern(pat ast.Pattern, op string) *NotImplemented {
+// element arrived in. kind is the source's element domain — a Range yields
+// Int64 counts, a String yields Runes (T4-3) — which the binding carries
+// for the interpolation domain. Other head shapes (the tuple head of T2-c,
+// the scope resource) are not this build's.
+func (e *emitter) bindForPattern(pat ast.Pattern, op string, kind strKind) *NotImplemented {
 	switch p := pat.(type) {
 	case *ast.PatWildcard:
 		return nil
@@ -2969,10 +3163,10 @@ func (e *emitter) bindForPattern(pat ast.Pattern, op string) *NotImplemented {
 			return nil
 		}
 		if e.assigned[p.Name] {
-			e.bindScalarSlot(p.Name, op, false)
+			e.bindScalarSlot(p.Name, op, false, kind)
 			return nil
 		}
-		e.scalars[p.Name] = scalarSlot{operand: op}
+		e.scalars[p.Name] = scalarSlot{operand: op, kind: kind}
 		return nil
 	default:
 		return e.bnd()
@@ -3084,8 +3278,10 @@ func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot, guardFalseL strin
 	if pv, ok := arm.Pat.(*ast.PatVariant); ok && len(pv.Args) == 1 {
 		if b, ok := pv.Args[0].(*ast.PatBinding); ok && b.Name != "_" {
 			op := e.loadNum(slot.pay, false)
+			// The payload's type is the variant's declaration (D4's
+			// traversal): the arm binding carries no domain yet.
 			if e.assigned[b.Name] {
-				e.bindScalarSlot(b.Name, op, false)
+				e.bindScalarSlot(b.Name, op, false, skNone)
 			} else {
 				e.scalars[b.Name] = scalarSlot{operand: op}
 			}
@@ -3192,16 +3388,13 @@ func (e *emitter) emitAssertEqual(args []ast.Expr) (callResult, *NotImplemented)
 		return callResult{}, e.bnd()
 	}
 	strFace := func(x ast.Expr) bool {
-		switch v := x.(type) {
-		case *ast.Literal:
-			return v.Kind == "string"
-		case *ast.Ident:
-			_, ok := e.strEnv[v.Name]
-			return ok
-		case *ast.Member:
-			return true // the String field-chain face
+		if e.valueKind(x) == skStr {
+			return true
 		}
-		return false
+		// A member is the field-chain face whether or not the chain
+		// resolves here: a chain that does not is its own stop.
+		_, ok := x.(*ast.Member)
+		return ok
 	}
 	// Records and sums sit beyond the comparand domain: their equality
 	// is the Eq-generic face, the standard library's own widening.
@@ -3477,7 +3670,7 @@ func collectAssigned(items []ast.Stmt, set map[string]bool) {
 // the name must live at an address. The width is the value's, decided
 // here because a slot carries its type — the SSA face can afford to drop
 // the flag (design D10-1's open defect), a slot cannot.
-func (e *emitter) bindScalarSlot(name, op string, isF bool) {
+func (e *emitter) bindScalarSlot(name, op string, isF bool, kind strKind) {
 	typ := "i64"
 	if isF {
 		typ = "double"
@@ -3488,7 +3681,7 @@ func (e *emitter) bindScalarSlot(name, op string, isF bool) {
 	} else {
 		e.inst(fmt.Sprintf("store i64 %s, ptr %s", op, slot))
 	}
-	e.scalars[name] = scalarSlot{alloca: slot, isFloat: isF}
+	e.scalars[name] = scalarSlot{alloca: slot, isFloat: isF, kind: kind}
 }
 
 // collectCaptures walks a task body for identifier reads that name
@@ -3902,8 +4095,10 @@ func (e *emitter) emitSelect(s *ast.SelectExpr) (callResult, *NotImplemented) {
 			vv := e.value()
 			e.inst(fmt.Sprintf("%%%s = call i64 @__we_select_value(ptr %%%s)", vv, sel))
 			if c.Name != "_" {
+				// The select arm's value is the runtime's i64 register;
+				// its source type is not the binding site's to name.
 				if e.assigned[c.Name] {
-					e.bindScalarSlot(c.Name, "%"+vv, false)
+					e.bindScalarSlot(c.Name, "%"+vv, false, skNone)
 				} else {
 					e.scalars[c.Name] = scalarSlot{operand: "%" + vv}
 				}
@@ -3944,21 +4139,43 @@ func (e *emitter) sourcePtr(name string) string {
 }
 
 // emitStringExpr emits one String operand — the (ptr, len) pair — from a
-// plain literal, a let-bound name, or a field chain ending at a String
-// field. The pair may be a constant global plus immediate, two loaded
-// registers, or — for a name an fn parameter or an aggregate return
-// produced — the operand pair already live in registers.
+// plain literal, an interpolated one, the `+` concatenation, a let-bound
+// name, a field chain ending at a String field, or a call whose declared
+// return is a String. The pair may be a constant global plus immediate,
+// two loaded registers, or — for a name an fn parameter or an aggregate
+// return produced — the operand pair already live in registers.
 func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 	switch v := x.(type) {
 	case *ast.Literal:
 		if v.Kind != "string" {
 			return "", "", e.bnd()
 		}
+		if len(v.Holes) > 0 {
+			// The holes' values are computed here, not at a use: the pair
+			// is whatever the concatenation produced (design D3's
+			// interpolation face).
+			res, ni := e.emitInterp(v)
+			if ni != nil {
+				return "", "", ni
+			}
+			return res.strBind.dataOp, res.strBind.lenOp, nil
+		}
 		data, ok := decodeStringLiteral(v.Text)
 		if !ok {
 			return "", "", e.bnd()
 		}
 		return e.intern(data), strconv.Itoa(len(data)), nil
+	case *ast.Binary:
+		return e.emitConcat(v)
+	case *ast.Call:
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return "", "", ni
+		}
+		if res.kind != ckStr {
+			return "", "", e.bnd()
+		}
+		return res.strBind.dataOp, res.strBind.lenOp, nil
 	case *ast.Ident:
 		b, ok := e.strEnv[v.Name]
 		if !ok {
@@ -4014,6 +4231,483 @@ func (e *emitter) walkChain(base, recKey string, hops []string) (string, string,
 		return "", "", e.bnd()
 	}
 	return e.gepLoadPtr(base, slot.off), e.gepLoadI64(base, slot.off+8), nil
+}
+
+// --- the T4 String emission set (design D3) ----------------------------------
+//
+// A String value is a runtime (ptr, len) operand pair. The literal faces
+// carried one from the M8 era (a constant global plus a length) and from
+// M10b (a fn parameter's or an aggregate return's two live registers); T4
+// widens the pair's provenance to the whole String domain — concatenation,
+// the chapter 17 member family, equality, and the interpolation holes —
+// and adds the one classification the interpolation renderer needs: which
+// base type a hole's expression holds, where that is decidable statically.
+
+// strKind classifies a value in the interpolation domain: the base-type
+// family (design D3's eight integers, Float64, Bool, Rune) and String
+// itself, nothing else.
+type strKind int
+
+const (
+	skNone strKind = iota // outside the domain — a hole of it stops at the boundary
+	skStr
+	// skI64 is the whole integer family but UInt64: Int8..Int64 sign-extend
+	// and UInt8..UInt32 zero-extend into the i64 domain, so each value is
+	// its own i64 and one converter renders them all.
+	skI64
+	skU64 // UInt64 alone holds a magnitude its i64 does not
+	skF64
+	skBool
+	skRune
+)
+
+// baseStrKind classifies one base type name — the annotation, parameter,
+// and declared-return sites' contribution. Every other name (a record, a
+// sum, a generic) and the empty name are skNone. Float32 is absent until
+// the narrow-width track gives it a storage face at all (T11).
+func baseStrKind(name string) strKind {
+	switch name {
+	case "String":
+		return skStr
+	case "UInt64":
+		return skU64
+	case "Int64", "Int32", "Int16", "Int8", "UInt32", "UInt16", "UInt8":
+		return skI64
+	case "Float64":
+		return skF64
+	case "Bool":
+		return skBool
+	case "Rune":
+		return skRune
+	}
+	return skNone
+}
+
+// baseTypeName returns t's bare base-type name where the reference spells
+// one (no qualifier, no type arguments); "" for everything else, which
+// classifies as skNone.
+func baseTypeName(t ast.TypeRef) string {
+	n, ok := t.(*ast.NamedType)
+	if !ok || n.Qual != "" || len(n.Args) != 0 {
+		return ""
+	}
+	if baseStrKind(n.Name) == skNone {
+		return ""
+	}
+	return n.Name
+}
+
+// literalStrKind classifies a literal in the interpolation domain: its
+// token kind, refined by an integer literal's own type suffix — a `u64`
+// value renders unsigned (design D3's domain), while the narrower
+// unsigned types zero-extend into the i64 domain and render the same
+// either way.
+func literalStrKind(l *ast.Literal) strKind {
+	if l.Kind == "int" {
+		if _, suf := splitIntSuffix(l.Text); suf == "u64" {
+			return skU64
+		}
+	}
+	return litStrKind(l.Kind)
+}
+
+// litStrKind classifies a literal by its token kind — the domain an
+// unannotated binding takes (Int64, Float64, Bool, Rune, String).
+func litStrKind(kind string) strKind {
+	switch kind {
+	case "string":
+		return skStr
+	case "int":
+		return skI64
+	case "float":
+		return skF64
+	case "bool":
+		return skBool
+	case "rune":
+		return skRune
+	}
+	return skNone
+}
+
+// valueKind classifies x in the interpolation domain where the answer is
+// static: a literal's own kind, a binding whose site fixed its type
+// (scalarSlot.kind), a String binding or field chain, a callee's declared
+// return type, and the operators over those. Everything else — a numeric
+// record field, a match arm's payload, a foreign result, a value-form join
+// — is skNone and stops the hole at the boundary: design D3 names the base
+// family and String, and the composite traversal is D4's (T5).
+//
+// The classification never exceeds what the emission can do: it gates the
+// dispatch, and the emission re-checks the domain the value actually lands
+// in, so a wrong guess costs a boundary rather than a wrong rendering.
+func (e *emitter) valueKind(x ast.Expr) strKind {
+	switch v := x.(type) {
+	case *ast.Literal:
+		return literalStrKind(v)
+	case *ast.Ident:
+		if _, ok := e.strEnv[v.Name]; ok {
+			return skStr
+		}
+		if s, ok := e.scalars[v.Name]; ok {
+			return s.kind
+		}
+		return skNone
+	case *ast.Member:
+		if e.strChain(v) {
+			return skStr
+		}
+		return skNone
+	case *ast.Unary:
+		switch v.Op {
+		case "!":
+			return skBool
+		case "-":
+			k := e.valueKind(v.X)
+			if k == skF64 {
+				return skF64
+			}
+			if k == skI64 || k == skU64 {
+				return k
+			}
+			return skNone
+		}
+		return skNone
+	case *ast.Binary:
+		return e.binaryKind(v)
+	case *ast.Call:
+		return e.callStrKind(v)
+	}
+	return skNone
+}
+
+// binaryKind classifies an operator's result: a comparison or a logical
+// join is a Bool, `+` over two Strings is the concatenation, and an
+// integer arithmetic result is the i64 domain — Rune and Bool stay out of
+// the arithmetic kinds, since a result computed in the i64 domain renders
+// as the integer it is (a Rune operand's own rendering is its character,
+// but `r + 1` is not that character's neighbour).
+func (e *emitter) binaryKind(b *ast.Binary) strKind {
+	switch b.Op {
+	case "&&", "||", "==", "!=", "<", "<=", ">", ">=":
+		return skBool
+	case "+":
+		if e.valueKind(b.L) == skStr && e.valueKind(b.R) == skStr {
+			return skStr
+		}
+	}
+	k := e.arithKind(b.L, b.R)
+	return k
+}
+
+// arithKind is the numeric join of two operands: a Float64 operand makes
+// the result a float, and two integer operands stay in the i64 domain.
+func (e *emitter) arithKind(l, r ast.Expr) strKind {
+	kl, kr := e.valueKind(l), e.valueKind(r)
+	if kl == skF64 || kr == skF64 {
+		return skF64
+	}
+	if kl == skNone || kr == skNone {
+		return skNone
+	}
+	switch kl {
+	case skI64, skU64:
+		switch kr {
+		case skI64, skU64:
+			return skI64
+		}
+	}
+	return skNone
+}
+
+// callStrKind reads a call's declared result type: a program fn's own
+// signature, a chapter 17 String member's fixed result, or nothing where
+// the declaration does not fix one.
+func (e *emitter) callStrKind(call *ast.Call) strKind {
+	if id, ok := call.Fn.(*ast.Ident); ok {
+		fd, ok := e.fnTable[e.curKey+"."+id.Name]
+		if !ok {
+			return skNone
+		}
+		return e.fnRetKind(fd)
+	}
+	fn, ok := call.Fn.(*ast.Member)
+	if !ok {
+		return skNone
+	}
+	if e.valueKind(fn.Recv) == skStr {
+		return strMemberKind(fn.Name)
+	}
+	recv, ok := fn.Recv.(*ast.Ident)
+	if !ok || e.isLocalName(recv.Name) {
+		return skNone
+	}
+	if k := e.resolveQual(recv.Name); k != "" {
+		if fd, ok := e.fnTable[k+"."+fn.Name]; ok {
+			return e.fnRetKind(fd)
+		}
+	}
+	return skNone
+}
+
+// fnRetKind classifies one program fn's declared return type.
+func (e *emitter) fnRetKind(fd *fnDef) strKind {
+	abi, ok := e.classify(fd)
+	if !ok {
+		return skNone
+	}
+	return baseStrKind(abi.retName)
+}
+
+// strMemberKind is the result family of chapter 17's String members: the
+// two access layers (byteLength, runeCount yield Int64; charAt yields the
+// Rune it reads; byteSlice a String view). iterator is outside the set.
+func strMemberKind(method string) strKind {
+	switch method {
+	case "byteLength", "runeCount":
+		return skI64
+	case "charAt":
+		return skRune
+	case "byteSlice":
+		return skStr
+	}
+	return skNone
+}
+
+// strChain reports whether a member chain ends at a String field of a
+// let-bound record — the same face emitFieldChainString resolves, decided
+// without emitting anything.
+func (e *emitter) strChain(m *ast.Member) bool {
+	hops := []string{m.Name}
+	var x ast.Expr = m.Recv
+	for {
+		switch r := x.(type) {
+		case *ast.Ident:
+			g, ok := e.gcEnv[r.Name]
+			if !ok {
+				return false
+			}
+			return e.chainEndsStr(g.rec, hops)
+		case *ast.Member:
+			hops = append([]string{r.Name}, hops...)
+			x = r.Recv
+		default:
+			return false
+		}
+	}
+}
+
+// chainEndsStr walks the hops' kinds statically: every hop before the last
+// must be a record reference, the last must be a String field.
+func (e *emitter) chainEndsStr(recKey string, hops []string) bool {
+	for _, h := range hops[:len(hops)-1] {
+		slot, ok := e.fieldSlotOf(recKey, h)
+		if !ok || slot.kind != fkRef {
+			return false
+		}
+		recKey = slot.typ
+	}
+	slot, ok := e.fieldSlotOf(recKey, hops[len(hops)-1])
+	return ok && slot.kind == fkStr
+}
+
+// strCall emits one String-family runtime call whose result is the
+// two-word pair: the call, then the two extractvalues that bring the words
+// into registers. The C declaration returns the struct in two registers
+// (both eightbytes INTEGER class), which is the shape clang lowers the
+// declaration to — so the IR struct return and the C ABI agree.
+func (e *emitter) strCall(sym, args string) (string, string, *NotImplemented) {
+	e.use(sym)
+	e.strStruct = true
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = call %%struct.we_str @%s(%s)", v, sym, args))
+	p := e.value()
+	e.inst(fmt.Sprintf("%%%s = extractvalue %%struct.we_str %%%s, 0", p, v))
+	l := e.value()
+	e.inst(fmt.Sprintf("%%%s = extractvalue %%struct.we_str %%%s, 1", l, v))
+	return "%" + p, "%" + l, nil
+}
+
+// concatStr joins two String operand pairs through the runtime (a fresh
+// buffer: neither operand's bytes are aliased into the result).
+func (e *emitter) concatStr(ap, al, bp, bl string) (string, string, *NotImplemented) {
+	return e.strCall("__we_str_concat", fmt.Sprintf("ptr %s, i64 %s, ptr %s, i64 %s", ap, al, bp, bl))
+}
+
+// emitHole renders one interpolation hole into a String pair (design D3's
+// domain). The classification picks the converter; the emission then
+// re-checks the domain the value landed in — a slot classified as an
+// integer whose operand turns out to be a double stops rather than
+// rendering the register's bits as a number.
+func (e *emitter) emitHole(x ast.Expr) (callResult, *NotImplemented) {
+	k := e.valueKind(x)
+	if k == skNone {
+		return callResult{}, e.bnd()
+	}
+	if k == skStr {
+		p, l, ni := e.emitStringExpr(x)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		return callResult{kind: ckStr, strBind: strBinding{dataOp: p, lenOp: l}}, nil
+	}
+	op, isF, ni := e.emitNumExpr(x)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	var sym, arg string
+	if k == skF64 {
+		if !isF {
+			return callResult{}, e.bnd()
+		}
+		sym, arg = "__we_str_of_f64", "double "+op
+	} else {
+		if isF {
+			return callResult{}, e.bnd()
+		}
+		sym = map[strKind]string{
+			skI64:  "__we_str_of_i64",
+			skU64:  "__we_str_of_u64",
+			skBool: "__we_str_of_bool",
+			skRune: "__we_str_of_rune",
+		}[k]
+		arg = "i64 " + op
+	}
+	p, l, ni := e.strCall(sym, arg)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	return callResult{kind: ckStr, strBind: strBinding{dataOp: p, lenOp: l}}, nil
+}
+
+// emitInterp emits one interpolated literal (chapter 1's `${ … }` regions):
+// the decoded runs between the holes and each hole's rendered value, joined
+// left to right by the runtime's concatenation. An empty run contributes
+// nothing — the buffers between adjacent holes — so a literal whose holes
+// are adjacent calls concat once per join rather than once per position.
+//
+// The result is a fresh buffer, never a segment constant: the constant pool
+// holds literals and the concatenation allocates, so nothing here is
+// written into a pool entry.
+func (e *emitter) emitInterp(lit *ast.Literal) (callResult, *NotImplemented) {
+	if len(lit.Segs) != len(lit.Holes)+1 || len(lit.Holes) == 0 {
+		// The parser guarantees one run before each hole and one after
+		// (len(Segs) == len(Holes)+1); a literal shaped otherwise did not
+		// come from a parse, and an emission that indexed past the runs
+		// would panic rather than report.
+		return callResult{}, e.bnd()
+	}
+	type pair struct{ p, l string }
+	var parts []pair
+	for i, h := range lit.Holes {
+		if seg := lit.Segs[i]; seg != "" {
+			parts = append(parts, pair{e.intern(seg), strconv.Itoa(len(seg))})
+		}
+		res, ni := e.emitHole(h)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		parts = append(parts, pair{res.strBind.dataOp, res.strBind.lenOp})
+	}
+	if seg := lit.Segs[len(lit.Holes)]; seg != "" {
+		parts = append(parts, pair{e.intern(seg), strconv.Itoa(len(seg))})
+	}
+	acc := parts[0]
+	for _, p := range parts[1:] {
+		d, l, ni := e.concatStr(acc.p, acc.l, p.p, p.l)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		acc = pair{d, l}
+	}
+	return callResult{kind: ckStr, strBind: strBinding{dataOp: acc.p, lenOp: acc.l}}, nil
+}
+
+// emitStrMember emits one chapter 17 String member call (design D3): the
+// two access layers over the value's bytes. byteLength is the length
+// operand itself — the pair carries the byte count, so the member is an
+// identity on the second word and needs no call at all. runecount and
+// charat walk code points, byteslice spans bytes, and each index space
+// reports out of range through chapter 14's family (the C side raises the
+// task failure; the emitter emits the call).
+func (e *emitter) emitStrMember(recv ast.Expr, method string, args []ast.Expr) (callResult, *NotImplemented) {
+	p, l, ni := e.emitStringExpr(recv)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	index := func(x ast.Expr) (string, *NotImplemented) {
+		op, isF, ni := e.emitNumExpr(x)
+		if ni != nil {
+			return "", ni
+		}
+		if isF {
+			return "", e.bnd()
+		}
+		return op, nil
+	}
+	switch method {
+	case "byteLength":
+		if len(args) != 0 {
+			return callResult{}, e.bnd()
+		}
+		return callResult{kind: ckI64, i64: l, typeName: "Int64"}, nil
+	case "runeCount":
+		if len(args) != 0 {
+			return callResult{}, e.bnd()
+		}
+		e.use("__we_str_runecount")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 @__we_str_runecount(ptr %s, i64 %s)", v, p, l))
+		return callResult{kind: ckI64, i64: "%" + v, typeName: "Int64"}, nil
+	case "charAt":
+		if len(args) != 1 {
+			return callResult{}, e.bnd()
+		}
+		i, ni := index(args[0])
+		if ni != nil {
+			return callResult{}, ni
+		}
+		e.use("__we_str_charat")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 @__we_str_charat(ptr %s, i64 %s, i64 %s)", v, p, l, i))
+		return callResult{kind: ckI64, i64: "%" + v, typeName: "Rune"}, nil
+	case "byteSlice":
+		if len(args) != 2 {
+			return callResult{}, e.bnd()
+		}
+		lo, ni := index(args[0])
+		if ni != nil {
+			return callResult{}, ni
+		}
+		hi, ni := index(args[1])
+		if ni != nil {
+			return callResult{}, ni
+		}
+		sp, sl, ni := e.strCall("__we_str_byteslice", fmt.Sprintf("ptr %s, i64 %s, i64 %s, i64 %s", p, l, lo, hi))
+		if ni != nil {
+			return callResult{}, ni
+		}
+		return callResult{kind: ckStr, strBind: strBinding{dataOp: sp, lenOp: sl}}, nil
+	}
+	// iterator is a value form of its own (the for-in source rides it
+	// directly at T4-3); as a member call it is outside the set.
+	return callResult{}, e.bnd()
+}
+
+// emitConcat emits `a + b` over two String operands (chapter 10's closed
+// operator set: `+` over base types that are String is the concatenation).
+func (e *emitter) emitConcat(b *ast.Binary) (string, string, *NotImplemented) {
+	if b.Op != "+" || e.valueKind(b.L) != skStr || e.valueKind(b.R) != skStr {
+		return "", "", e.bnd()
+	}
+	ap, al, ni := e.emitStringExpr(b.L)
+	if ni != nil {
+		return "", "", ni
+	}
+	bp, bl, ni := e.emitStringExpr(b.R)
+	if ni != nil {
+		return "", "", ni
+	}
+	return e.concatStr(ap, al, bp, bl)
 }
 
 // layout computes a record's field slots: offsets from 16 (the frozen
@@ -4158,6 +4852,17 @@ func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplement
 	return reg, rkey, nil
 }
 
+// splitIntSuffix splits an integer literal's digits from its type suffix
+// (chapter 3's inventory); the suffix is "" where the literal spells none.
+func splitIntSuffix(text string) (string, string) {
+	for _, suf := range []string{"i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8"} {
+		if strings.HasSuffix(text, suf) {
+			return text[:len(text)-len(suf)], suf
+		}
+	}
+	return text, ""
+}
+
 // scalarImmediate renders an int or bool literal as the i64 stored into a
 // scalar field (the construction-argument positions of design D4).
 func scalarImmediate(x ast.Expr) (string, bool) {
@@ -4167,16 +4872,20 @@ func scalarImmediate(x ast.Expr) (string, bool) {
 	}
 	switch lit.Kind {
 	case "int":
-		text := lit.Text
-		for _, suf := range []string{"i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8"} {
-			if strings.HasSuffix(text, suf) {
-				text = text[:len(text)-len(suf)]
-				break
-			}
-		}
+		text, suf := splitIntSuffix(lit.Text)
 		n, err := strconv.ParseInt(text, 0, 64)
 		if err != nil {
-			return "", false
+			if suf == "" || suf[0] != 'u' {
+				return "", false
+			}
+			// A u64 magnitude past the i64 inventory still has a register
+			// form: the same bits, written as the signed reading of them
+			// (the i64 operand is a bit pattern, design D2).
+			u, uerr := strconv.ParseUint(text, 0, 64)
+			if uerr != nil {
+				return "", false
+			}
+			return strconv.FormatInt(int64(u), 10), true
 		}
 		return strconv.FormatInt(n, 10), true
 	case "bool":
@@ -4286,6 +4995,7 @@ const (
 type fnParamAbi struct {
 	kind fnAbiKind
 	key  string // the record/sum's module-qualified key (abiGc/abiSum)
+	typ  string // the declared base type name, where the parameter names one
 }
 
 // fnAbi is one fn's calling shape: the return family plus one entry per
@@ -4294,6 +5004,7 @@ type fnAbi struct {
 	ret      fnAbiKind
 	retTyp   string   // the define's result type spelling
 	retKey   string   // the ret record/sum's key ("Result" for the prelude sum)
+	retName  string   // the declared base type name, where the return names one
 	variants []string // the ret sum's variant names, decl order (abiSum)
 	params   []fnParamAbi
 }
@@ -4342,6 +5053,7 @@ func (e *emitter) fnAbiOf(d *ast.FnDecl) (fnAbi, bool) {
 			return abi, false
 		}
 		abi.ret, abi.retKey = k, key
+		abi.retName = baseTypeName(t)
 		switch k {
 		case abiI64:
 			abi.retTyp = "i64"
@@ -4367,7 +5079,7 @@ func (e *emitter) fnAbiOf(d *ast.FnDecl) (fnAbi, bool) {
 		if !ok {
 			return abi, false
 		}
-		abi.params = append(abi.params, fnParamAbi{kind: k, key: key})
+		abi.params = append(abi.params, fnParamAbi{kind: k, key: key, typ: baseTypeName(p.Type)})
 	}
 	return abi, true
 }
@@ -4869,19 +5581,22 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 		case abiI64:
 			ps = append(ps, "i64 %"+p.Name)
 			if p.Name != "_" {
+				// The declaration named the parameter's base type; the
+				// binding carries it (design D3's interpolation domain:
+				// `"${n}"` renders the parameter as its own type).
 				if e.assigned[p.Name] {
-					e.bindScalarSlot(p.Name, "%"+p.Name, false)
+					e.bindScalarSlot(p.Name, "%"+p.Name, false, baseStrKind(pa.typ))
 				} else {
-					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name}
+					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, kind: baseStrKind(pa.typ)}
 				}
 			}
 		case abiDouble:
 			ps = append(ps, "double %"+p.Name)
 			if p.Name != "_" {
 				if e.assigned[p.Name] {
-					e.bindScalarSlot(p.Name, "%"+p.Name, true)
+					e.bindScalarSlot(p.Name, "%"+p.Name, true, baseStrKind(pa.typ))
 				} else {
-					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, isFloat: true}
+					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, isFloat: true, kind: baseStrKind(pa.typ)}
 				}
 			}
 		case abiStr:
@@ -5311,11 +6026,28 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 			if v.Kind != "string" {
 				return "", bndFn()
 			}
+			if len(v.Holes) > 0 {
+				// A hole's pair is a register: the aggregate builds
+				// through insertvalue like every other operand pair.
+				res, ni := e.emitInterp(v)
+				if ni != nil {
+					return "", ni
+				}
+				return strPair(res.strBind.dataOp, res.strBind.lenOp), nil
+			}
 			data, ok := decodeStringLiteral(v.Text)
 			if !ok {
 				return "", bndFn()
 			}
 			return fmt.Sprintf("{ ptr, i64 } { ptr %s, i64 %d }", e.intern(data), len(data)), nil
+		case *ast.Binary:
+			// A returned concatenation (and any other String value
+			// expression the pair faces cover).
+			p, l, ni := e.emitStringExpr(v)
+			if ni != nil {
+				return "", ni
+			}
+			return strPair(p, l), nil
 		case *ast.Call:
 			res, ni := e.emitCall(v, nil)
 			if ni != nil {
@@ -5497,11 +6229,11 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 	case abiI64:
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = call i64 %%%s(%s)", v, fp, join))
-		return callResult{kind: ckI64, i64: "%" + v}, nil
+		return callResult{kind: ckI64, i64: "%" + v, typeName: abi.retName}, nil
 	case abiDouble:
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = call double %%%s(%s)", v, fp, join))
-		return callResult{kind: ckI64, i64: "%" + v, isFloat: true}, nil
+		return callResult{kind: ckI64, i64: "%" + v, isFloat: true, typeName: abi.retName}, nil
 	case abiStr:
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = call { ptr, i64 } %%%s(%s)", v, fp, join))
@@ -5638,6 +6370,12 @@ func (e *emitter) render(module string) string {
 			structs = append(structs, fmt.Sprintf("%%struct.%s = type { %s }", r.name, strings.Join(parts, ", ")))
 		}
 		maps = append(maps, fmt.Sprintf("@.map.%s = private unnamed_addr constant %s", r.name, mapLiteral(bitmap, len(slots))))
+	}
+	if e.strStruct {
+		// The String pair as a named type (design D3): the C declaration
+		// returns it in two registers, the same shape clang lowers the
+		// struct to, so the emitter spells it and extracts the two words.
+		structs = append(structs, "%struct.we_str = type { ptr, i64 }")
 	}
 	if len(structs) > 0 {
 		groups = append(groups, structs)

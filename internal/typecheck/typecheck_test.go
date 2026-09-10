@@ -153,9 +153,16 @@ func TestOperators(t *testing.T) {
 	wantDiag(t, "let x = -\"a\"\n", "E0501", `operand of "-" is String`, 1, 9)
 	wantDiag(t, "let x = !1\n", "E0501", `operand of "!" is Int64`, 1, 9)
 	wantDiag(t, "let x = ~1.5\n", "E0501", `operand of "~" is Float64`, 1, 9)
+	// String concatenation: `+` is the domain's sole operator — chapter
+	// 10 approves String equality and chapter 7 names no concatenation
+	// operator, a gap the reference build closes (design D3). The
+	// arithmetic siblings and ordering stay at the boundary.
+	wantOK(t, "let x = \"a\" + \"b\"\n")
+	wantOK(t, "let x = \"a\" + \"b\" + \"c\"\n")
+	wantOK(t, "let s = \"a\"\nlet t = s + \"b\"\n")
 	// Same-type but beyond the ratified domains: the spec-gap boundary
 	// (unary rows are E0501 per design D4's anchor table).
-	wantBnd(t, "let x = \"a\" + \"b\"\n", bndDomainGap)
+	wantBnd(t, "let x = \"a\" - \"b\"\n", bndDomainGap)
 	wantBnd(t, "let x = \"a\" < \"b\"\n", bndDomainGap)
 	wantBnd(t, "let x = 1.0 & 2.0\n", bndDomainGap)
 	wantBnd(t, "let x = 1 && 2\n", bndDomainGap)

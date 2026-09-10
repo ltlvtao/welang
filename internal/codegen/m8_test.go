@@ -419,12 +419,17 @@ func TestM8BodyBoundaryWhats(t *testing.T) {
 		file *ast.File
 	}{
 		{
-			"arithmetic in io argument",
-			helloModulePatch(func(f *ast.File) {
-				f.Items[2].(*ast.FnDecl).Body.Items[1] = ioCall("io", "println", &ast.Binary{
-					Op: "+", L: &ast.Literal{Kind: "string", Text: `"a"`}, R: &ast.Ident{Name: "name"},
-				})
-			}),
+			// The io-argument trigger: a value outside the String/base
+			// domain. It used to fire on a String join, which T4 carries —
+			// the record value is the argument form the classification
+			// still refuses.
+			"record value in io argument",
+			func() *ast.File {
+				f := greeterModule()
+				mainBody := &f.Items[3].(*ast.FnDecl).Body
+				mainBody.Items[1] = ioCall("io", "println", &ast.Ident{Name: "g"})
+				return f
+			}(),
 		},
 		{
 			"interpolated literal",

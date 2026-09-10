@@ -426,9 +426,17 @@ type Ident struct {
 // Literal is one chapter 1 literal; Kind is int, float, string, rune, or
 // bool (true/false). Text holds the source form — values are the types
 // stage's to decode.
+//
+// An interpolated string literal additionally carries its holes: Segs
+// holds the decoded literal runs between them and Holes the expressions
+// the parser read out of each `${ … }` region, in source order, with
+// len(Segs) == len(Holes)+1 (chapter 1 fixes the region; what a hole
+// holds is the parser's reading). Text stays the raw source form.
 type Literal struct {
 	Kind      string
 	Text      string
+	Segs      []string
+	Holes     []Expr
 	Line, Col int
 }
 

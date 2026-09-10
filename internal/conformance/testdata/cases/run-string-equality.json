@@ -1,0 +1,16 @@
+{
+  "name": "run-string-equality",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = \"abc\"\n    let b = \"ab\" + \"c\"\n    if a == b {\n        io.println(\"eq\")\n    } else {\n        io.println(\"ne\")\n    }\n    if a != \"abd\" {\n        io.println(\"differs\")\n    } else {\n        io.println(\"same\")\n    }\n    if a != b {\n        io.println(\"prefix-ne\")\n    } else {\n        io.println(\"same-value\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "eq\ndiffers\nsame-value\n",
+  "stderr": ""
+}

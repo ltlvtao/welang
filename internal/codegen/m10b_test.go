@@ -347,13 +347,13 @@ func TestM10bBndStops(t *testing.T) {
 		t.Fatalf("generic: want %q, got %+v", bndGenericFns, ni)
 	}
 
-	// The fn body pin re-anchored at T2-b: for-over-Range is emitted now,
-	// so the stop is the source the build still refuses — the String
-	// source, whose rune walk arrives with T4.
+	// The fn body pin re-anchored at T4-3: for-over-Range and the String
+	// walk are both emitted now, so the stop is the source the build still
+	// refuses — the List source, whose carrier arrives with T7.
 	forBody := ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
 		pubFn("looped", nil, nil,
 			&ast.ForStmt{Pat: &ast.PatBinding{Name: "c"},
-				Iter: strLit(`"abc"`)},
+				Iter: &ast.ListLit{Elems: []ast.Expr{intLit("1")}}},
 			&ast.Return{}),
 		appError(),
 		mainDecl(

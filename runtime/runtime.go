@@ -32,3 +32,9 @@ var ConcSource string
 
 //go:embed c/test.c
 var TestSource string
+
+//go:embed c/str.h
+var StrHeader string
+
+//go:embed c/str.c
+var StrSource string

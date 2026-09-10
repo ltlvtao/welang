@@ -173,18 +173,121 @@ func TestForRangeWildcardPattern(t *testing.T) {
 	}
 }
 
-// TestForNonRangeBnd is the boundary pin: a non-range source is not
-// emitted yet — the String source needs the runtime's rune walk (T4) and
-// List its carrier (T7). Re-anchored as those land.
+// TestForNonRangeBnd is the boundary pin: a source outside the emitted
+// set stops at the body boundary. The String source was this pin until
+// T4-3 walked its code points; the List source needs its carrier (T7), so
+// it holds the pin now. Re-anchored as that lands.
 func TestForNonRangeBnd(t *testing.T) {
 	_, ni := Emit(m9bModule(
-		&ast.ForStmt{Pat: &ast.PatBinding{Name: "c"}, Iter: strLit(`"abc"`), Body: ast.Block{Items: []ast.Stmt{ioCall("io", "println", ident("c"))}}},
+		&ast.ForStmt{
+			Pat:  &ast.PatBinding{Name: "x"},
+			Iter: &ast.Construct{Name: "List", TypeArgs: []ast.TypeRef{named("Int64")}, Fields: []ast.FieldInit{{Name: "items", Value: strLit(`"abc"`)}}},
+			Body: ast.Block{Items: []ast.Stmt{ioCall("io", "println", ident("x"))}},
+		},
 		okReturn(),
 	), "demo")
 	if ni == nil {
-		t.Fatalf("a String source is outside this build's set")
+		t.Fatalf("a List source is outside this build's set")
 	}
 	if !strings.Contains(ni.What, "statement set") {
 		t.Fatalf("want the body boundary word, got %q", ni.What)
+	}
+}
+
+// --- T4-3: the String source ------------------------------------------------
+
+// forString builds `for name in iter { body }` over a non-Range source.
+func forString(name string, iter ast.Expr, body ...ast.Stmt) *ast.ForStmt {
+	return &ast.ForStmt{
+		Pat:  &ast.PatBinding{Name: name},
+		Iter: iter,
+		Body: ast.Block{Items: body},
+	}
+}
+
+// TestForStringSourceWalksRunes: a String source iterates its code points.
+// The value is read once — its pair is a register pair for the whole loop —
+// and the walk is the chapter 17 pair: runeCount fixes the count, and each
+// pass takes one code point by index. The index space is code points, so a
+// multi-byte value is not walked byte by byte.
+func TestForStringSourceWalksRunes(t *testing.T) {
+	ir := assertClean(t, m9bModule(
+		// Six bytes, five code points: the walk counts code points.
+		&ast.Binding{Kw: "let", Name: "s", Init: strLit(`"héllo"`)},
+		forString("c", ident("s"), ioCall("io", "println", ident("c"))),
+		okReturn(),
+	), "declare i64 @__we_str_runecount(ptr, i64)",
+		"declare i64 @__we_str_charat(ptr, i64, i64)",
+		"= call i64 @__we_str_runecount(ptr @.s0, i64 6)",
+		"= call i64 @__we_str_charat(ptr @.s0, i64 6, i64",
+	)
+	// The count is read once, ahead of the head; each pass takes one code
+	// point, so the loop body carries exactly one charAt per iteration.
+	if got := countCall(ir, "i64", "__we_str_runecount"); got != 1 {
+		t.Fatalf("the count is read once, got %d:\n%s", got, ir)
+	}
+	if got := countCall(ir, "i64", "__we_str_charat"); got != 1 {
+		t.Fatalf("one charAt per pass, got %d:\n%s", got, ir)
+	}
+	// The head tests the index against the count, not against a length.
+	head := blockAt(ir, "forhead0")
+	if !strings.Contains(head, "icmp slt i64") {
+		t.Fatalf("the head counts down the rune index:\n%s", ir)
+	}
+	// The source's words reach the runtime as registers, never re-evaluated
+	// inside the loop.
+	if body := blockAt(ir, "forbody0"); strings.Contains(body, "__we_str_runecount") {
+		t.Fatalf("the source is read once, ahead of the loop:\n%s", ir)
+	}
+}
+
+// TestForStringSourceBindsRunes: the loop variable is a Rune — the element
+// domain the String source yields — so an interpolated hole over it takes
+// the code-point renderer rather than the integer one.
+func TestForStringSourceBindsRunes(t *testing.T) {
+	assertClean(t, m9bModule(
+		&ast.Binding{Kw: "let", Name: "s", Init: strLit(`"ab"`)},
+		forString("c", ident("s"),
+			ioCall("io", "println", interpLit([]string{"[", "]"}, ident("c")))),
+		okReturn(),
+	), "= call %struct.we_str @__we_str_of_rune(i64 ")
+}
+
+// TestForStringSourceStepsOnce: the continuation block advances the index
+// and branches back, and continue lands on it rather than on the head — a
+// continue that skipped the step would spin on one code point forever.
+func TestForStringSourceStepsOnce(t *testing.T) {
+	ir := assertClean(t, m9bModule(
+		&ast.Binding{Kw: "let", Name: "s", Init: strLit(`"abc"`)},
+		forString("c", ident("s"),
+			&ast.ExprStmt{Expr: &ast.If{Cond: ident("c"), Then: ast.Block{Items: []ast.Stmt{&ast.Continue{}}}}}),
+		okReturn(),
+	), "forcont0")
+	cont := blockAt(ir, "forcont0")
+	if !strings.Contains(cont, "add i64") || !strings.Contains(cont, "store i64") {
+		t.Fatalf("the step advances the index:\n%s", ir)
+	}
+	if !strings.Contains(cont, "br label %forhead0") {
+		t.Fatalf("the step branches back to the head:\n%s", ir)
+	}
+}
+
+// TestForStringBreakLeavesTheWalk: break's exit is the loop's own, so a
+// break inside the walk lands after it.
+func TestForStringBreakLeavesTheWalk(t *testing.T) {
+	ir := assertClean(t, m9bModule(
+		&ast.Binding{Kw: "let", Name: "s", Init: strLit(`"abc"`)},
+		forString("c", ident("s"),
+			&ast.ExprStmt{Expr: &ast.If{Cond: ident("c"), Then: ast.Block{Items: []ast.Stmt{&ast.Break{}}}}}),
+		ioCall("io", "println", strLit(`"after"`)),
+		okReturn(),
+	), "forexit0")
+	// The arm's block carries the edge out (the if's join is the body's
+	// own fallthrough), and the exit runs what follows the walk.
+	if !strings.Contains(ir, "br label %forexit0") {
+		t.Fatalf("break leaves the walk:\n%s", ir)
+	}
+	if exit := blockAt(ir, "forexit0"); !strings.Contains(exit, "call void") {
+		t.Fatalf("the exit runs what follows the walk:\n%s", ir)
 	}
 }

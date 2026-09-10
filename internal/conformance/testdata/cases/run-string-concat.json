@@ -1,0 +1,16 @@
+{
+  "name": "run-string-concat",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = \"ab\"\n    let b = \"cd\"\n    let c = a + b\n    io.println(c)\n    io.println(a + b + \"ef\")\n    io.println(c + a)\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "abcd\nabcdef\nabcdab\n",
+  "stderr": ""
+}

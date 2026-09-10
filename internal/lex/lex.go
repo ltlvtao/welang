@@ -145,6 +145,17 @@ func Scan(name string, src []byte) (toks []Token, docs []DocUnit, first *diag.Di
 	return toks, docs, first
 }
 
+// ScanAt lexes one region of an open file — an interpolation hole's text —
+// with its position rebased onto the region's own first character, so the
+// tokens and any diagnostic carry file coordinates rather than
+// region-relative ones. A region is one line of a string literal (chapter
+// 1: a literal never spans lines), so only the column shifts; documentation
+// units are the file scan's and are not collected here.
+func ScanAt(name string, src []byte, line, col int) (toks []Token, first *diag.Diagnostic) {
+	toks, _, first = runAt(name, src, line, col, false)
+	return toks, first
+}
+
 // Keep lexes one source file with comments kept as trivia: each //, ///,
 // or /* */ comment surfaces as a KindComment token (text verbatim, slashes
 // included, the line break excluded) at its own position, and every other
@@ -158,7 +169,13 @@ func Keep(name string, src []byte) (toks []Token, first *diag.Diagnostic) {
 
 // run is the shared scan body under both faces.
 func run(name string, src []byte, keep bool) (toks []Token, docs []DocUnit, first *diag.Diagnostic) {
-	l := &lexer{name: name, src: string(src), line: 1, col: 1, docOpen: -1, keep: keep}
+	return runAt(name, src, 1, 1, keep)
+}
+
+// runAt is run with the starting position spelled: Scan and Keep open a
+// file at its first character, ScanAt rebases a region onto its own.
+func runAt(name string, src []byte, line, col int, keep bool) (toks []Token, docs []DocUnit, first *diag.Diagnostic) {
+	l := &lexer{name: name, src: string(src), line: line, col: col, docOpen: -1, keep: keep}
 	if d := l.checkEncoding(); d != nil {
 		return nil, nil, d
 	}
@@ -509,6 +526,54 @@ func (l *lexer) consumeStringLit(soft bool) bool {
 			l.advance()
 		}
 	}
+}
+
+// HoleRegion is one interpolation hole of a string literal (chapter 1's
+// `${ … }`). Start and End span the whole hole inside the literal token's
+// own Text — Start is the `$` of `${`, End one past the closing `}` — and
+// Line/Col are the first character inside the braces, the position the
+// region's own text rebases onto. The literal stays one lexical unit (the
+// reach Token.AttrArgs takes for attributes); the parser reads the
+// region as the expression it holds.
+type HoleRegion struct {
+	Start, End int
+	Line, Col  int
+}
+
+// Holes reports one string literal's interpolation holes in source order.
+// text is the literal token's own Text — quotes included — and line/col
+// its position, so each region carries file coordinates. The walk is
+// consumeHole's, the scanner's own: the spans reported here are exactly
+// the ones the scan balanced, and the literal is known well-formed
+// (nothing in it can fail this second pass).
+func Holes(name, text string, line, col int) []HoleRegion {
+	if !strings.Contains(text, "${") {
+		return nil
+	}
+	l := &lexer{name: name, src: text, line: line, col: col, docOpen: -1}
+	var out []HoleRegion
+	if l.eof() {
+		return nil
+	}
+	l.advance() // the opening quote
+	for !l.eof() {
+		switch {
+		case l.peek() == '"':
+			return out
+		case l.peek() == '\\':
+			l.consumeEscape()
+		case l.peek() == '$' && l.peek2() == '{':
+			holeLine, holeCol := l.pos()
+			start := l.off
+			l.advance() // '$'
+			l.advance() // '{'
+			l.consumeHole(holeLine, holeCol, line, col)
+			out = append(out, HoleRegion{Start: start, End: l.off, Line: holeLine, Col: holeCol + 2})
+		default:
+			l.advance()
+		}
+	}
+	return out
 }
 
 // consumeHole consumes an interpolation hole after "${", stopping after

@@ -81,10 +81,27 @@ func TestTrapCalibration(t *testing.T) {
 			return rep(s, "var i: Int64 = 0", "var i: Int32 = 0")
 		}},
 		// ---- control-03 (tag/echo) ----
-		{"control-03", "concatenation-boundary", BucketBoundary, func(s string) string {
+		// The concatenation and the in-implementation string comparison
+		// were both honest boundaries before T4 (check-clean but declined:
+		// the boundary bucket and the test-malformed bucket respectively).
+		// T4 ratified both faces, so each mutant now runs and its wrong
+		// output reaches the reference test — the latent bucket. The
+		// mutable String binding the third case rides is the face T4 does
+		// not carry yet, so it holds the test-malformed calibration.
+		{"control-03", "concatenation-latent", BucketLatent, func(s string) string {
 			return rep(s, "    return s", `    return s + "x"`)
 		}},
-		{"control-03", "string-equality-decline", BucketTestMalformed, func(s string) string {
+		{"control-03", "string-equality-latent", BucketLatent, func(s string) string {
+			return rep(s, `pub fn echo(s: String) -> String {
+    return s
+}`, `pub fn echo(s: String) -> String {
+    if s == "mirror" {
+        return "mirror-x"
+    }
+    return s
+}`)
+		}},
+		{"control-03", "string-mutable-binding-decline", BucketTestMalformed, func(s string) string {
 			return rep(s, `pub fn echo(s: String) -> String {
     return s
 }`, `pub fn echo(s: String) -> String {

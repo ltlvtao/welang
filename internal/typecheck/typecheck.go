@@ -1641,6 +1641,13 @@ func isNumeric(t Type) bool {
 	return intNames[string(b)] || b == "Float32" || b == "Float64"
 }
 
+// isString reports whether t is the base String type — the concatenation
+// and equality domain of design D3.
+func isString(t Type) bool {
+	b, ok := t.(baseType)
+	return ok && b == "String"
+}
+
 func isUnit(t Type) bool {
 	_, ok := t.(unitType)
 	return ok
@@ -6371,6 +6378,18 @@ func (c *checker) binaryType(x *ast.Binary) Type {
 	}
 	switch x.Op {
 	case "+", "-", "*", "/", "%":
+		if isString(lt) {
+			// Chapter 10 approves String equality ("`==` compares base
+			// types only", and String is one); concatenation is the `+`
+			// reading of the same pair, and chapter 7's silence on a
+			// concatenation operator is a gap the reference build closes
+			// (design D3). Every other operator on Strings — the
+			// arithmetic siblings, ordering — stays at the boundary.
+			if x.Op != "+" {
+				c.bnd(bndDomainGap)
+			}
+			return lt
+		}
 		if !isNumeric(lt) {
 			c.bnd(bndDomainGap)
 		}

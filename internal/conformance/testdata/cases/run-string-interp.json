@@ -1,0 +1,16 @@
+{
+  "name": "run-string-interp",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = 42\n    let u: UInt64 = 7u64\n    let big = 18446744073709551615u64\n    let f = 0.1\n    let t = true\n    let c = 'A'\n    let name = \"we\"\n    io.println(\"n=${n}\")\n    io.println(\"u=${u} f=${f}\")\n    io.println(\"t=${t} c=${c}\")\n    io.println(\"big=${big}\")\n    io.println(\"hi ${name}!\")\n    io.println(\"${name}${n}\")\n    io.println(\"plain\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "n=42\nu=7 f=0.1\nt=true c=A\nbig=18446744073709551615\nhi we!\nwe42\nplain\n",
+  "stderr": ""
+}
