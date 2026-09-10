@@ -38,3 +38,9 @@ var StrHeader string
 
 //go:embed c/str.c
 var StrSource string
+
+//go:embed c/list.h
+var ListHeader string
+
+//go:embed c/list.c
+var ListSource string
