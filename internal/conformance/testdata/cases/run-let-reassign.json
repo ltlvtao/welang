@@ -1,0 +1,16 @@
+{
+  "name": "run-let-reassign",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let n: Int64 = 1\n    n = n + 1\n    n = n * 10\n    if n == 20 { io.println(\"let-ok\") } else { io.println(\"let-bad\") }\n\n    let a: Int64 = 1\n    let b: Int64 = a\n    b = 2\n    if a == 1 && b == 2 { io.println(\"alias-ok\") } else { io.println(\"alias-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "let-ok\nalias-ok\n",
+  "stderr": ""
+}

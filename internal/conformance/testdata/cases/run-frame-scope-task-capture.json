@@ -1,0 +1,16 @@
+{
+  "name": "run-frame-scope-task-capture",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let ch: conc.Channel<Int64> = conc.channel(1)\n    ch.send(7)\n    let v = ch.receive()\n    let n: Int64 = 5\n    match v {\n        Some(n) => { let _ = 0 }\n        None => { let _ = 0 }\n    }\n    let r = scope timeout(1000) {\n        let t = task effect io {\n            let _ = n\n        }\n        let _ = t.await()\n    }\n    match r {\n        Ok(_) => { io.println(\"ok\") }\n        Err(_) => { io.println(\"timedout\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "ok\n",
+  "stderr": "src/main.we:8:8: warning[W1912]: function may block on a wait \u2014 Channel.send may block\nsrc/main.we:9:16: warning[W1912]: function may block on a wait \u2014 Channel.receive may block\nsrc/main.we:19:19: warning[W1912]: function may block on a wait \u2014 TaskHandle.await may block\n"
+}

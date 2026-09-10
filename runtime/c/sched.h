@@ -91,6 +91,11 @@ long long __we_handle_await(void *h, long long *payload);
 long long __we_handle_cancel(void *h);
 void *__we_scope_enter(long long deadline_ms, long long collect_all);
 long long __we_scope_leave(void *scope);
+// The piercing-exit face (chapter 18: an early return, break, or continue
+// through an open scope discharges the scope's remaining task handles):
+// mark the scope's deadline-expired state and cancel its unfinished tasks
+// (the cooperative-return path); the joiner's own leave waits them out.
+void __we_scope_cancel(void *scope);
 
 // The face conc.c builds on.
 we_task *__we_cur_task(void);

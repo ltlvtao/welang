@@ -1,0 +1,16 @@
+{
+  "name": "run-bare-block-scope",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let s = \"outer\"\n    {\n        let s = \"inner\"\n        io.println(s)\n    }\n    io.println(s)\n\n    let k: Int64 = 1\n    {\n        k = 42\n    }\n    if k == 42 { io.println(\"deep-ok\") } else { io.println(\"deep-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "inner\nouter\ndeep-ok\n",
+  "stderr": ""
+}

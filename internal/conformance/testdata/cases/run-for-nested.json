@@ -1,0 +1,16 @@
+{
+  "name": "run-for-nested",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = 0\n    for i in 0..3 {\n        for j in 0..3 { n = n + 1 }\n    }\n    if n == 9 { io.println(\"nest-ok\") } else { io.println(\"nest-bad\") }\n\n    let z = 0\n    for i in 3..3 { z = z + 1 }\n    for i in 5..2 { z = z + 1 }\n    if z == 0 { io.println(\"empty-ok\") } else { io.println(\"empty-bad\") }\n\n    for _ in 0..2 { io.println(\"wild\") }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "nest-ok\nempty-ok\nwild\nwild\n",
+  "stderr": ""
+}

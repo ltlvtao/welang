@@ -37,7 +37,7 @@ func TestForeignDeclareEmission(t *testing.T) {
 	fb := &ast.ForeignBlock{ABI: "c", Line: 1, Col: 1, Items: []ast.Item{
 		foreignFn("abs", []ast.Param{i64Param("x")}, named("Int64")),
 	}}
-	// The entry rides along (the fixture笔误 T5 caught: a main-less
+	// The entry rides along (the fixture typo T5 caught: a main-less
 	// module stops at the defensive entry boundary — in the real pipeline
 	// E1305 owns that face ahead of codegen, so a fixture that skips
 	// typecheck must still carry a main).
@@ -129,6 +129,61 @@ func TestForeignNeverCall(t *testing.T) {
 	}
 	if !strings.Contains(ir, "unreachable") {
 		t.Fatalf("a Never call must be followed by unreachable:\n%s", ir)
+	}
+}
+
+// A Never-returning foreign call inside a branch arm diverges the arm.
+// The divergence protocol's guarded joins keep the emission well-formed:
+// after the arm's unreachable nothing may emit until a fresh label opens,
+// and the code after the branch lives on in the join. Red before the
+// guards (real toolchain): the arm's unconditional `br label %join`
+// landed after the `unreachable` — clang rejected the IR.
+func TestForeignNeverBranchJoin(t *testing.T) {
+	fb := &ast.ForeignBlock{ABI: "c", Line: 1, Col: 1, Items: []ast.Item{
+		foreignFn("abortNow", nil, named("Never")),
+	}}
+	never := &ast.ExprStmt{Expr: &ast.Call{Fn: ident("abortNow")}}
+	eq := func(lit string) ast.Expr { return binOp("==", ident("flag"), intLit(lit)) }
+	bind := &ast.Binding{Kw: "let", Name: "flag", Typ: named("Int64"), Init: intLit("0")}
+
+	for _, tc := range []struct {
+		name string
+		stmt ast.Stmt
+		join bool // an explicit br to the join is still emitted (an
+		// undiverged arm; the no-else shape reaches the join through the
+		// cond's false edge instead — no explicit branch exists by design)
+	}{
+		{"then-arm diverges", &ast.ExprStmt{Expr: &ast.If{
+			Cond: eq("1"),
+			Then: ast.Block{Items: []ast.Stmt{never}},
+		}}, false},
+		{"else-arm diverges", &ast.ExprStmt{Expr: &ast.If{
+			Cond: eq("0"),
+			Then: ast.Block{Items: []ast.Stmt{&ast.Binding{Kw: "let", Name: "_", Init: intLit("0")}}},
+			Else: blockOf(never),
+		}}, true},
+		{"both arms diverge", &ast.ExprStmt{Expr: &ast.If{
+			Cond: eq("1"),
+			Then: ast.Block{Items: []ast.Stmt{never}},
+			Else: blockOf(never),
+		}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ir, ni := Emit(foreignMod(fb, bind, tc.stmt, okReturn()).File, "demo")
+			if ni != nil {
+				t.Fatalf("unexpected boundary: %s", ni.What)
+			}
+			if strings.Contains(ir, "unreachable\n  br") {
+				t.Fatalf("an instruction lands after a terminator:\n%s", ir)
+			}
+			// The join label always opens — the post-if code lives there.
+			if !strings.Contains(ir, "ifjoin") {
+				t.Fatalf("missing join label:\n%s", ir)
+			}
+			if tc.join != strings.Contains(ir, "br label %ifjoin") {
+				t.Fatalf("join branch presence mismatch (want %v):\n%s", tc.join, ir)
+			}
+		})
 	}
 }
 

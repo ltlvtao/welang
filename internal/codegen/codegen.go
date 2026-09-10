@@ -18,6 +18,7 @@ package codegen
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -108,6 +109,11 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_yield", "declare i64 @__we_yield()"},
 	{"__we_scope_enter", "declare ptr @__we_scope_enter(i64, i64)"},
 	{"__we_scope_leave", "declare i64 @__we_scope_leave(ptr)"},
+	// T2 (design D1): the piercing-exit face — a return, break, or
+	// continue through an open scope discharges its remaining handles
+	// (chapter 18:231). Referenced only by programs that pierce, so every
+	// prior module's bytes ride unchanged.
+	{"__we_scope_cancel", "declare void @__we_scope_cancel(ptr)"},
 	{"__we_select_new", "declare ptr @__we_select_new()"},
 	{"__we_select_add_recv", "declare void @__we_select_add_recv(ptr, ptr)"},
 	{"__we_select_add_send", "declare void @__we_select_add_send(ptr, ptr, i64)"},
@@ -285,6 +291,12 @@ type emitter struct {
 	envMaps   []string        // task environment-block bitmap globals
 	cdsc      int             // fresh channel-element descriptor count
 
+	// T1 env scoping: per-block snapshots of the five env maps (see
+	// pushEnv/popEnv). Block-local registrations land on the block's
+	// clone and die with it — same-named outer bindings survive the
+	// join (follow-up #16).
+	frames []envFrame
+
 	// M10b program state (design D1/D3). Record and sum tables are
 	// module-keyed above; the fields below carry the module graph, the
 	// fn table, and the slot globals every We fn and every used std
@@ -316,16 +328,37 @@ type emitter struct {
 	foreignDecls []string
 	diverged     bool
 
+	// T2 statement-set state (design D1). assigned is the set of names
+	// the body being emitted writes (collectAssigned, a pre-pass): a
+	// name in it binds to a slot, one outside it keeps its SSA operand.
+	// allocas buffers the stack
+	// slots the body being emitted reserves — one entry per slot
+	// request, flushed behind the entry label when the body closes (see
+	// slot and bodyText). loopFrames is the break/continue target stack
+	// for the body being walked — one frame per open loop, recording
+	// the live-scope depth at its start so a piercing break or continue
+	// discharges exactly the scopes it crosses (chapter 18:231).
+	// scopeLive is the matching stack of compound scopes entered and
+	// not yet left: a piercing exit emits their cancel or collect leave
+	// at its own site, inner to outer. exit names the enclosing body's
+	// return protocol — what a return at any depth answers with (nil
+	// outside a body: the callback's single-expression face). inExit
+	// guards re-entry while one exit sequence is being emitted (a
+	// return inside a defer block is outside the set).
+	assigned   map[string]bool
+	allocas    []string
+	loopFrames []loopFrame
+	scopeLive  []liveScope
+	exit       *exitSite
+	inExit     bool
+
 	// M10b test state (design D5). tests collects the TestDecls pass one
 	// sees in test mode (module order, source order within); the tower
 	// emitter turns each into a test fn, its mocks, and a wrapper, and
-	// records the driver's step. testBody is set while a test fn's body
-	// is being emitted — the one body a valueless return may leave early
-	// from any depth (the checker's "(test)" context is valueless; a fn
-	// body keeps its one-tail-return discipline).
-	tests    []testRef
-	testBody bool
-	drives   []driveStep
+	// records the driver's step. A test body's valueless return rides
+	// exitSite{kind: exitTest} like every other body's exit.
+	tests  []testRef
+	drives []driveStep
 }
 
 // enterModule loads m's import faces into the working fields — call
@@ -440,13 +473,16 @@ func (e *emitter) bnd() *NotImplemented {
 	}
 }
 
-// scalarSlot is one numeric binding: a var owns an alloca (assignment
-// stores into it); a let holds its operand directly (SSA value or
-// immediate). Floats ride the same slots with their own arithmetic.
+// scalarSlot is one numeric binding. A name the body assigns owns a
+// memory slot and is read and written through it; one it only reads
+// holds its operand directly (an SSA value or an immediate). Which one a
+// name is follows from the body it binds in (collectAssigned), not from
+// its keyword: a var always owns a slot, a let owns one only when
+// something writes it. Floats ride the same slots with their own
+// arithmetic.
 type scalarSlot struct {
-	operand string // the let's value ("%v3" or "5"); empty for a var
-	alloca  string // the var's memory slot ("%v7"); empty for a let
-	isVar   bool
+	operand string // the read-only face's value ("%v3" or "5")
+	alloca  string // the addressable face's memory slot ("%v7")
 	isFloat bool
 }
 
@@ -465,10 +501,56 @@ type sumSlot struct {
 	errMsg   string   // a static Err report line (the `?` main tail writes it)
 }
 
-func (e *emitter) inst(s string)  { e.body.WriteString("  " + s + "\n") }
-func (e *emitter) label(s string) { e.body.WriteString(s + ":\n") }
+func (e *emitter) inst(s string) { e.body.WriteString("  " + s + "\n") }
+
+// label opens a fresh LLVM block, which by construction is not terminated:
+// whatever divergence (unreachable, a branch-arm return) closed the
+// previous block is over. The divergence protocol therefore clears the
+// flag here — a block open is the only thing that may follow a terminator,
+// and every join site guards its unconditional branch with the flag so no
+// instruction ever lands after one.
+func (e *emitter) label(s string) {
+	e.diverged = false
+	e.body.WriteString(s + ":\n")
+}
 func (e *emitter) value() string  { v := "v" + strconv.Itoa(e.fresh); e.fresh++; return v }
 func (e *emitter) use(sym string) { e.declUsed[sym] = true }
+
+// slot reserves one stack slot of typ for the body being emitted and
+// returns its pointer operand. The request takes its value number here —
+// the body's numbering is the emission order and does not move — while
+// the alloca's text buffers until the body closes (bodyText), where it
+// splices in behind the entry label.
+//
+// The hoist is not cosmetic: LLVM allocates a non-entry alloca afresh on
+// every pass through its block, and the stack it takes returns only when
+// the function does. A binding inside a loop would therefore grow the
+// stack by one slot per iteration — 30M iterations of an eight-byte slot
+// is a segmentation fault, not a slow program (measured: the T2-a probe
+// died at that count with the alloca visible in the loop body). A slot
+// reserved once at the entry is one frame slot reused, whatever the loop
+// count. Every slot the emitter hands out is scalar or a two-word sum
+// pair with no pointer identity outside its own loads and stores, so the
+// sharing across iterations is unobservable (a captured name reads its
+// value; nothing takes the address).
+func (e *emitter) slot(typ string) string {
+	v := e.value()
+	e.allocas = append(e.allocas, "  %"+v+" = alloca "+typ)
+	return "%" + v
+}
+
+// bodyText closes the body under emission: the slots reserved during it
+// splice in directly behind the entry label every define format writes.
+// The buffer belongs to the body, so taking the text clears it (each
+// body's caller restores whatever buffer was live around it).
+func (e *emitter) bodyText() string {
+	if len(e.allocas) == 0 {
+		return e.body.String()
+	}
+	al := strings.Join(e.allocas, "\n") + "\n"
+	e.allocas = nil
+	return al + e.body.String()
+}
 
 // ForeignName is one foreign fn entry the link stage must resolve: the
 // module that declares it, the entry's source name (the Q3 ruling: the
@@ -538,6 +620,8 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		usedRecs:   make(map[string]bool),
 		declUsed:   make(map[string]bool),
 		ctx:        ctxMain,
+		exit:       &exitSite{kind: exitMain},
+		assigned:   make(map[string]bool),
 		scalars:    make(map[string]scalarSlot),
 		sums2:      make(map[string]sumSlot),
 		prims:      make(map[string]string),
@@ -706,6 +790,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		}
 		e.enterModule(root.Key)
 		e.mainRet = entry.Ret
+		collectAssigned(entry.Body.Items, e.assigned)
 		items := entry.Body.Items
 		if len(items) == 0 {
 			return "", bndMain()
@@ -842,8 +927,11 @@ func (e *emitter) emitStmt(st ast.Stmt) *NotImplemented {
 		}
 		return e.emitLetBinding(s)
 	case *ast.Assign:
+		if s.Field != "" {
+			return e.bnd() // the record field write is design D4's
+		}
 		slot, ok := e.scalars[s.Name]
-		if !ok || !slot.isVar {
+		if !ok || slot.alloca == "" {
 			return e.bnd()
 		}
 		op, isF, ni := e.emitNumExpr(s.Value)
@@ -861,6 +949,16 @@ func (e *emitter) emitStmt(st ast.Stmt) *NotImplemented {
 		return nil
 	case *ast.While:
 		return e.emitWhile(s)
+	case *ast.Loop:
+		return e.emitLoop(s)
+	case *ast.ForStmt:
+		return e.emitFor(s)
+	case *ast.Break:
+		return e.emitBreak()
+	case *ast.Continue:
+		return e.emitContinue()
+	case *ast.Return:
+		return e.emitReturn(s)
 	case *ast.Defer:
 		// Inverted emission: the block runs at body exit, reverse
 		// registration order (the main tail and every task thunk drain
@@ -898,6 +996,10 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 				return e.bnd()
 			}
 			if s.Name != "_" {
+				if e.assigned[s.Name] {
+					e.bindScalarSlot(s.Name, op, isF)
+					return nil
+				}
 				e.scalars[s.Name] = scalarSlot{operand: op, isFloat: isF}
 			}
 			return nil
@@ -915,6 +1017,16 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			return nil
 		}
 		if v, ok := e.scalars[init.Name]; ok {
+			if e.assigned[s.Name] {
+				// The alias is written, so it needs its own storage: copy
+				// the value in rather than share the source's slot.
+				op := v.operand
+				if v.alloca != "" {
+					op = e.loadNum(v.alloca, v.isFloat)
+				}
+				e.bindScalarSlot(s.Name, op, v.isFloat)
+				return nil
+			}
 			e.scalars[s.Name] = v
 			return nil
 		}
@@ -941,11 +1053,17 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 		}
 		return nil
 	case *ast.Binary:
-		op, _, ni := e.emitNumExpr(init)
+		op, isF, ni := e.emitNumExpr(init)
 		if ni != nil {
 			return ni
 		}
 		if s.Name != "_" {
+			if e.assigned[s.Name] {
+				e.bindScalarSlot(s.Name, op, isF)
+				return nil
+			}
+			// The SSA face drops the value's domain (design D10-1, T11's
+			// fix); a slot has to carry it, so only that path reads it.
 			e.scalars[s.Name] = scalarSlot{operand: op}
 		}
 		return nil
@@ -1000,6 +1118,10 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 		return nil
 	case ckI64:
 		if name != "_" {
+			if e.assigned[name] {
+				e.bindScalarSlot(name, res.i64, res.isFloat)
+				return nil
+			}
 			e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat}
 		}
 		return nil
@@ -1035,6 +1157,12 @@ func (e *emitter) emitExprStmt(x ast.Expr) *NotImplemented {
 	case *ast.Call:
 		_, ni := e.emitCall(v, nil)
 		return ni
+	case *ast.BlockExpr:
+		// A bare block statement: one more block scope in this body, its
+		// statements walking in order. The block's value, if the tail
+		// carries one, is discarded here — the check face owns that
+		// (E0605), so codegen never sees a non-unit tail.
+		return e.emitBlockStmts(v.Block.Items)
 	case *ast.If:
 		return e.emitIf(v)
 	case *ast.Match:
@@ -1184,7 +1312,7 @@ func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
 		return op, isF, nil
 	case *ast.Ident:
 		if s, ok := e.scalars[v.Name]; ok {
-			if s.isVar {
+			if s.alloca != "" {
 				return e.loadNum(s.alloca, s.isFloat), s.isFloat, nil
 			}
 			return s.operand, s.isFloat, nil
@@ -1352,15 +1480,14 @@ func (e *emitter) emitVarBinding(s *ast.Binding) *NotImplemented {
 	if isF {
 		typ = "double"
 	}
-	v := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca %s", v, typ))
+	slot := e.slot(typ)
 	if isF {
-		e.inst(fmt.Sprintf("store double %s, ptr %%%s", op, v))
+		e.inst(fmt.Sprintf("store double %s, ptr %s", op, slot))
 	} else {
-		e.inst(fmt.Sprintf("store i64 %s, ptr %%%s", op, v))
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", op, slot))
 	}
 	if s.Name != "_" {
-		e.scalars[s.Name] = scalarSlot{alloca: "%" + v, isVar: true, isFloat: isF}
+		e.scalars[s.Name] = scalarSlot{alloca: slot, isFloat: isF}
 	}
 	return nil
 }
@@ -1693,13 +1820,11 @@ func (e *emitter) emitSumCall3(sym, ptr, val string, variants []string) (callRes
 	e.use(sym)
 	tag := e.value()
 	e.inst(fmt.Sprintf("%%%s = call i64 @%s(ptr %s, i64 %s)", tag, sym, ptr, val))
-	tagSlot := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", tagSlot))
-	e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", tag, tagSlot))
-	paySlot := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", paySlot))
-	e.inst(fmt.Sprintf("store i64 0, ptr %%%s", paySlot))
-	return callResult{kind: ckSum, sum: sumSlot{tag: "%" + tagSlot, pay: "%" + paySlot, variants: variants}}, nil
+	tagSlot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", tag, tagSlot))
+	paySlot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", paySlot))
+	return callResult{kind: ckSum, sum: sumSlot{tag: tagSlot, pay: paySlot, variants: variants}}, nil
 }
 
 // emitSumCall is the receive/await/tryReceive shape: the out slot takes
@@ -1708,19 +1833,16 @@ func (e *emitter) emitSumCall3(sym, ptr, val string, variants []string) (callRes
 // the return value to the variant names the match arms carry.
 func (e *emitter) emitSumCall(sym, ptr string, variants []string) (callResult, *NotImplemented) {
 	e.use(sym)
-	out := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", out))
+	out := e.slot("i64")
 	tag := e.value()
-	e.inst(fmt.Sprintf("%%%s = call i64 @%s(ptr %s, ptr %%%s)", tag, sym, ptr, out))
-	tagSlot := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", tagSlot))
-	e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", tag, tagSlot))
-	paySlot := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", paySlot))
+	e.inst(fmt.Sprintf("%%%s = call i64 @%s(ptr %s, ptr %s)", tag, sym, ptr, out))
+	tagSlot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", tag, tagSlot))
+	paySlot := e.slot("i64")
 	pay := e.value()
-	e.inst(fmt.Sprintf("%%%s = load i64, ptr %%%s", pay, out))
-	e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", pay, paySlot))
-	return callResult{kind: ckSum, sum: sumSlot{tag: "%" + tagSlot, pay: "%" + paySlot, variants: variants}}, nil
+	e.inst(fmt.Sprintf("%%%s = load i64, ptr %s", pay, out))
+	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", pay, paySlot))
+	return callResult{kind: ckSum, sum: sumSlot{tag: tagSlot, pay: paySlot, variants: variants}}, nil
 }
 
 // emitPrimCall is the method dispatch over the six families plus the
@@ -1857,18 +1979,26 @@ func (e *emitter) emitCallback(cl *ast.Closure) (string, *NotImplemented) {
 		return "", bndCallback()
 	}
 	savedCtx, savedScalars, savedBody := e.ctx, e.scalars, e.body
+	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedDiverged := e.diverged
+	savedExit, savedInExit := e.exit, e.inExit
 	e.ctx = ctxCallback
 	e.scalars = map[string]scalarSlot{cl.Params[0].Name: {operand: "%v0"}}
 	e.body = strings.Builder{}
+	e.allocas = nil
+	e.assigned = make(map[string]bool)
 	e.diverged = false
+	// The callback is a single expression, not a body: no return protocol.
+	e.exit, e.inExit = nil, false
 	op, _, ni := e.emitNumExpr(es.Expr)
 	// The callback's text snapshots before the restore — reading e.body
 	// after would return the caller's builder (the swap-back already
 	// happened), and the callback's own instructions would vanish.
-	cb := e.body.String()
+	cb := e.bodyText()
 	diverged := e.diverged
 	e.body, e.ctx, e.scalars, e.diverged = savedBody, savedCtx, savedScalars, savedDiverged
+	e.allocas, e.assigned = savedAllocas, savedAssigned
+	e.exit, e.inExit = savedExit, savedInExit
 	if ni != nil || diverged {
 		// A diverged predicate is outside the face by contract: the
 		// callback owes its caller a value (a Never call returns none).
@@ -1910,41 +2040,56 @@ func (e *emitter) condI64(x ast.Expr) (string, *NotImplemented) {
 	return "%" + v, nil
 }
 
-// emitBlockStmts emits a nested block's statements (a block introduces
-// no boundary of its own — the M9b set is flat).
+// envFrame is one block's environment snapshot: push clones the five
+// per-body env maps onto the block's own view, pop restores the saved
+// maps. Registrations a block makes therefore live exactly as long as
+// the block's own emission — never past its join — and a same-named
+// outer binding keeps its own operand underneath (the scoping the
+// follow-up #16 dominance fix rests on). Cloning is cheap: the maps
+// hold a body's local names only.
+type envFrame struct {
+	scalars map[string]scalarSlot
+	strEnv  map[string]strBinding
+	gcEnv   map[string]gcBinding
+	sums2   map[string]sumSlot
+	prims   map[string]string
+}
+
+// pushEnv opens one block scope: the maps are cloned (maps.Clone keeps
+// a nil source nil — a fresh fn/task context's empty maps included) and
+// the previous views saved for popEnv.
+func (e *emitter) pushEnv() {
+	e.frames = append(e.frames, envFrame{
+		scalars: e.scalars, strEnv: e.strEnv, gcEnv: e.gcEnv,
+		sums2: e.sums2, prims: e.prims,
+	})
+	e.scalars = maps.Clone(e.scalars)
+	e.strEnv = maps.Clone(e.strEnv)
+	e.gcEnv = maps.Clone(e.gcEnv)
+	e.sums2 = maps.Clone(e.sums2)
+	e.prims = maps.Clone(e.prims)
+}
+
+// popEnv closes one block scope, restoring the enclosing views.
+func (e *emitter) popEnv() {
+	f := e.frames[len(e.frames)-1]
+	e.frames = e.frames[:len(e.frames)-1]
+	e.scalars, e.strEnv, e.gcEnv, e.sums2, e.prims = f.scalars, f.strEnv, f.gcEnv, f.sums2, f.prims
+}
+
+// emitBlockStmts emits a nested block's statements: a block introduces no
+// boundary of its own — the statements walk in order, and a return at any
+// depth is the enclosing body's own exit (emitReturn carries the exit
+// sequence). The body is one block scope: bindings it makes roll back
+// when it closes.
 func (e *emitter) emitBlockStmts(items []ast.Stmt) *NotImplemented {
+	e.pushEnv()
+	defer e.popEnv()
 	for _, st := range items {
-		if r, ok := st.(*ast.Return); ok {
-			// Returns sit at the body tail only — the one widening is the
-			// test context's valueless early exit (a failed test's source
-			// discharges its scope handles through a return the runtime
-			// never reaches past the task-fail tail).
-			if !e.testBody {
-				return e.bnd()
-			}
-			if ni := e.emitTestReturn(r); ni != nil {
-				return ni
-			}
-			continue
-		}
 		if ni := e.emitStmt(st); ni != nil {
 			return ni
 		}
 	}
-	return nil
-}
-
-// emitTestReturn emits the test context's valueless early exit: ret void
-// plus the never-reached continuation label that keeps the block
-// structure well-formed for whatever lexically follows.
-func (e *emitter) emitTestReturn(r *ast.Return) *NotImplemented {
-	if r.HasValue {
-		return e.bnd()
-	}
-	e.inst("ret void")
-	n := e.blocks
-	e.blocks++
-	e.label(fmt.Sprintf("tr%d", n))
 	return nil
 }
 
@@ -1973,7 +2118,13 @@ func (e *emitter) emitIf(s *ast.If) *NotImplemented {
 	if ni := e.emitBlockStmts(s.Then.Items); ni != nil {
 		return ni
 	}
-	e.inst(fmt.Sprintf("br label %%%s", join))
+	// The join branch is guarded: an arm that ended diverged (unreachable,
+	// or a return/break once those land) already terminated its block —
+	// nothing may follow the terminator. The join label still opens so the
+	// code after the if has a block to live in.
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", join))
+	}
 	if s.Else != nil {
 		e.label(elseL)
 		if els, ok := s.Else.(*ast.BlockExpr); ok {
@@ -1987,15 +2138,97 @@ func (e *emitter) emitIf(s *ast.If) *NotImplemented {
 			// The nested if already closed on its own join; branch to
 			// this one.
 		}
-		e.inst(fmt.Sprintf("br label %%%s", join))
+		if !e.diverged {
+			e.inst(fmt.Sprintf("br label %%%s", join))
+		}
 	}
 	e.label(join)
 	return nil
 }
 
+// exitKind names the enclosing body's return protocol (T2 deep returns,
+// chapter 3's return and chapter 18's piercing exits).
+type exitKind int
+
+const (
+	exitMain exitKind = iota // the entry's Result face: ret i32 0, or __we_fail
+	exitFn                   // the declared fn's own ABI
+	exitTask                 // the thunk's i64 value; no root pops (its own window)
+	exitTest                 // valueless: ret void
+)
+
+// exitSite is the return protocol of the body being walked — what a
+// `return` emit at any depth answers with.
+type exitSite struct {
+	kind exitKind
+	abi  fnAbi // exitFn only
+}
+
+// loopFrame is one open loop's break/continue targets (chapter 3: the
+// innermost enclosing loop). scopeAt is len(scopeLive) when the loop
+// opened: every scope opened at or above it is lexically inside the loop
+// body, and a piercing exit from the loop must discharge exactly those.
+type loopFrame struct {
+	brk     string // break target: the loop's exit label
+	cont    string // continue target: the re-evaluation point
+	scopeAt int
+}
+
+// liveScope is one compound scope entered and not yet left: the handle
+// __we_scope_enter returned and whether its exit collects (joins across
+// panics) instead of cancelling (the fail-fast faces).
+type liveScope struct {
+	handle  string
+	collect bool
+}
+
+// pierce discharges the live scopes at [from, top), innermost first
+// (chapter 18:231 — an early return, break, or continue through an open
+// scope discharges the scope's remaining handles without violation). A
+// collect scope joins: its leave parks until every task returns. A plain
+// or timeout scope is fail-fast: cancel marks it timed out and cancels
+// its unfinished tasks, then its leave waits out the cooperative returns.
+func (e *emitter) pierce(from int) {
+	for i := len(e.scopeLive) - 1; i >= from; i-- {
+		ls := e.scopeLive[i]
+		if !ls.collect {
+			e.use("__we_scope_cancel")
+			e.inst(fmt.Sprintf("call void @__we_scope_cancel(ptr %s)", ls.handle))
+		}
+		e.use("__we_scope_leave")
+		e.inst(fmt.Sprintf("call i64 @__we_scope_leave(ptr %s)", ls.handle))
+	}
+}
+
+// emitBreak leaves the innermost loop: discharge the scopes the exit
+// crosses, branch to the loop's exit label, and mark the block diverged.
+func (e *emitter) emitBreak() *NotImplemented {
+	if len(e.loopFrames) == 0 {
+		return e.bnd() // E0201 owns this face; the bnd is the checked-world defense
+	}
+	fr := e.loopFrames[len(e.loopFrames)-1]
+	e.pierce(fr.scopeAt)
+	e.inst(fmt.Sprintf("br label %%%s", fr.brk))
+	e.diverged = true
+	return nil
+}
+
+// emitContinue restarts the innermost loop: the same discharge, then the
+// branch back to the re-evaluation point.
+func (e *emitter) emitContinue() *NotImplemented {
+	if len(e.loopFrames) == 0 {
+		return e.bnd()
+	}
+	fr := e.loopFrames[len(e.loopFrames)-1]
+	e.pierce(fr.scopeAt)
+	e.inst(fmt.Sprintf("br label %%%s", fr.cont))
+	e.diverged = true
+	return nil
+}
+
 // emitWhile emits the loop: head re-evaluates the condition, the body
-// branches back, the exit label continues. break/continue are outside
-// the M9b statement set (the boundary word names them absent).
+// branches back, the exit label continues. The loop frame opened around
+// the body gives break and continue their targets.
 func (e *emitter) emitWhile(s *ast.While) *NotImplemented {
 	n := e.blocks
 	e.blocks++
@@ -2010,12 +2243,257 @@ func (e *emitter) emitWhile(s *ast.While) *NotImplemented {
 	}
 	e.inst(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", c, body, exit))
 	e.label(body)
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: head, scopeAt: len(e.scopeLive)})
 	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
 		return ni
 	}
+	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
+	// The back branch is guarded the same way the if joins are: a body
+	// that diverged ended in its own terminator, and only the head's false
+	// edge reaches the exit label then.
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", head))
+	}
+	e.label(exit)
+	return nil
+}
+
+// drainDefers runs the deferred blocks collected for this body in reverse
+// registration order (chapter 3) at the exit path being emitted. The list
+// stays intact: every exit path drains its own copy — a deep return drains
+// at the return site, the tail drains in the tail's block, and a loop's
+// continuation drains in its block. Each is a distinct runtime path, so
+// each owes the body's defers; consuming the list at the first drain would
+// leave every later path without its cleanup. A defer registered by the
+// drain's own statements cannot re-enter (E0204 keeps defers at the fn
+// body's top level).
+func (e *emitter) drainDefers() *NotImplemented {
+	for i := len(e.defers) - 1; i >= 0; i-- {
+		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
+			return ni
+		}
+	}
+	return nil
+}
+
+// popRoots discharges the body's root pushes (the entry and the fns pop
+// at exit; the task thunk pops nothing — its pushes ride the task's own
+// gc window, retired at task end).
+func (e *emitter) popRoots() {
+	for i := 0; i < e.pushes; i++ {
+		e.use("__we_root_pop")
+		e.inst("call void @__we_root_pop()")
+	}
+}
+
+// emitReturn emits one return at any depth (T2 deep returns, chapter 3):
+// the value operand computes first — it may read bindings the exit is
+// about to leave behind — then every open scope pierces innermost-first
+// (chapter 18:231: a return through a scope discharges its remaining
+// handles), the deferred blocks drain in reverse registration order, the
+// body's root pushes pop, and the ret closes the block. The block is
+// marked diverged so the enclosing structure guards its joins and the
+// statements after the return never emit.
+func (e *emitter) emitReturn(r *ast.Return) *NotImplemented {
+	if e.exit == nil || e.inExit {
+		return e.bnd() // outside a body, or inside another exit's emission
+	}
+	e.inExit = true
+	defer func() { e.inExit = false }()
+	switch e.exit.kind {
+	case exitTest:
+		// The test context is valueless, like its tail.
+		if r.HasValue {
+			return e.bnd()
+		}
+		e.pierce(0)
+		if ni := e.drainDefers(); ni != nil {
+			return ni
+		}
+		e.popRoots()
+		e.inst("ret void")
+		e.diverged = true
+		return nil
+	case exitMain:
+		// The entry's Result face is the tail's own dispatch: Ok unit
+		// completes, every other shape stops.
+		if !r.HasValue {
+			return bndMain()
+		}
+		e.pierce(0)
+		if ni := e.emitTail(r.Value); ni != nil {
+			return ni
+		}
+		e.diverged = true
+		return nil
+	case exitTask:
+		// The thunk's value: a valueless return answers the same default
+		// the value-less tail does.
+		val := "0"
+		if r.HasValue {
+			op, isF, ni := e.emitNumExpr(r.Value)
+			if ni != nil || isF {
+				return bndTask()
+			}
+			val = op
+		}
+		e.pierce(0)
+		if ni := e.drainDefers(); ni != nil {
+			return ni
+		}
+		e.inst("ret i64 " + val)
+		e.diverged = true
+		return nil
+	default: // exitFn
+		ret, ni := e.fnRetOperand(e.exit.abi, r.Value, r.HasValue)
+		if ni != nil {
+			return ni
+		}
+		e.pierce(0)
+		if ni := e.drainDefers(); ni != nil {
+			return ni
+		}
+		e.popRoots()
+		e.inst("ret " + ret)
+		e.diverged = true
+		return nil
+	}
+}
+
+// emitLoop emits `loop block` (chapter 3): no condition — the body
+// branches back to itself, break is the only exit, continue restarts the
+// body. The frame's two targets are the same label, which is exactly the
+// form's semantics.
+func (e *emitter) emitLoop(s *ast.Loop) *NotImplemented {
+	n := e.blocks
+	e.blocks++
+	body := fmt.Sprintf("lpbody%d", n)
+	exit := fmt.Sprintf("lpexit%d", n)
+	e.inst(fmt.Sprintf("br label %%%s", body))
+	e.label(body)
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: body, scopeAt: len(e.scopeLive)})
+	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+		return ni
+	}
+	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", body))
+	}
+	e.label(exit)
+	return nil
+}
+
+// emitFor emits `for pat in iter` — chapter 5's iteration clause under
+// chapter 11's protocol: the source expression evaluates once, the
+// iterator is built once, and iteration runs until exhaustion. The Range
+// source emits as a counted loop rather than the materialized array
+// design D6 first named; the two are observationally identical for a
+// Range (see for_test.go's header for the argument), and the counted loop
+// needs neither the collection carrier nor a heap. Both bounds evaluate
+// here, in source order, before the head block opens, so a body that
+// assigns through a name the bound read cannot change the count; the
+// counter itself lives in a slot reserved for the whole body and is not
+// nameable from source, so nothing the body does can disturb the
+// sequence. A String source needs the runtime's rune walk (T4) and a
+// List its carrier (T7); both stop at this build's body boundary.
+func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
+	rng, ok := s.Iter.(*ast.Binary)
+	if !ok || rng.Op != ".." {
+		return e.bnd()
+	}
+	lo, lof, ni := e.emitNumExpr(rng.L)
+	if ni != nil {
+		return ni
+	}
+	hi, hif, ni := e.emitNumExpr(rng.R)
+	if ni != nil {
+		return ni
+	}
+	if lof || hif {
+		return e.bnd() // E0902 keeps a Range over the integer types
+	}
+	n := e.blocks
+	e.blocks++
+	head := fmt.Sprintf("forhead%d", n)
+	body := fmt.Sprintf("forbody%d", n)
+	step := fmt.Sprintf("forcont%d", n)
+	exit := fmt.Sprintf("forexit%d", n)
+	counter := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", lo, counter))
+	e.inst(fmt.Sprintf("br label %%%s", head))
+	e.label(head)
+	// The head reads the counter and tests it against the end bound's
+	// register: the register is why a bound the body reassigns cannot cut
+	// the sequence short.
+	cur := e.loadNum(counter, false)
+	cmp := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp slt i64 %s, %s", cmp, cur, hi))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", cmp, body, exit))
+	e.label(body)
+	// The loop variable is bound afresh each pass and dies with the loop:
+	// its own frame, so an assignment in the body writes the binding's
+	// slot (when the body assigns it) while the step still reads the
+	// counter's.
+	e.pushEnv()
+	defer e.popEnv()
+	if ni := e.bindForPattern(s.Pat, cur); ni != nil {
+		return ni
+	}
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, scopeAt: len(e.scopeLive)})
+	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+		return ni
+	}
+	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", step))
+	}
+	// The step is its own block because continue lands on it: a continue
+	// that skipped the step would spin on one element forever. It re-reads
+	// the counter rather than reusing the head's register — the slot is
+	// the loop's state, the head's load is one pass's view of it.
+	e.label(step)
+	next := e.emitStep(e.loadNum(counter, false))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", next, counter))
 	e.inst(fmt.Sprintf("br label %%%s", head))
 	e.label(exit)
 	return nil
+}
+
+// bindForPattern binds one pass's element under the head pattern. `_`
+// binds nothing. A name binds like any other scalar binding: the body
+// assigns it, so it takes a slot; otherwise it stays the register the
+// element arrived in. Other head shapes (the tuple head of T2-c, the
+// scope resource) are not this build's.
+func (e *emitter) bindForPattern(pat ast.Pattern, op string) *NotImplemented {
+	switch p := pat.(type) {
+	case *ast.PatWildcard:
+		return nil
+	case *ast.PatBinding:
+		if p.Name == "_" {
+			return nil
+		}
+		if e.assigned[p.Name] {
+			e.bindScalarSlot(p.Name, op, false)
+			return nil
+		}
+		e.scalars[p.Name] = scalarSlot{operand: op}
+		return nil
+	default:
+		return e.bnd()
+	}
+}
+
+// emitStep advances the loop counter by one. The add is unchecked because
+// the step is provably reachable only below the end bound: the body — and
+// so the step block, whether by fallthrough or by continue — is entered
+// only on the head's `counter < hi` test, and hi is an i64, so the counter
+// at the step is at most MaxInt64-1 and the sum cannot wrap. The counter
+// is the loop's own state, not a source-visible value, so there is no
+// chapter 7 faces to report through either.
+func (e *emitter) emitStep(cur string) string {
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = add i64 %s, 1", v, cur))
+	return "%" + v
 }
 
 // emitMatch emits the two-slot sum match: load the discriminant, test
@@ -2053,7 +2531,9 @@ func (e *emitter) emitMatch(s *ast.Match) *NotImplemented {
 			if ni := e.emitMatchArm(arm, slot); ni != nil {
 				return ni
 			}
-			e.inst(fmt.Sprintf("br label %%%s", join))
+			if !e.diverged {
+				e.inst(fmt.Sprintf("br label %%%s", join))
+			}
 			fired = true
 			continue
 		}
@@ -2076,30 +2556,45 @@ func (e *emitter) emitMatch(s *ast.Match) *NotImplemented {
 		if ni := e.emitMatchArm(arm, slot); ni != nil {
 			return ni
 		}
-		e.inst(fmt.Sprintf("br label %%%s", join))
+		if !e.diverged {
+			e.inst(fmt.Sprintf("br label %%%s", join))
+		}
 		e.label(next)
 	}
 	if !fired {
-		e.inst(fmt.Sprintf("br label %%%s", join)) // typecheck exhausted; defensive
+		// typecheck exhausted; defensive — the final variant arm's
+		// fall-through block (just labeled `next`) is open, so this
+		// branch is unconditionally safe.
+		e.inst(fmt.Sprintf("br label %%%s", join))
 	}
 	e.label(join)
 	return nil
 }
 
 // emitMatchArm emits one arm's body; a PatVariant payload binding loads
-// the payload word first.
+// the payload word first. The whole arm is one block scope — the payload
+// binding and everything the body registers roll back when the arm
+// closes, so no arm name is readable past the join (the follow-up #16
+// leak this frame seals).
 func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot) *NotImplemented {
+	e.pushEnv()
 	if pv, ok := arm.Pat.(*ast.PatVariant); ok && len(pv.Args) == 1 {
 		if b, ok := pv.Args[0].(*ast.PatBinding); ok && b.Name != "_" {
 			op := e.loadNum(slot.pay, false)
-			e.scalars[b.Name] = scalarSlot{operand: op}
+			if e.assigned[b.Name] {
+				e.bindScalarSlot(b.Name, op, false)
+			} else {
+				e.scalars[b.Name] = scalarSlot{operand: op}
+			}
 		}
 	}
 	blk, ok := arm.Body.(*ast.BlockExpr)
 	if !ok {
 		return e.bnd() // arm bodies are blocks in the M9b set
 	}
-	return e.emitBlockStmts(blk.Block.Items)
+	ni := e.emitBlockStmts(blk.Block.Items)
+	e.popEnv()
+	return ni
 }
 
 // emitPanic emits `panic("msg")`: the NUL-terminated message constant
@@ -2330,6 +2825,144 @@ func (e *emitter) emitSumSource(x ast.Expr) (callResult, *NotImplemented) {
 	}
 }
 
+// collectAssigned walks a body for the names its statements assign. The
+// walk runs before anything emits: a name the body writes — however deep
+// the write sits — needs an address from its binding on, so the binding
+// site must already know. A nested body (a task body, a callback) is
+// skipped: it binds its own environments, an assignment inside it cannot
+// reach this body's names, and its own walk covers what it emits.
+func collectAssigned(items []ast.Stmt, set map[string]bool) {
+	var walkExpr func(ast.Expr)
+	var walkStmt func(ast.Stmt)
+	walkExpr = func(x ast.Expr) {
+		switch v := x.(type) {
+		case *ast.BlockExpr:
+			for _, st := range v.Block.Items {
+				walkStmt(st)
+			}
+		case *ast.If:
+			walkExpr(v.Cond)
+			for _, st := range v.Then.Items {
+				walkStmt(st)
+			}
+			if v.Else != nil {
+				walkExpr(v.Else)
+			}
+		case *ast.Match:
+			walkExpr(v.Scrutinee)
+			for _, a := range v.Arms {
+				if a.Guard != nil {
+					walkExpr(a.Guard)
+				}
+				walkExpr(a.Body)
+			}
+		case *ast.ScopeExpr:
+			if v.Timeout != nil {
+				walkExpr(v.Timeout)
+			}
+			for _, st := range v.Body.Items {
+				walkStmt(st)
+			}
+		case *ast.SelectExpr:
+			for _, c := range v.Cases {
+				walkExpr(c.Source)
+				walkExpr(c.Body)
+			}
+		case *ast.TaskExpr, *ast.Closure:
+			// A nested body's assignments belong to its own walk.
+		case *ast.Unary:
+			walkExpr(v.X)
+		case *ast.Binary:
+			walkExpr(v.L)
+			walkExpr(v.R)
+		case *ast.Call:
+			walkExpr(v.Fn)
+			for _, a := range v.Args {
+				walkExpr(a)
+			}
+		case *ast.Member:
+			walkExpr(v.Recv)
+		case *ast.Prop:
+			walkExpr(v.X)
+		case *ast.Tuple:
+			for _, el := range v.Elems {
+				walkExpr(el)
+			}
+		case *ast.ListLit:
+			for _, el := range v.Elems {
+				walkExpr(el)
+			}
+		case *ast.Construct:
+			walkExpr(v.Base)
+			for _, f := range v.Fields {
+				walkExpr(f.Value)
+			}
+		}
+	}
+	walkStmt = func(st ast.Stmt) {
+		switch v := st.(type) {
+		case *ast.Assign:
+			set[v.Name] = true
+			walkExpr(v.Value)
+		case *ast.Binding:
+			walkExpr(v.Init)
+		case *ast.Return:
+			if v.Value != nil {
+				walkExpr(v.Value)
+			}
+		case *ast.ExprStmt:
+			walkExpr(v.Expr)
+		case *ast.While:
+			walkExpr(v.Cond)
+			for _, s := range v.Body.Items {
+				walkStmt(s)
+			}
+		case *ast.Loop:
+			for _, s := range v.Body.Items {
+				walkStmt(s)
+			}
+		case *ast.ForStmt:
+			walkExpr(v.Iter)
+			for _, s := range v.Body.Items {
+				walkStmt(s)
+			}
+		case *ast.ScopeRes:
+			for _, b := range v.Binds {
+				walkExpr(b.Val)
+			}
+			for _, s := range v.Body.Items {
+				walkStmt(s)
+			}
+		case *ast.Defer:
+			for _, s := range v.Block.Items {
+				walkStmt(s)
+			}
+		}
+	}
+	for _, st := range items {
+		walkStmt(st)
+	}
+}
+
+// bindScalarSlot binds one numeric name the body assigns to a stack slot
+// of the value's own width: the assignment stores through the name, so
+// the name must live at an address. The width is the value's, decided
+// here because a slot carries its type — the SSA face can afford to drop
+// the flag (design D10-1's open defect), a slot cannot.
+func (e *emitter) bindScalarSlot(name, op string, isF bool) {
+	typ := "i64"
+	if isF {
+		typ = "double"
+	}
+	slot := e.slot(typ)
+	if isF {
+		e.inst(fmt.Sprintf("store double %s, ptr %s", op, slot))
+	} else {
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", op, slot))
+	}
+	e.scalars[name] = scalarSlot{alloca: slot, isFloat: isF}
+}
+
 // collectCaptures walks a task body for identifier reads that name
 // bindings of the enclosing scope: primitive handles (traced pointer
 // slots) and scalars (plain i64 slots). Strings, records, and sums stop
@@ -2502,19 +3135,29 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	// at task end), so the thunk tail returns without popping.
 	name := fmt.Sprintf("@.task%d", len(e.thunks))
 	savedCtx, savedBody := e.ctx, e.body
+	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedFrames := e.frames
 	savedDiverged := e.diverged
+	savedExit, savedInExit := e.exit, e.inExit
+	savedLoops, savedScopes := e.loopFrames, e.scopeLive
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.frames = savedFrames
 		e.diverged = savedDiverged
+		e.exit, e.inExit = savedExit, savedInExit
+		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxTask
 	e.body = strings.Builder{}
+	e.allocas = nil
+	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
@@ -2522,6 +3165,12 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	e.strEnv = make(map[string]strBinding)
 	e.gcEnv = make(map[string]gcBinding)
 	e.defers = nil
+	// The thunk is its own body: a return inside it answers i64, whatever
+	// its depth, and neither a loop nor a scope of the enclosing body
+	// crosses the boundary.
+	e.exit = &exitSite{kind: exitTask}
+	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	collectAssigned(t.Body.Items, e.assigned)
 	caps.ptr = "%env"
 	e.caps = caps
 	val := "0"
@@ -2541,10 +3190,6 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 		if e.diverged {
 			break // a Never call already terminated the task body
 		}
-		if _, ok := st.(*ast.Return); ok {
-			restore()
-			return callResult{}, bndTask()
-		}
 		if ni := e.emitStmt(st); ni != nil {
 			restore()
 			return callResult{}, ni
@@ -2554,19 +3199,17 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 		// A diverged task body ends at its unreachable — no defers, no
 		// value tail (the process the Never call ends takes the task
 		// with it).
-		body := e.body.String()
+		body := e.bodyText()
 		restore()
 		e.thunks = append(e.thunks, fmt.Sprintf(
 			"define internal i64 %s(ptr %%env) {\nentry:\n%s}\n", name, body))
 	} else {
 		// Deferred blocks invert at the tail, reverse registration order.
-		for i := len(e.defers) - 1; i >= 0; i-- {
-			if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
-				restore()
-				return callResult{}, ni
-			}
+		if ni := e.drainDefers(); ni != nil {
+			restore()
+			return callResult{}, ni
 		}
-		body := e.body.String()
+		body := e.bodyText()
 		restore()
 		e.thunks = append(e.thunks, fmt.Sprintf(
 			"define internal i64 %s(ptr %%env) {\nentry:\n%s  ret i64 %s\n}\n",
@@ -2612,22 +3255,24 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 			}
 		}
 	}
+	// The scope body is one block scope: bindings made inside (tasks,
+	// scalars) roll back at leave, so nothing the body registered is
+	// readable after it.
+	e.pushEnv()
+	e.scopeLive = append(e.scopeLive, liveScope{handle: "%" + sc, collect: s.CollectAll})
 	for _, st := range items {
-		if r, ok := st.(*ast.Return); ok {
-			// A nested block's Return discipline: fn bodies take returns
-			// at the tail only; the test context's valueless early exit
-			// rides through the scope the same way.
-			if !e.testBody {
-				return callResult{}, e.bnd()
-			}
-			if ni := e.emitTestReturn(r); ni != nil {
-				return callResult{}, ni
-			}
-			continue
-		}
 		if ni := e.emitStmt(st); ni != nil {
 			return callResult{}, ni
 		}
+	}
+	e.popEnv()
+	e.scopeLive = e.scopeLive[:len(e.scopeLive)-1]
+	if e.diverged {
+		// The body ended in its own terminator — a piercing break,
+		// continue, or return already discharged this scope at its site
+		// (cancel or collect leave), so nothing joins here and the
+		// never-reached continuation is the enclosing context's.
+		return callResult{kind: ckVoid}, nil
 	}
 	e.use("__we_scope_leave")
 	to := e.value()
@@ -2635,14 +3280,12 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 	if !valueForm {
 		return callResult{kind: ckVoid}, nil
 	}
-	tagSlot := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", tagSlot))
-	e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", to, tagSlot))
-	paySlot := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", paySlot))
-	e.inst(fmt.Sprintf("store i64 %s, ptr %%%s", bodyVal, paySlot))
+	tagSlot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", to, tagSlot))
+	paySlot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", bodyVal, paySlot))
 	return callResult{kind: ckSum, sum: sumSlot{
-		tag: "%" + tagSlot, pay: "%" + paySlot,
+		tag: tagSlot, pay: paySlot,
 		variants: []string{"Ok", "Err"}, errMsg: "error: TimedOut",
 	}}, nil
 }
@@ -2696,8 +3339,7 @@ func (e *emitter) emitSelect(s *ast.SelectExpr) (callResult, *NotImplemented) {
 	n := e.blocks
 	e.blocks++
 	join := fmt.Sprintf("sljoin%d", n)
-	res := e.value()
-	e.inst(fmt.Sprintf("%%%s = alloca i64", res))
+	res := e.slot("i64")
 	for i, c := range s.Cases {
 		cmp := e.value()
 		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %%%s, %d", cmp, arm, i))
@@ -2705,26 +3347,35 @@ func (e *emitter) emitSelect(s *ast.SelectExpr) (callResult, *NotImplemented) {
 		next := fmt.Sprintf("sltest%d_%d", n, i)
 		e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", cmp, armL, next))
 		e.label(armL)
+		// One frame per case: the yield binding lives only inside its arm
+		// (the select arm's register must not shadow an outer name past
+		// the join — the same block-scoping the match arms ride).
+		e.pushEnv()
 		if c.Name != "" && !c.Wildcard {
 			e.use("__we_select_value")
 			vv := e.value()
 			e.inst(fmt.Sprintf("%%%s = call i64 @__we_select_value(ptr %%%s)", vv, sel))
 			if c.Name != "_" {
-				e.scalars[c.Name] = scalarSlot{operand: "%" + vv}
+				if e.assigned[c.Name] {
+					e.bindScalarSlot(c.Name, "%"+vv, false)
+				} else {
+					e.scalars[c.Name] = scalarSlot{operand: "%" + vv}
+				}
 			}
 		}
 		op, _, ni := e.emitNumExpr(c.Body)
 		if ni != nil {
 			return callResult{}, ni
 		}
-		e.inst(fmt.Sprintf("store i64 %s, ptr %%%s", op, res))
+		e.popEnv()
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", op, res))
 		e.inst(fmt.Sprintf("br label %%%s", join))
 		e.label(next)
 	}
 	e.inst(fmt.Sprintf("br label %%%s", join))
 	e.label(join)
 	lv := e.value()
-	e.inst(fmt.Sprintf("%%%s = load i64, ptr %%%s", lv, res))
+	e.inst(fmt.Sprintf("%%%s = load i64, ptr %s", lv, res))
 	return callResult{kind: ckI64, i64: "%" + lv}, nil
 }
 
@@ -3021,10 +3672,8 @@ func (e *emitter) emitTail(v ast.Expr) *NotImplemented {
 		}
 		// The deferred blocks run before the roots pop (their statements
 		// may still read rooted objects), reverse registration order.
-		for i := len(e.defers) - 1; i >= 0; i-- {
-			if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
-				return ni
-			}
+		if ni := e.drainDefers(); ni != nil {
+			return ni
 		}
 		if e.pushes > 0 {
 			e.use("__we_root_pop")
@@ -3553,19 +4202,29 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	e.enterModule(fd.key)
 
 	savedCtx, savedBody := e.ctx, e.body
+	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedFrames := e.frames
 	savedDiverged := e.diverged
+	savedExit, savedInExit := e.exit, e.inExit
+	savedLoops, savedScopes := e.loopFrames, e.scopeLive
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.frames = savedFrames
 		e.diverged = savedDiverged
+		e.exit, e.inExit = savedExit, savedInExit
+		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
 	e.body = strings.Builder{}
+	e.allocas = nil
+	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
@@ -3575,12 +4234,22 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	e.defers = nil
 	e.caps = nil
 	e.pushes = 0
+	// The body's return protocol (T2 deep returns): every return in this
+	// define answers the declared ABI, whatever its depth. The loop and
+	// scope stacks start empty — neither a break nor a return crosses a
+	// body boundary.
+	e.exit = &exitSite{kind: exitFn, abi: abi}
+	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	// Which names this body writes is known before anything emits: a
+	// parameter among them takes a slot instead of its incoming register.
+	collectAssigned(fd.decl.Body.Items, e.assigned)
 
 	// The parameter list and environments (the shared define face).
 	ps := e.bindDefineParams(fd.decl.Params, abi)
 
-	// The statements; a return anywhere but the tail is a control-flow
-	// shape outside the set.
+	// The statements; a return at the tail is the shared value face, and
+	// one at any other depth emits its own exit sequence in place
+	// (emitReturn) — the statements after it are dead by construction.
 	items := fd.decl.Body.Items
 	var tail *ast.Return
 	if len(items) > 0 {
@@ -3593,10 +4262,6 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 		if e.diverged {
 			break // a Never call already terminated the body
 		}
-		if _, ok := st.(*ast.Return); ok {
-			restore()
-			return bndFn()
-		}
 		if ni := e.emitStmt(st); ni != nil {
 			restore()
 			return ni
@@ -3606,7 +4271,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 		// The body ended in unreachable (a Never-returning foreign
 		// call): no return value, no defers, no pops — the terminator
 		// stands as the define's own.
-		body := e.body.String()
+		body := e.bodyText()
 		restore()
 		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
 			"define %s @%s.%s(%s) {\nentry:\n%s}\n",
@@ -3621,17 +4286,15 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 		restore()
 		return ni
 	}
-	for i := len(e.defers) - 1; i >= 0; i-- {
-		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
-			restore()
-			return ni
-		}
+	if ni := e.drainDefers(); ni != nil {
+		restore()
+		return ni
 	}
 	for i := 0; i < e.pushes; i++ {
 		e.use("__we_root_pop")
 		e.inst("call void @__we_root_pop()")
 	}
-	body := e.body.String()
+	body := e.bodyText()
 	restore()
 	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
 		"define %s @%s.%s(%s) {\nentry:\n%s  ret %s\n}\n",
@@ -3659,12 +4322,20 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 		case abiI64:
 			ps = append(ps, "i64 %"+p.Name)
 			if p.Name != "_" {
-				e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name}
+				if e.assigned[p.Name] {
+					e.bindScalarSlot(p.Name, "%"+p.Name, false)
+				} else {
+					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name}
+				}
 			}
 		case abiDouble:
 			ps = append(ps, "double %"+p.Name)
 			if p.Name != "_" {
-				e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, isFloat: true}
+				if e.assigned[p.Name] {
+					e.bindScalarSlot(p.Name, "%"+p.Name, true)
+				} else {
+					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, isFloat: true}
+				}
 			}
 		case abiStr:
 			ps = append(ps, "ptr %"+p.Name+"0", "i64 %"+p.Name+"1")
@@ -3679,13 +4350,11 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 		case abiSum:
 			ps = append(ps, "i64 %"+p.Name+"0", "i64 %"+p.Name+"1")
 			if p.Name != "_" {
-				ts := e.value()
-				e.inst(fmt.Sprintf("%%%s = alloca i64", ts))
-				e.inst(fmt.Sprintf("store i64 %%%s0, ptr %%%s", p.Name, ts))
-				pp := e.value()
-				e.inst(fmt.Sprintf("%%%s = alloca i64", pp))
-				e.inst(fmt.Sprintf("store i64 %%%s1, ptr %%%s", p.Name, pp))
-				e.sums2[p.Name] = sumSlot{tag: "%" + ts, pay: "%" + pp, variants: e.sumsOrd[pa.key]}
+				ts := e.slot("i64")
+				e.inst(fmt.Sprintf("store i64 %%%s0, ptr %s", p.Name, ts))
+				pp := e.slot("i64")
+				e.inst(fmt.Sprintf("store i64 %%%s1, ptr %s", p.Name, pp))
+				e.sums2[p.Name] = sumSlot{tag: ts, pay: pp, variants: e.sumsOrd[pa.key]}
 			}
 		}
 	}
@@ -3756,19 +4425,29 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	}
 
 	savedCtx, savedBody := e.ctx, e.body
+	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedFrames := e.frames
 	savedDiverged := e.diverged
+	savedExit, savedInExit := e.exit, e.inExit
+	savedLoops, savedScopes := e.loopFrames, e.scopeLive
 	restoreState := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.frames = savedFrames
 		e.diverged = savedDiverged
+		e.exit, e.inExit = savedExit, savedInExit
+		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
 	e.body = strings.Builder{}
+	e.allocas = nil
+	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
@@ -3778,7 +4457,10 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	e.defers = nil
 	e.caps = nil
 	e.pushes = 0
+	e.exit = &exitSite{kind: exitFn, abi: abi}
+	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
 
+	collectAssigned(md.Body.Items, e.assigned)
 	ps := e.bindDefineParams(md.Params, abi)
 	items := md.Body.Items
 	var tail *ast.Return
@@ -3792,10 +4474,6 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 		if e.diverged {
 			break // a Never call already terminated the mock body
 		}
-		if _, ok := st.(*ast.Return); ok {
-			restoreState()
-			return mockInstall{}, bndFn()
-		}
 		if ni := e.emitStmt(st); ni != nil {
 			restoreState()
 			return mockInstall{}, ni
@@ -3803,7 +4481,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	}
 	if e.diverged {
 		// A diverged mock body ends at its unreachable, no value tail.
-		body := e.body.String()
+		body := e.bodyText()
 		restoreState()
 		sym := fmt.Sprintf("%s.mock.%d", key, n)
 		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
@@ -3816,17 +4494,15 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 		restoreState()
 		return mockInstall{}, ni
 	}
-	for i := len(e.defers) - 1; i >= 0; i-- {
-		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
-			restoreState()
-			return mockInstall{}, ni
-		}
+	if ni := e.drainDefers(); ni != nil {
+		restoreState()
+		return mockInstall{}, ni
 	}
 	for i := 0; i < e.pushes; i++ {
 		e.use("__we_root_pop")
 		e.inst("call void @__we_root_pop()")
 	}
-	body := e.body.String()
+	body := e.bodyText()
 	restoreState()
 	sym := fmt.Sprintf("%s.mock.%d", key, n)
 	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
@@ -3844,22 +4520,29 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 // mock declarations ride ahead of this as their own defines.
 func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplemented {
 	savedCtx, savedBody := e.ctx, e.body
+	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
-	savedTestBody := e.testBody
+	savedFrames := e.frames
 	savedDiverged := e.diverged
+	savedExit, savedInExit := e.exit, e.inExit
+	savedLoops, savedScopes := e.loopFrames, e.scopeLive
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
-		e.testBody = savedTestBody
+		e.frames = savedFrames
 		e.diverged = savedDiverged
+		e.exit, e.inExit = savedExit, savedInExit
+		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
-	e.testBody = true
 	e.body = strings.Builder{}
+	e.allocas = nil
+	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
 	e.sums2 = make(map[string]sumSlot)
@@ -3869,6 +4552,11 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	e.defers = nil
 	e.caps = nil
 	e.pushes = 0
+	// The test context's return is valueless: a return at any depth emits
+	// ret void (with the exit sequence ahead of it).
+	e.exit = &exitSite{kind: exitTest}
+	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	collectAssigned(td.Body.Items, e.assigned)
 
 	for _, st := range td.Body.Items {
 		if e.diverged {
@@ -3876,13 +4564,6 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 		}
 		if _, ok := st.(*ast.MockDecl); ok {
 			continue // its define rode ahead of this walk
-		}
-		if r, ok := st.(*ast.Return); ok {
-			if ni := e.emitTestReturn(r); ni != nil {
-				restore()
-				return ni
-			}
-			continue
 		}
 		if ni := e.emitStmt(st); ni != nil {
 			restore()
@@ -3893,23 +4574,21 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 		// A diverged test body ends at its unreachable — no defers, no
 		// pops, no ret void (the Never call took the process before any
 		// assertion could fail).
-		body := e.body.String()
+		body := e.bodyText()
 		restore()
 		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
 			"define void @%s.test.%d() {\nentry:\n%s}\n", key, n, body))
 		return nil
 	}
-	for i := len(e.defers) - 1; i >= 0; i-- {
-		if ni := e.emitBlockStmts(e.defers[i].Items); ni != nil {
-			restore()
-			return ni
-		}
+	if ni := e.drainDefers(); ni != nil {
+		restore()
+		return ni
 	}
 	for i := 0; i < e.pushes; i++ {
 		e.use("__we_root_pop")
 		e.inst("call void @__we_root_pop()")
 	}
-	body := e.body.String()
+	body := e.bodyText()
 	restore()
 	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
 		"define void @%s.test.%d() {\nentry:\n%s  ret void\n}\n",
@@ -3932,8 +4611,10 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 func (e *emitter) emitDriver() {
 	for i := range e.drives {
 		st := &e.drives[i]
-		savedBody := e.body
+		savedBody, savedAllocas := e.body, e.allocas
+		savedAssigned := e.assigned
 		e.body = strings.Builder{}
+		e.allocas, e.assigned = nil, make(map[string]bool)
 		for _, m := range st.mocks {
 			// The install materializes the slot even when no call site
 			// referenced it this build (a mocked-but-never-called target
@@ -3947,10 +4628,9 @@ func (e *emitter) emitDriver() {
 		h := e.value()
 		e.inst(fmt.Sprintf("%%%s = call ptr @__we_task_new(ptr %s, ptr null)", h, st.wrap))
 		e.use("__we_handle_await")
-		pay := e.value()
-		e.inst(fmt.Sprintf("%%%s = alloca i64", pay))
+		pay := e.slot("i64")
 		tag := e.value()
-		e.inst(fmt.Sprintf("%%%s = call i64 @__we_handle_await(ptr %%%s, ptr %%%s)", tag, h, pay))
+		e.inst(fmt.Sprintf("%%%s = call i64 @__we_handle_await(ptr %%%s, ptr %s)", tag, h, pay))
 		e.use("__we_test_end")
 		e.inst("call void @__we_test_end()")
 		for _, m := range st.mocks {
@@ -3970,7 +4650,7 @@ func (e *emitter) emitDriver() {
 		e.inst(fmt.Sprintf("br label %%tk%dq", n))
 		e.label(fmt.Sprintf("tk%df", n))
 		r := e.value()
-		e.inst(fmt.Sprintf("%%%s = load i64, ptr %%%s", r, pay))
+		e.inst(fmt.Sprintf("%%%s = load i64, ptr %s", r, pay))
 		p := e.value()
 		e.inst(fmt.Sprintf("%%%s = inttoptr i64 %%%s to ptr", p, r))
 		e.use("__we_test_report")
@@ -3978,8 +4658,8 @@ func (e *emitter) emitDriver() {
 			f, len(st.file), d, len(st.desc), p))
 		e.inst(fmt.Sprintf("br label %%tk%dq", n))
 		e.label(fmt.Sprintf("tk%dq", n))
-		body := e.body.String()
-		e.body = savedBody
+		body := e.bodyText()
+		e.body, e.allocas, e.assigned = savedBody, savedAllocas, savedAssigned
 		e.thunks = append(e.thunks, fmt.Sprintf(
 			"define internal void @%s.drive.%d() {\nentry:\n%s  ret void\n}\n",
 			st.key, i, body))
@@ -4000,14 +4680,30 @@ func (e *emitter) emitDriver() {
 // value. The value computes before the defers and the pops — nothing
 // between the last pop and the ret may allocate.
 func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented) {
+	if tail == nil {
+		return e.fnRetOperand(abi, nil, false)
+	}
+	// A valueless tail return is the absent tail for every family (a void
+	// fn's optional return); a value-shaped family rejects it below.
+	if !tail.HasValue {
+		return e.fnRetOperand(abi, nil, false)
+	}
+	return e.fnRetOperand(abi, tail.Value, true)
+}
+
+// fnRetOperand renders one returned value as the ret instruction's
+// operand text (the ABI table's value faces): the tail and every deep
+// return share this face. hasValue false is the absent tail — legal only
+// where the ABI answers void.
+func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string, *NotImplemented) {
 	switch abi.ret {
 	case abiVoid:
-		if tail != nil && tail.HasValue {
+		if hasValue {
 			return "", bndFn()
 		}
 		return "void", nil
 	case abiI64, abiDouble:
-		if tail == nil || !tail.HasValue {
+		if !hasValue {
 			return "", bndFn()
 		}
 		// The tail return's value face includes a direct call of the
@@ -4015,7 +4711,7 @@ func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented
 		// through: return double(double(n))). The M9b expression
 		// emitters stay call-free; the call resolves here, computing at
 		// the same pre-defer position any other value face does.
-		if c, ok := tail.Value.(*ast.Call); ok {
+		if c, ok := value.(*ast.Call); ok {
 			res, ni := e.emitCall(c, nil)
 			if ni != nil {
 				return "", ni
@@ -4028,7 +4724,7 @@ func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented
 			}
 			return "i64 " + res.i64, nil
 		}
-		op, isF, ni := e.emitNumExpr(tail.Value)
+		op, isF, ni := e.emitNumExpr(value)
 		if ni != nil {
 			return "", ni
 		}
@@ -4040,7 +4736,7 @@ func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented
 		}
 		return "i64 " + op, nil
 	case abiStr:
-		if tail == nil || !tail.HasValue {
+		if !hasValue {
 			return "", bndFn()
 		}
 		// An SSA double word cannot ride inside a ret's aggregate
@@ -4054,7 +4750,7 @@ func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented
 			e.inst(fmt.Sprintf("%%%s = insertvalue { ptr, i64 } %%%s, i64 %s, 1", v1, v0, lenOp))
 			return "{ ptr, i64 } %" + v1
 		}
-		switch v := tail.Value.(type) {
+		switch v := value.(type) {
 		case *ast.Ident:
 			b, ok := e.strEnv[v.Name]
 			if !ok || b.dataOp == "" {
@@ -4082,10 +4778,10 @@ func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented
 		}
 		return "", bndFn()
 	case abiGc:
-		if tail == nil || !tail.HasValue {
+		if !hasValue {
 			return "", bndFn()
 		}
-		switch v := tail.Value.(type) {
+		switch v := value.(type) {
 		case *ast.Ident:
 			g, ok := e.gcEnv[v.Name]
 			if !ok {
@@ -4101,10 +4797,10 @@ func (e *emitter) fnRetVal(abi fnAbi, tail *ast.Return) (string, *NotImplemented
 		}
 		return "", bndFn()
 	case abiSum:
-		if tail == nil || !tail.HasValue {
+		if !hasValue {
 			return "", bndFn()
 		}
-		c, ok := tail.Value.(*ast.Call)
+		c, ok := value.(*ast.Call)
 		if !ok {
 			return "", bndFn()
 		}
@@ -4279,13 +4975,11 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 		e.inst(fmt.Sprintf("%%%s = extractvalue { i64, i64 } %%%s, 0", t, v))
 		p := e.value()
 		e.inst(fmt.Sprintf("%%%s = extractvalue { i64, i64 } %%%s, 1", p, v))
-		ts := e.value()
-		e.inst(fmt.Sprintf("%%%s = alloca i64", ts))
-		e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", t, ts))
-		pp := e.value()
-		e.inst(fmt.Sprintf("%%%s = alloca i64", pp))
-		e.inst(fmt.Sprintf("store i64 %%%s, ptr %%%s", p, pp))
-		return callResult{kind: ckSum, sum: sumSlot{tag: "%" + ts, pay: "%" + pp, variants: abi.variants}}, nil
+		ts := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", t, ts))
+		pp := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", p, pp))
+		return callResult{kind: ckSum, sum: sumSlot{tag: ts, pay: pp, variants: abi.variants}}, nil
 	}
 	return callResult{}, e.bnd()
 }
@@ -4454,7 +5148,7 @@ func (e *emitter) render(module string) string {
 	// D5) — its steps rendered into the body ahead of this; in build mode
 	// the root main is the entry.
 	sb.WriteString("define i32 @__we_main() {\nentry:\n")
-	sb.WriteString(e.body.String())
+	sb.WriteString(e.bodyText())
 	sb.WriteString("}\n")
 	return sb.String()
 }

@@ -6,7 +6,7 @@
   ],
   "setup": {
     "files": {
-      "tests/m_test.we": "import std.io\n\nfn looped() effect io {\n    for i in 0..3 {\n        io.println(\"tick\")\n    }\n    return\n}\n\ntest \"looped\" {\n    looped()\n    assert(true, \"done\")\n}\n",
+      "tests/m_test.we": "import std.io\n\nfn looped() effect io {\n    for c in \"abc\" {\n        io.println(\"tick\")\n    }\n    return\n}\n\ntest \"looped\" {\n    looped()\n    assert(true, \"done\")\n}\n",
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },

@@ -501,6 +501,17 @@ long long __we_handle_cancel(void *h) {
     return 0;
 }
 
+// Cancel: the piercing-exit face (chapter 18) — a return, break, or
+// continue through an open scope marks it timed out and cancels its
+// unfinished tasks (the cooperative-return path), then the caller's own
+// leave joins them. Mirrors the deadline-expiry action exactly minus the
+// clock check: the exit is immediate by definition.
+void __we_scope_cancel(void *scope) {
+    we_scope *sc = scope;
+    sc->timed_out = 1;
+    cancel_scope_tasks(sc);
+}
+
 void *__we_scope_enter(long long deadline_ms, long long collect_all) {
     we_scope *sc = calloc(1, sizeof *sc);
     if (!sc) {

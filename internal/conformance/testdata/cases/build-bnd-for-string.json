@@ -1,5 +1,5 @@
 {
-  "name": "build-bnd-new-forms",
+  "name": "build-bnd-for-string",
   "args": [
     "build",
     "."
@@ -7,7 +7,7 @@
   "setup": {
     "files": {
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
-      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    if true {\n        return Ok(())\n    }\n    return Err(Failed(\"boom\"))\n}"
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    for c in \"abc\" {\n        io.println(\"tick\")\n    }\n    return Ok(())\n}\n"
     }
   },
   "exit": 70,

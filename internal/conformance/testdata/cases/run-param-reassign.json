@@ -1,0 +1,16 @@
+{
+  "name": "run-param-reassign",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn bump(n: Int64) -> Int64 {\n    n = n + 10\n    return n\n}\n\nfn parityClass(n: Int64) -> Int64 {\n    while n >= 2 {\n        n = n - 2\n    }\n    return n\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let b = bump(5)\n    if b == 15 { io.println(\"bump-ok\") } else { io.println(\"bump-bad\") }\n    let p = parityClass(9)\n    if p == 1 { io.println(\"loop-ok\") } else { io.println(\"loop-bad\") }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "bump-ok\nloop-ok\n",
+  "stderr": ""
+}

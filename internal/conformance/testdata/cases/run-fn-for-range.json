@@ -1,0 +1,16 @@
+{
+  "name": "run-fn-for-range",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn firstOver(limit: Int64) -> Int64 {\n    for i in 0..10 {\n        if i > limit { return i }\n    }\n    return 99\n}\n\nfn tally(n: Int64) effect io {\n    for i in 0..n { io.println(\"fn-tick\") }\n    return\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let f = firstOver(4)\n    if f == 5 { io.println(\"fn-ret-ok\") } else { io.println(\"fn-ret-bad\") }\n    tally(2)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "fn-ret-ok\nfn-tick\nfn-tick\n",
+  "stderr": ""
+}

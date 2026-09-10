@@ -432,15 +432,9 @@ func TestM8BodyBoundaryWhats(t *testing.T) {
 				f.Items[2].(*ast.FnDecl).Body.Items[1] = ioCall("io", "println", &ast.Literal{Kind: "string", Text: `"hello ${name}"`})
 			}),
 		},
-		{
-			"control flow",
-			helloModulePatch(func(f *ast.File) {
-				f.Items[2].(*ast.FnDecl).Body.Items = append([]ast.Stmt{&ast.ExprStmt{Expr: &ast.If{
-					Cond: &ast.Literal{Kind: "bool", Text: "true"},
-					Then: ast.Block{Items: []ast.Stmt{okReturn()}},
-				}}}, f.Items[2].(*ast.FnDecl).Body.Items...)
-			}),
-		},
+		// The control-flow shape this table used to stop on — an if whose
+		// arm returns — is in the statement set as of T2: a return at any
+		// depth emits its own exit sequence (see the deep-return suite).
 		{
 			"method call on a record",
 			func() *ast.File {
