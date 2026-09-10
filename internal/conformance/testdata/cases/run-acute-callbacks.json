@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-callbacks",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\n\nfn addTo(acc: Int64, x: Int64) -> Int64 { return acc + x }\n\npub fn main() effect io -> Result<(), AppError> {\n    let fs = [1.5, 2.5, 4.0]\n    let d = fs.iterator().fold(0.0, |acc, x| acc + x)\n    if d == 8.0 { io.println(\"float-ok\") } else { io.println(\"float-bad\") }\n\n    let cs = [Cell { n: 1 }, Cell { n: 2 }, Cell { n: 3 }]\n    let t = cs.iterator().fold(0, |acc, c| acc + c.n)\n    if t == 6 { io.println(\"gc-ok\") } else { io.println(\"gc-bad\") }\n\n    let held = cs.iterator().any(|c| c.n > 2)\n    if held { io.println(\"gc-any-ok\") } else { io.println(\"gc-any-bad\") }\n\n    let k = 10\n    let cap = [1, 2, 3].iterator().fold(0, |acc, x| acc + x * k)\n    if cap == 60 { io.println(\"capture-ok\") } else { io.println(\"capture-bad\") }\n\n    let f = addTo\n    let ho = [1, 2, 3].iterator().fold(0, f)\n    if ho == 6 { io.println(\"fnval-ok\") } else { io.println(\"fnval-bad\") }\n\n    let blk = [1, 2, 3].iterator().any(|x| {\n        let y = x * 2\n        y > 4\n    })\n    if blk { io.println(\"block-ok\") } else { io.println(\"block-bad\") }\n\n    let nested = 0\n    for i in [1, 2] {\n        nested = nested + [10, 20].iterator().fold(0, |acc, x| acc + x + i)\n    }\n    if nested == 66 { io.println(\"nested-ok\") } else { io.println(\"nested-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "float-ok\ngc-ok\ngc-any-ok\ncapture-ok\nfnval-ok\nblock-ok\nnested-ok\n",
+  "stderr": ""
+}

@@ -2595,6 +2595,9 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 	if !ok {
 		return callResult{}, e.bnd()
 	}
+	if res, is, ni := e.emitAcute(fn, call); is {
+		return res, ni
+	}
 	if recv, ok := fn.Recv.(*ast.Ident); ok && e.concAlias[recv.Name] && !e.isLocalName(recv.Name) {
 		if spec, is := primCtors[fn.Name]; is {
 			ptr, ni := e.emitPrimCtor(spec, call.Args, typ)
@@ -4881,6 +4884,457 @@ func (e *emitter) recordKeyOf(x ast.Expr) (string, bool) {
 		return key + "." + rec.Name, true
 	}
 	return "", false
+}
+
+// --- T7-3: the six acute combinators (design D6) ---------------------------
+//
+// fold, reduce, count, any, all and find are methods on Iterator<T> whose
+// bodies the standard library writes in We, and the check stage walks
+// those bodies on every check. The emission face takes the other path
+// design D6 chose: the call form is recognized and the loop the body
+// describes is emitted directly — no std module fn body, no generic
+// instantiation, and none of the library machinery this build does not
+// have. The chapter text is the semantics either way; the conformance
+// goldens pin the behaviour.
+//
+// The recognized form is `<list>.iterator().<name>(args)`. The receiver's
+// face comes from a List binding or a literal — the same environment the
+// for walk reads (T7-2) — and the callback is a function value built by
+// the T6 machinery, so a closure literal and a bound fn value both work
+// and captures freeze at the call site. The accumulator and the result
+// stay in the word domain the combinator's own declaration supports; a
+// face the sum pair cannot carry stops at the body boundary.
+
+// acuteCombinator names the six eager combinators — the ones whose
+// results are values, as against the five lazy ones (map/filter/take/
+// skip/collect) whose Dyn<Iterator<U>> results belong to B1b's vtable
+// face (design D6).
+func acuteCombinator(name string) bool {
+	switch name {
+	case "fold", "reduce", "count", "any", "all", "find":
+		return true
+	}
+	return false
+}
+
+// emitAcute recognizes and emits one combinator call. The bool says the
+// form is this face at all — the name is one of the six AND the receiver
+// is a List's own iterator — so a failure past that point is a boundary
+// of this face rather than a fall-through to another one. A receiver
+// that is not a List (a String's iterator, say) is not this face and
+// leaves the call to the faces below, which stop it as they did before.
+func (e *emitter) emitAcute(fn *ast.Member, call *ast.Call) (callResult, bool, *NotImplemented) {
+	if !acuteCombinator(fn.Name) {
+		return callResult{}, false, nil
+	}
+	it, ok := fn.Recv.(*ast.Call)
+	if !ok {
+		return callResult{}, false, nil
+	}
+	im, ok := it.Fn.(*ast.Member)
+	if !ok || im.Name != "iterator" || len(it.Args) != 0 {
+		return callResult{}, false, nil
+	}
+	if _, ok := e.listFaceOf(im.Recv); !ok {
+		return callResult{}, false, nil
+	}
+	src, face, ni := e.listSource(im.Recv)
+	if ni != nil {
+		return callResult{}, true, ni
+	}
+	res, ni := e.emitAcuteLoop(fn.Name, src, face, call.Args)
+	return res, true, ni
+}
+
+// listWalk is one combinator loop's live state: the carrier's snapshot,
+// the length it was read with, the pass's index, and the four block names
+// a pass moves through. word is this pass's element — the one word the
+// carrier answered, before any face conversion.
+type listWalk struct {
+	snap, n, cur, word string
+	counter            string
+	head, body         string
+	step, exit         string
+}
+
+// openListWalk emits the snapshot prologue and one pass's head: the copy,
+// its root (the walk outlives the allocation the callback may make), the
+// length, and the counter slot. from is the counter's initial value —
+// reduce starts at one, its first element being the accumulator rather
+// than a folded step. The body block is left open with the element word
+// in hand.
+func (e *emitter) openListWalk(src string, from int64) (listWalk, *NotImplemented) {
+	e.use("__we_list_snap")
+	e.use("__we_list_len")
+	e.use("__we_list_get")
+	e.use("__we_root_push")
+	e.pushes++
+	n := e.blocks
+	e.blocks++
+	w := listWalk{
+		head: fmt.Sprintf("chead%d", n), body: fmt.Sprintf("cbody%d", n),
+		step: fmt.Sprintf("cstep%d", n), exit: fmt.Sprintf("cexit%d", n),
+	}
+	sv := e.value()
+	e.inst(fmt.Sprintf("%%%s = call ptr @__we_list_snap(ptr %s)", sv, src))
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", sv))
+	w.snap = "%" + sv
+	lv := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 @__we_list_len(ptr %s)", lv, w.snap))
+	w.n = "%" + lv
+	w.counter = e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %d, ptr %s", from, w.counter))
+	e.inst(fmt.Sprintf("br label %%%s", w.head))
+	e.label(w.head)
+	w.cur = e.loadNum(w.counter, false)
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp slt i64 %s, %s", c, w.cur, w.n))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, w.body, w.exit))
+	e.label(w.body)
+	ev := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 @__we_list_get(ptr %s, i64 %s)", ev, w.snap, w.cur))
+	w.word = "%" + ev
+	return w, nil
+}
+
+// closeListWalk ends the pass: the fall-through branch to the step block
+// (skipped where the pass left a terminator of its own), the step itself,
+// and the exit block the result reads in.
+func (e *emitter) closeListWalk(w listWalk) {
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", w.step))
+	}
+	e.label(w.step)
+	next := e.emitStep(e.loadNum(w.counter, false))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", next, w.counter))
+	e.inst(fmt.Sprintf("br label %%%s", w.head))
+	e.label(w.exit)
+}
+
+// listElemWord converts one pass's element word into the operand a
+// callback takes: a gc record's handle back to its pointer — copied where
+// the record's category is a value, chapter 8's rule at every binding —
+// and a Float64's bit pattern back to the double it holds. A word whose
+// face the emitted loop never fixed as a scalar reports false.
+func (e *emitter) listElemWord(face listElem, word string) (string, *NotImplemented) {
+	if face.gc {
+		reg := e.wordPtr(word)
+		if r, ok := e.records[face.rec]; ok && r.Cat == "value" {
+			reg = e.emitRecCopy(reg, face.rec)
+		}
+		return "ptr " + reg, nil
+	}
+	if face.kind == skF64 {
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = bitcast i64 %s to double", v, word))
+		return "double %" + v, nil
+	}
+	if face.kind == skNone {
+		return "", e.bnd()
+	}
+	return "i64 " + word, nil
+}
+
+// scalarWordFace reports whether one element's word is a value of the
+// element's own type in the i64 domain — the only payload reduce and find
+// can answer, a match arm binding the payload into exactly that domain. A
+// gc record's word is a handle and a Float64's is a bit pattern: both are
+// words, and neither is a value of the element's type, which is why
+// neither family is in this set — listElemFace gives a gc element no kind
+// at all, and a Float64 the one kind whose word is not its value.
+func scalarWordFace(face listElem) bool {
+	switch face.kind {
+	case skI64, skU64, skBool, skRune:
+		return true
+	}
+	return false
+}
+
+// faceAbiKind is the calling face one element's word crosses as.
+func faceAbiKind(face listElem) fnAbiKind {
+	switch {
+	case face.gc:
+		return abiGc
+	case face.kind == skF64:
+		return abiDouble
+	}
+	return abiI64
+}
+
+// faceParam is the callback parameter one element's face declares: the
+// kind is the word's, the key is the record a gc handle names, and the
+// base name is what the bare parameter would have been given, so a
+// callback body that renders its parameter renders it as its own type.
+func faceParam(face listElem) fnParamAbi {
+	k := faceAbiKind(face)
+	p := fnParamAbi{kind: k}
+	switch k {
+	case abiGc:
+		p.key = face.rec
+	case abiI64:
+		p.typ = strKindName(face.kind)
+	case abiDouble:
+		p.typ = "Float64"
+	}
+	return p
+}
+
+// acuteCallback is the callback's signature, read off the combinator's
+// own declaration (chapter 11): fold threads the accumulator's face
+// through its parameter and its result, reduce takes and answers the
+// element's, and a predicate takes the element's and answers Bool — which
+// rides the i64 domain, exactly as a Bool parameter does in a declared fn.
+// acc is the accumulator's kind, which only fold reads.
+func acuteCallback(name string, face listElem, acc fnAbiKind) fnAbi {
+	elem := faceParam(face)
+	switch name {
+	case "fold":
+		return fnAbi{ret: acc, retTyp: abiTypOf(acc),
+			params: []fnParamAbi{{kind: acc, typ: strKindName(accKindOf(acc))}, elem}}
+	case "reduce":
+		k := faceAbiKind(face)
+		return fnAbi{ret: k, retTyp: abiTypOf(k), params: []fnParamAbi{elem, elem}}
+	default:
+		return fnAbi{ret: abiI64, retTyp: "i64", retName: "Bool", params: []fnParamAbi{elem}}
+	}
+}
+
+// abiTypOf spells one calling kind as the define's result type, the way
+// fitAbi spells a declared signature's — a signature built here has no
+// declaration to read the spelling off.
+func abiTypOf(k fnAbiKind) string {
+	switch k {
+	case abiVoid:
+		return "void"
+	case abiDouble:
+		return "double"
+	case abiStr:
+		return "{ ptr, i64 }"
+	case abiGc:
+		return "ptr"
+	case abiSum:
+		return "{ i64, i64 }"
+	}
+	return "i64"
+}
+
+// accKindOf reads back the interpolation domain a fold accumulator's
+// calling kind spells.
+func accKindOf(k fnAbiKind) strKind {
+	if k == abiDouble {
+		return skF64
+	}
+	return skI64
+}
+
+// emitAcuteLoop dispatches the six. Every one of them shares the walk;
+// what differs is the accumulator (fold, reduce), the short circuit (any,
+// all, find), and the result (the sum pair for reduce and find, a scalar
+// for the rest).
+func (e *emitter) emitAcuteLoop(name, src string, face listElem, args []ast.Expr) (callResult, *NotImplemented) {
+	want := map[string]int{"fold": 2, "reduce": 1, "count": 0, "any": 1, "all": 1, "find": 1}[name]
+	if len(args) != want {
+		return callResult{}, e.bnd()
+	}
+	switch name {
+	case "count":
+		return e.emitCount(src)
+	case "fold":
+		return e.emitFold(src, face, args)
+	case "reduce":
+		return e.emitReduce(src, face, args[0])
+	case "any", "all":
+		return e.emitQuantify(name, src, face, args[0])
+	case "find":
+		return e.emitFind(src, face, args[0])
+	}
+	return callResult{}, e.bnd()
+}
+
+// emitCount is `count()`: the walk counts its own passes. The element
+// face is irrelevant to the answer — the count is the carrier's length,
+// which the walk reads anyway — so it takes no face at all.
+func (e *emitter) emitCount(src string) (callResult, *NotImplemented) {
+	n := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", n))
+	w, ni := e.openListWalk(src, 0)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	cur := e.loadNum(n, false)
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = add i64 %s, 1", v, cur))
+	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", v, n))
+	e.closeListWalk(w)
+	return callResult{kind: ckI64, i64: e.loadNum(n, false), typeName: "Int64"}, nil
+}
+
+// emitFold is `fold(init, f)`: the accumulator starts at init and each
+// pass replaces it with f(acc, element). The accumulator lives in a slot
+// rather than an SSA value — it crosses the loop's back edge, so it needs
+// an address, exactly as a loop-carried source binding does. Its face
+// comes from init's own form; a gc init stops, the sum and tuple faces
+// having no word here yet.
+func (e *emitter) emitFold(src string, face listElem, args []ast.Expr) (callResult, *NotImplemented) {
+	op, isF, ni := e.emitNumExpr(args[0])
+	if ni != nil {
+		return callResult{}, ni
+	}
+	accKind := abiI64
+	slotTyp := "i64"
+	if isF {
+		accKind, slotTyp = abiDouble, "double"
+	}
+	acc := e.slot(slotTyp)
+	e.inst(fmt.Sprintf("store %s %s, ptr %s", slotTyp, op, acc))
+	fv, ni := e.emitFnArg(args[1], new(acuteCallback("fold", face, accKind)))
+	if ni != nil {
+		return callResult{}, ni
+	}
+	w, ni := e.openListWalk(src, 0)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	elem, ni := e.listElemWord(face, w.word)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	parts := e.fnParts(fv)
+	cur := e.loadNum(acc, isF)
+	r := e.value()
+	e.inst(fmt.Sprintf("%%%s = call %s %s(ptr %s, %s, %s)",
+		r, slotTyp, parts.fnptr, parts.env, slotTyp+" "+cur, elem))
+	e.inst(fmt.Sprintf("store %s %%%s, ptr %s", slotTyp, r, acc))
+	e.closeListWalk(w)
+	return callResult{kind: ckI64, i64: e.loadNum(acc, isF), isFloat: isF, typeName: strKindName(accKindOf(accKind))}, nil
+}
+
+// emitReduce is `reduce(f)` over a non-empty carrier and None over an
+// empty one: the first element is the accumulator, every later one is a
+// folded step. The pair is the runtime's Option ABI — None is 0, Some is
+// 1, as receive's own table has it. A Float64 or gc element stops: the
+// payload word would be a bit pattern or a handle, and a match arm binds
+// the payload into the scalar domain, so the loop would hand the body a
+// reinterpretation of the wrong thing rather than a value.
+func (e *emitter) emitReduce(src string, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
+	if !scalarWordFace(face) {
+		return callResult{}, e.bnd()
+	}
+	tag := e.slot("i64")
+	pay := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", tag))
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay))
+	fv, ni := e.emitFnArg(arg, new(acuteCallback("reduce", face, 0)))
+	if ni != nil {
+		return callResult{}, ni
+	}
+	w, ni := e.openListWalk(src, 0)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	n := e.blocks
+	e.blocks++
+	first, later := fmt.Sprintf("rfirst%d", n), fmt.Sprintf("rlater%d", n)
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, 0", c, w.cur))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, first, later))
+	e.label(first)
+	e.inst(fmt.Sprintf("store i64 1, ptr %s", tag))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", w.word, pay))
+	e.inst(fmt.Sprintf("br label %%%s", w.step))
+	e.label(later)
+	elem, ni := e.listElemWord(face, w.word)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	parts := e.fnParts(fv)
+	cur := e.loadNum(pay, false)
+	r := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 %s(ptr %s, i64 %s, %s)", r, parts.fnptr, parts.env, cur, elem))
+	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", r, pay))
+	e.closeListWalk(w)
+	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, variants: []string{"None", "Some"}}}, nil
+}
+
+// emitQuantify is `any(f)` and `all(f)`: the predicate decides, and the
+// first element that decides it ends the walk — the chapter's own body
+// recurses on the remainder, which is the same answer without the work.
+func (e *emitter) emitQuantify(name, src string, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
+	res := e.slot("i64")
+	start, hitWhen := int64(0), int64(1)
+	if name == "all" {
+		start, hitWhen = 1, int64(0)
+	}
+	e.inst(fmt.Sprintf("store i64 %d, ptr %s", start, res))
+	fv, ni := e.emitFnArg(arg, new(acuteCallback(name, face, 0)))
+	if ni != nil {
+		return callResult{}, ni
+	}
+	w, ni := e.openListWalk(src, 0)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	elem, ni := e.listElemWord(face, w.word)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	parts := e.fnParts(fv)
+	p := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 %s(ptr %s, %s)", p, parts.fnptr, parts.env, elem))
+	n := e.blocks
+	e.blocks++
+	hit, cont := fmt.Sprintf("qhit%d", n), fmt.Sprintf("qcont%d", n)
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %%%s, %d", c, p, hitWhen))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, hit, cont))
+	e.label(hit)
+	e.inst(fmt.Sprintf("store i64 %d, ptr %s", 1-start, res))
+	e.inst(fmt.Sprintf("br label %%%s", w.exit))
+	e.label(cont)
+	e.closeListWalk(w)
+	return callResult{kind: ckI64, i64: e.loadNum(res, false), typeName: "Bool"}, nil
+}
+
+// emitFind is `find(f)`: Some(element) at the first hit, None when the
+// carrier runs out — the predicate's answer is the whole test, so the
+// match arm the chapter's body would take is the branch here. The same
+// payload restriction reduce takes applies, for the same reason.
+func (e *emitter) emitFind(src string, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
+	if !scalarWordFace(face) {
+		return callResult{}, e.bnd()
+	}
+	tag := e.slot("i64")
+	pay := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", tag))
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay))
+	fv, ni := e.emitFnArg(arg, new(acuteCallback("find", face, 0)))
+	if ni != nil {
+		return callResult{}, ni
+	}
+	w, ni := e.openListWalk(src, 0)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	elem, ni := e.listElemWord(face, w.word)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	parts := e.fnParts(fv)
+	p := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 %s(ptr %s, %s)", p, parts.fnptr, parts.env, elem))
+	n := e.blocks
+	e.blocks++
+	hit, cont := fmt.Sprintf("fhit%d", n), fmt.Sprintf("fcont%d", n)
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp ne i64 %%%s, 0", c, p))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, hit, cont))
+	e.label(hit)
+	e.inst(fmt.Sprintf("store i64 1, ptr %s", tag))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", w.word, pay))
+	e.inst(fmt.Sprintf("br label %%%s", w.exit))
+	e.label(cont)
+	e.closeListWalk(w)
+	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, variants: []string{"None", "Some"}}}, nil
 }
 
 // emitStep advances the loop counter by one. The add is unchecked because

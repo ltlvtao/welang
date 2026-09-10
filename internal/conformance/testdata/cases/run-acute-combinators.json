@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-combinators",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3, 4]\n\n    let s = xs.iterator().fold(0, |acc, x| acc + x)\n    if s == 10 { io.println(\"fold-ok\") } else { io.println(\"fold-bad\") }\n\n    let c = xs.iterator().count()\n    if c == 4 { io.println(\"count-ok\") } else { io.println(\"count-bad\") }\n\n    let a = xs.iterator().any(|x| x > 3)\n    if a { io.println(\"any-ok\") } else { io.println(\"any-bad\") }\n\n    let na = xs.iterator().any(|x| x > 9)\n    if na { io.println(\"any-miss-bad\") } else { io.println(\"any-miss-ok\") }\n\n    let b = xs.iterator().all(|x| x > 0)\n    if b { io.println(\"all-ok\") } else { io.println(\"all-bad\") }\n\n    let nb = xs.iterator().all(|x| x > 1)\n    if nb { io.println(\"all-miss-bad\") } else { io.println(\"all-miss-ok\") }\n\n    let r = xs.iterator().reduce(|p, q| p + q)\n    match r {\n        Some(v) => { if v == 10 { io.println(\"reduce-ok\") } else { io.println(\"reduce-bad\") } }\n        None => { io.println(\"reduce-none\") }\n    }\n\n    let f = xs.iterator().find(|x| x > 2)\n    match f {\n        Some(v) => { if v == 3 { io.println(\"find-ok\") } else { io.println(\"find-bad\") } }\n        None => { io.println(\"find-none\") }\n    }\n\n    let g = xs.iterator().find(|x| x > 9)\n    match g {\n        Some(v) => { io.println(\"find-miss-bad\") }\n        None => { io.println(\"find-miss-ok\") }\n    }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "fold-ok\ncount-ok\nany-ok\nany-miss-ok\nall-ok\nall-miss-ok\nreduce-ok\nfind-ok\nfind-miss-ok\n",
+  "stderr": ""
+}

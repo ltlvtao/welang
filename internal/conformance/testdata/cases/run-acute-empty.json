@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-empty",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let e: List<Int64> = []\n\n    let c = e.iterator().count()\n    if c == 0 { io.println(\"count-ok\") } else { io.println(\"count-bad\") }\n\n    let a = e.iterator().any(|x| x > 0)\n    if a { io.println(\"any-bad\") } else { io.println(\"any-ok\") }\n\n    let b = e.iterator().all(|x| x > 0)\n    if b { io.println(\"all-ok\") } else { io.println(\"all-bad\") }\n\n    let s = e.iterator().fold(7, |acc, x| acc + x)\n    if s == 7 { io.println(\"fold-ok\") } else { io.println(\"fold-bad\") }\n\n    let r = e.iterator().reduce(|p, q| p + q)\n    match r {\n        Some(v) => { io.println(\"reduce-some-bad\") }\n        None => { io.println(\"reduce-none-ok\") }\n    }\n\n    let f = e.iterator().find(|x| x > 0)\n    match f {\n        Some(v) => { io.println(\"find-some-bad\") }\n        None => { io.println(\"find-none-ok\") }\n    }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "count-ok\nany-ok\nall-ok\nfold-ok\nreduce-none-ok\nfind-none-ok\n",
+  "stderr": ""
+}

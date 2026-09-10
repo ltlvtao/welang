@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-domains",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let bs = [true, false, true]\n    let r = bs.iterator().reduce(|p, q| p || q)\n    match r {\n        Some(v) => { if v { io.println(\"bool-reduce-ok\") } else { io.println(\"bool-reduce-bad\") } }\n        None => { io.println(\"bool-reduce-none\") }\n    }\n\n    let f = bs.iterator().find(|x| !x)\n    match f {\n        Some(v) => { if v { io.println(\"bool-find-bad\") } else { io.println(\"bool-find-ok\") } }\n        None => { io.println(\"bool-find-none\") }\n    }\n\n    let rs = ['a', 'b', 'c']\n    let g = rs.iterator().find(|c| c == 'b')\n    match g {\n        Some(v) => { if v == 'b' { io.println(\"rune-find-ok\") } else { io.println(\"rune-find-bad\") } }\n        None => { io.println(\"rune-find-none\") }\n    }\n\n    let rc = rs.iterator().count()\n    if rc == 3 { io.println(\"rune-count-ok\") } else { io.println(\"rune-count-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "bool-reduce-ok\nbool-find-ok\nrune-find-ok\nrune-count-ok\n",
+  "stderr": ""
+}

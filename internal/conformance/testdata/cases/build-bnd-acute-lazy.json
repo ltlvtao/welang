@@ -1,0 +1,16 @@
+{
+  "name": "build-bnd-acute-lazy",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let ys = xs.iterator().filter(|x| x > 1)\n    io.println(\"unreachable\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n"
+}
