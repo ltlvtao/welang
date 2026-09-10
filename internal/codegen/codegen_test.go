@@ -218,15 +218,16 @@ func TestBoundaryWhats(t *testing.T) {
 			"",
 		},
 		{
-			// A handle into a collectable block is the face that still
-			// stops: its global is a gc root, and no root table can see it
-			// yet (T8-2's other half).
-			"gc carrier top-level binding",
+			// The T8-2B row. A handle into a collectable block owns one
+			// global, and the root table can see it (the slot's address is
+			// registered at the entry head) — so this face emits clean too,
+			// and the three storage shapes are all covered.
+			"gc handle top-level binding",
 			appendItem(okModule(), &ast.TopLet{Binding: ast.Binding{
 				Kw: "let", Name: "xs", Typ: &ast.NamedType{Name: "List", Args: []ast.TypeRef{named("Int64")}},
 				Init: &ast.ListLit{Elems: []ast.Expr{intLit("1")}},
 			}}),
-			"top-level value bindings in code generation",
+			"",
 		},
 		{
 			"scalar top-level binding",

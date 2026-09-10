@@ -1,0 +1,17 @@
+{
+  "name": "run-toplet-gc-cross-module",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\nimport u1\n\npub type AppError = Failed(String)\n\nfn churn() -> Int64 {\n    var i: Int64 = 0\n    while i < 80000 {\n        let xs: List<Int64> = []\n        let z: Int64 = i\n        i = z + 1\n    }\n    return i\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = churn()\n    var s: Int64 = 0\n    for x in u1.ns {\n        s = s + x\n    }\n    io.println(\"${u1.shared.n} ${s} ${n}\")\n    return Ok(())\n}\n",
+      "src/u1.we": "pub record Leaf { n: Int64 }\n\npub let shared: Leaf = Leaf { n: 77 }\npub let ns: List<Int64> = [10, 20, 30]\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "77 60 80000\n",
+  "stderr": ""
+}

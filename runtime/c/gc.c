@@ -89,6 +89,28 @@ void __we_gc_window_swap(struct we_gc_window *w) {
     active_win = w ? w : &boot_win;
 }
 
+// The module-level root table (T8-2B, design D7). A top-level binding
+// whose value is a collectable handle keeps that handle in a global, and
+// no shadow stack sees a global: the compiler registers the global's
+// ADDRESS here once, at the entry head, and every collection dereferences
+// it. Registering the address rather than the value is what makes a store
+// barrier unnecessary — nothing has to tell the collector that the global
+// changed, because the collector reads whatever is there when it runs.
+// The slots are zero-initialized statics, so registering before the
+// module initializers store into them is safe: a collection in between
+// reads NULL and skips it.
+//
+// A binding whose bytes live OUTSIDE the gc domain is never registered
+// here. A String's bytes are a private constant or a malloc'd buffer
+// (str.c), neither of them a block with a header, and the mark phase
+// below would read the first word of one as a block header — design D3's
+// storage ruling is why the emitter registers gc handles and nothing else.
+//
+// Each entry IS a slot address, so the collector casts one back to
+// `void **` before reading through it.
+static void **groot_slots;
+static u64 groot_n, groot_cap;
+
 static void **wstack; // the mark phase's worklist
 static u64 wlen, wstack_cap;
 
@@ -124,9 +146,10 @@ static void push_work(void *p) {
     wstack[wlen++] = p;
 }
 
-// Mark every block reachable from every live task's root window, then
-// sweep the chunk prefixes: survivors lose their mark bit, everything
-// else enters the rebuilt free list. Returns the number of blocks swept.
+// Mark every block reachable from every live task's root window and from
+// every registered module-level slot, then sweep the chunk prefixes:
+// survivors lose their mark bit, everything else enters the rebuilt free
+// list. Returns the number of blocks swept.
 long long __we_gc_collect(void) {
     boot_check();
     for (struct we_gc_window *w = all_windows; w; w = w->next) {
@@ -136,6 +159,13 @@ long long __we_gc_collect(void) {
                 *(u64 *)p |= MARK;
                 push_work(p);
             }
+        }
+    }
+    for (u64 i = 0; i < groot_n; i++) {
+        void *p = *(void **)groot_slots[i]; // read the slot now: no barrier needed
+        if (p && !blk_marked(p)) {
+            *(u64 *)p |= MARK;
+            push_work(p);
         }
     }
     while (wlen > 0) {
@@ -193,6 +223,21 @@ void __we_root_pop(void) {
     if (active_win->n > 0) {
         active_win->n--;
     }
+}
+
+// Register one module-level slot (the table above). The compiler calls
+// this once per gc top-level binding, at the entry head, before any
+// initializer has run.
+void __we_gc_root_global(void *slot) {
+    boot_check();
+    if (groot_n == groot_cap) {
+        groot_cap = groot_cap ? groot_cap * 2 : 8;
+        groot_slots = realloc(groot_slots, groot_cap * sizeof *groot_slots);
+        if (!groot_slots) {
+            abort();
+        }
+    }
+    groot_slots[groot_n++] = slot;
 }
 
 // The frozen M4 ABI (ADR-0002): the size argument already includes the

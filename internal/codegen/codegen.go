@@ -175,6 +175,10 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_list_get", "declare i64 @__we_list_get(ptr, i64)"},
 	{"__we_list_len", "declare i64 @__we_list_len(ptr)"},
 	{"__we_list_snap", "declare ptr @__we_list_snap(ptr)"},
+	// T8-2B (design D7): the module-level root table. The registration
+	// takes a slot's address, not a handle; a program with no gc top-level
+	// binding registers nothing and declares nothing.
+	{"__we_gc_root_global", "declare void @__we_gc_root_global(ptr)"},
 }
 
 // ProgModule is one module of a program emission (design D1): the module
@@ -450,16 +454,18 @@ type emitter struct {
 	curImports map[string]string
 
 	// T8-1/T8-2 module-level bindings (design D7). A binding owns its own
-	// globals — `@<key>.<name>` for a scalar word, `@<key>.<name>.{p,len}`
-	// for a String's pair (T8-2A) — spelled by its qualified symbol, which
-	// is also the read face's key. topLets holds every module's bindings in
-	// the order the inits run them: pass one walks the modules in load
-	// order, so the slice is chapter 15's post-order with source order
-	// inside each module. A binding whose storage shape no root scan can
-	// see yet — a gc record or a list handle — stops in pass one.
+	// globals — `@<key>.<name>` for a scalar word or a collectable handle,
+	// `@<key>.<name>.{p,len}` for a String's pair (T8-2A) — spelled by its
+	// qualified symbol, which is also the read face's key. topLets holds
+	// every module's bindings in the order the inits run them: pass one
+	// walks the modules in load order, so the slice is chapter 15's
+	// post-order with source order inside each module. topRoots names the
+	// bindings that hold a collectable handle (T8-2B): their globals are
+	// registered with the collector at the entry head.
 	topLets     []topLetRef
 	topSlots    map[string]topSlot
 	topGlobals  []string
+	topRoots    []string
 	initEmitted map[string]bool
 
 	// T5 method table (design D4). A method is keyed by its head type's
@@ -1131,6 +1137,9 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 	// The module inits open the entry body, ahead of its own statements
 	// (chapter 15: every initializer runs before main does). The calls
 	// allocate no value numbers, so the entry's numbering is untouched.
+	// The gc slots register ahead of even those: the collector has to know
+	// a slot before any initializer can put a handle in it (T8-2B).
+	e.emitTopRootRegistrations()
 	e.emitInitCalls()
 	if mode == ModeBuild {
 		if entry == nil {
@@ -1472,10 +1481,7 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			return nil
 		}
 		if ts, ok := e.topName(init.Name); ok {
-			// A module-level binding read (T8-1) — a copy of its value, not
-			// an alias of its storage: the global is the binding's, and the
-			// new name holds the value it read there.
-			return e.bindResult(s.Name, e.topRead(ts))
+			return e.bindTopRead(s.Name, ts)
 		}
 		return e.bnd()
 	case *ast.Closure:
@@ -2541,9 +2547,10 @@ func (e *emitter) argIsScalar(x ast.Expr) bool {
 		}
 		// A module-level scalar binding (T8-1) is an i64 operand like any
 		// other, so println routes it to the numeric renderer — its String
-		// sibling is a byte pair and routes the other way (T8-2).
+		// sibling is a byte pair and routes the other way (T8-2), and a gc
+		// handle is neither.
 		ts, ok := e.topName(v.Name)
-		return ok && !ts.str
+		return ok && !ts.str && !ts.gc
 	case *ast.Binary:
 		// A `+` over two String operands is the concatenation (chapter
 		// 10's closed operator set), not a numeric form: the
@@ -4727,6 +4734,23 @@ func (e *emitter) listSource(x ast.Expr) (string, listElem, *NotImplemented) {
 		if b, ok := e.listEnv[v.Name]; ok {
 			return b.reg, b.elem, nil
 		}
+		// A module-level List (T8-2B): the carrier lives in a global, so
+		// the walk takes one load of it — the binding site's face, read
+		// where the name is spent.
+		if ts, ok := e.topName(v.Name); ok {
+			if b, ok := e.topListRead(ts); ok {
+				return b.reg, b.elem, nil
+			}
+		}
+	case *ast.Member:
+		// A qualified module-level List (T8-2B): `u1.xs` is the same read
+		// one module over — the qualifier is no value, so the member is
+		// the binding itself.
+		if ts, ok := e.topMember(v); ok {
+			if b, ok := e.topListRead(ts); ok {
+				return b.reg, b.elem, nil
+			}
+		}
 	case *ast.ListLit:
 		return e.emitListLit(v, nil)
 	}
@@ -4740,8 +4764,21 @@ func (e *emitter) listSource(x ast.Expr) (string, listElem, *NotImplemented) {
 func (e *emitter) listFaceOf(x ast.Expr) (listElem, bool) {
 	switch v := x.(type) {
 	case *ast.Ident:
-		b, ok := e.listEnv[v.Name]
-		return b.elem, ok
+		if b, ok := e.listEnv[v.Name]; ok {
+			return b.elem, true
+		}
+		// A module-level List (T8-2B) classifies without emitting: the
+		// slot carries the element face pass one fixed, exactly as the
+		// local binding's does.
+		if ts, ok := e.topName(v.Name); ok && ts.gc && ts.rec == "" {
+			return ts.elem, true
+		}
+		return listElem{}, false
+	case *ast.Member:
+		if ts, ok := e.topMember(v); ok && ts.gc && ts.rec == "" {
+			return ts.elem, true
+		}
+		return listElem{}, false
 	case *ast.ListLit:
 		return e.listElemFace(nil, v)
 	}
@@ -5465,14 +5502,20 @@ type topLetRef struct {
 }
 
 // topSlot is one module-level binding's storage face: the qualified symbol
-// it is spelled and read under, the domain it holds, and which of the two
-// storage shapes it owns — one scalar global, or the pair of globals a
-// String's (ptr, len) takes.
+// it is spelled and read under, the domain it holds, and which of the
+// three storage shapes it owns — one scalar global (the default: an i64 or
+// a double), the pair of globals a String's (ptr, len) takes, or one
+// global holding a collectable handle. `str` and `gc` are exclusive.
+// `rec` and `elem` carry what a gc handle needs on the read side: the
+// record key it names (empty for a List) and a List's element face.
 type topSlot struct {
 	sym     string
 	kind    strKind
 	isFloat bool
 	str     bool
+	gc      bool
+	rec     string
+	elem    listElem
 }
 
 // collectTopLet takes one module-level binding into the init plan. The
@@ -5483,12 +5526,13 @@ type topSlot struct {
 // initializer, and a binding whose annotation names a base type takes the
 // annotation's domain instead, exactly as a `let` statement's does.
 //
-// The face covers the scalar word and the String pair. A String needs no
-// gc root at all — design D3's storage ruling puts its bytes in a private
-// constant or a malloc'd buffer, neither of them a collectable block, so a
-// global holding one is a global the collector must NOT be told about. A gc
-// record or a list is the other case, and it stops here until its global
-// can be registered: a handle in a global no root scan can see is a
+// The face covers the scalar word, the String pair and the collectable
+// handle. The three are three storage shapes, not three domains: a String
+// needs no gc root at all — design D3's storage ruling puts its bytes in a
+// private constant or a malloc'd buffer, neither of them a collectable
+// block, so a global holding one is a global the collector must NOT be
+// told about — while a gc record or a List is exactly the case the root
+// table exists for (T8-2B): a handle in a global no root scan can see is a
 // use-after-free waiting for the first collection.
 func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 	e.topLets = append(e.topLets, topLetRef{key: key, decl: d})
@@ -5498,6 +5542,13 @@ func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 		// so the module keeps its init and the initializer runs there.
 		return nil
 	}
+	sym := key + "." + name
+	if rec, elem, ok := e.topGcShape(d); ok {
+		e.topSlots[sym] = topSlot{sym: sym, gc: true, rec: rec, elem: elem}
+		e.topGlobals = append(e.topGlobals, fmt.Sprintf("@%s = internal global ptr null", sym))
+		e.topRoots = append(e.topRoots, sym)
+		return nil
+	}
 	kind := baseStrKind(baseTypeName(d.Binding.Typ))
 	if kind == skNone {
 		kind = e.valueKind(d.Binding.Init)
@@ -5505,7 +5556,6 @@ func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 	if kind == skNone {
 		return &NotImplemented{What: bndTopLets}
 	}
-	sym := key + "." + name
 	e.topSlots[sym] = topSlot{
 		sym:     sym,
 		kind:    kind,
@@ -5528,6 +5578,84 @@ func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 	}
 	e.topGlobals = append(e.topGlobals, fmt.Sprintf("@%s = internal global %s %s", sym, typ, zero))
 	return nil
+}
+
+// topGcShape decides whether a module-level binding's value is a
+// collectable handle, and which one: the record key a gc record names
+// (elem empty), or a List's element face (rec empty). Emit-free, like
+// every other pass-one classification: the answer rides the binding's
+// slot so a body emitted in another module — before its owner's init —
+// reads the handle at the face pass one fixed.
+//
+// The annotation answers first when it names a record or a List: a
+// binding's declared type is the front end's own answer, and it is the
+// only source for an initializer whose value form says nothing, such as a
+// call. Otherwise the initializer's form decides — a construction, a list
+// literal, or a read of a binding already classified this way — which is
+// the same two-source rule the scalar and String faces take.
+//
+// A value record is NOT this face. Chapter 8 gives every binding of one
+// its own object, so its global would hold a copy the initializer made
+// rather than a handle into a collectable block, and that copy needs a
+// storage story of its own; the binding stops.
+func (e *emitter) topGcShape(d *ast.TopLet) (rec string, elem listElem, ok bool) {
+	if t := e.derefNewtype(d.Binding.Typ); t != nil {
+		if n, isN := t.(*ast.NamedType); isN && n.Qual == "" && n.Name == "List" && len(n.Args) == 1 {
+			if face, isList := e.elemFaceOfType(n.Args[0]); isList {
+				return "", face, true
+			}
+		}
+		if key, isRec := e.recordKeyOfType(t); isRec && !e.valueRecord(key) {
+			return key, listElem{}, true
+		}
+	}
+	switch v := d.Binding.Init.(type) {
+	case *ast.Construct:
+		if key, isRec := e.recordKeyOf(v); isRec && !e.valueRecord(key) {
+			return key, listElem{}, true
+		}
+	case *ast.ListLit:
+		if face, isList := e.listElemFace(d.Binding.Typ, v); isList {
+			return "", face, true
+		}
+	case *ast.Ident:
+		if ts, isTop := e.topName(v.Name); isTop && ts.gc {
+			return ts.rec, ts.elem, true
+		}
+	case *ast.Member:
+		if ts, isTop := e.topMember(v); isTop && ts.gc {
+			return ts.rec, ts.elem, true
+		}
+	}
+	return "", listElem{}, false
+}
+
+// valueRecord reports whether key names a chapter 8 value-category record
+// — the category that copies on every binding.
+func (e *emitter) valueRecord(key string) bool {
+	r, ok := e.records[key]
+	return ok && r.Cat == "value"
+}
+
+// recordKeyOfType resolves a type annotation that names a record declared
+// in the walked module (or in one its imports name), the non-generic
+// spelling only — the same rule recordKeyOf applies to a construction.
+func (e *emitter) recordKeyOfType(t ast.TypeRef) (string, bool) {
+	n, ok := t.(*ast.NamedType)
+	if !ok || len(n.Args) != 0 {
+		return "", false
+	}
+	key := e.curKey
+	if n.Qual != "" {
+		key = e.resolveQual(n.Qual)
+		if key == "" {
+			return "", false
+		}
+	}
+	if _, ok := e.records[key+"."+n.Name]; !ok {
+		return "", false
+	}
+	return key + "." + n.Name, true
 }
 
 // topName resolves a bare name to the module-level binding the walked
@@ -5568,6 +5696,14 @@ func (e *emitter) topRead(ts topSlot) callResult {
 		e.inst(fmt.Sprintf("%%%s = load i64, ptr @%s.len", l, ts.sym))
 		return callResult{kind: ckStr, strBind: strBinding{dataOp: "%" + p, lenOp: "%" + l}}
 	}
+	if ts.gc {
+		// A collectable handle: the global holds the pointer itself, so the
+		// read is one load — the face every gc binding's read takes, and
+		// the handle every later walk starts from.
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = load ptr, ptr @%s", v, ts.sym))
+		return callResult{kind: ckGc, gcReg: "%" + v, recKey: ts.rec}
+	}
 	typ := "i64"
 	if ts.isFloat {
 		typ = "double"
@@ -5575,6 +5711,60 @@ func (e *emitter) topRead(ts topSlot) callResult {
 	v := e.value()
 	e.inst(fmt.Sprintf("%%%s = load %s, ptr @%s", v, typ, ts.sym))
 	return callResult{kind: ckI64, i64: "%" + v, isFloat: ts.isFloat, typeName: strKindName(ts.kind)}
+}
+
+// bindTopRead binds one module-level binding's value under a new name: the
+// global is read where the name is bound, and the new name holds what it
+// read — a copy of the word or of the String pair, the record handle every
+// gc binding shares, or a List's carrier. The distinction that needs the
+// extra step is the List: a List binds by sharing its carrier (chapter
+// 17's gc category), and no callResult face spells a carrier, so the
+// binding site takes listEnv's face directly. Every other shape is the
+// ordinary bindResult.
+func (e *emitter) bindTopRead(name string, ts topSlot) *NotImplemented {
+	if ts.gc && ts.rec == "" {
+		lb, ok := e.topListRead(ts)
+		if !ok {
+			return e.bnd()
+		}
+		if name != "_" {
+			e.listEnv[name] = lb
+		}
+		return nil
+	}
+	return e.bindResult(name, e.topRead(ts))
+}
+
+// topListRead reads one module-level List binding's carrier. A List is a
+// gc handle, but not the ckGc face: nothing downstream wants a bare
+// pointer from it — a list is walked, not field-read — so the binding site
+// takes the carrier and the element face together, which is exactly what
+// listEnv holds for a local one.
+func (e *emitter) topListRead(ts topSlot) (listBinding, bool) {
+	if !ts.gc || ts.rec != "" {
+		return listBinding{}, false
+	}
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr @%s", v, ts.sym))
+	return listBinding{reg: "%" + v, elem: ts.elem}, true
+}
+
+// emitTopRootRegistrations hands the collector the address of every
+// module-level global that holds a collectable handle (T8-2B, design D7).
+// They are the entry's first statements, ahead of the inits: the table has
+// to know a slot before an initializer can put a handle in it. What is
+// registered is the address rather than the handle — the slots are zeroed
+// statics, so a collection between here and the first store reads NULL and
+// skips them, and a store after it needs no barrier because every
+// collection reads the slot anew.
+func (e *emitter) emitTopRootRegistrations() {
+	if len(e.topRoots) == 0 {
+		return
+	}
+	e.use("__we_gc_root_global")
+	for _, sym := range e.topRoots {
+		e.inst(fmt.Sprintf("call void @__we_gc_root_global(ptr @%s)", sym))
+	}
 }
 
 // emitInitCalls opens the entry body with the module inits in load order.
@@ -5658,6 +5848,15 @@ func (e *emitter) emitInitDefine(key string, lets []*ast.TopLet) *NotImplemented
 		}
 	}
 	if !e.diverged {
+		// The init body is a body (T8-2B-0 put every body's exit to work),
+		// and at this point in the milestone it is the only one whose pushes
+		// the collector would otherwise never stop seeing: an initializer
+		// that binds a collectable handle roots it while it evaluates, and
+		// the store into the registered global is what makes that root
+		// redundant — the global root table marks the handle from then on.
+		// Leaving them pushed would also hide the table's own effect, which
+		// is how this discharge was found.
+		e.popRoots()
 		e.inst("ret void")
 	}
 	body := e.bodyText()
@@ -5686,6 +5885,30 @@ func (e *emitter) emitTopLetInit(key string, d *ast.TopLet) *NotImplemented {
 	}
 	if ni := e.emitLetBinding(b); ni != nil {
 		return ni
+	}
+	if ts.gc {
+		// The initializer bound the handle through the ordinary paths — a
+		// gc binding in gcEnv, a List in listEnv — and the store takes it
+		// from there. The name is dropped afterwards for the same reason
+		// the other two shapes drop it: the global is the binding's
+		// storage, and every later read must take the load rather than a
+		// register a collection cannot see.
+		if ts.rec == "" {
+			lb, ok := e.listEnv[b.Name]
+			if !ok {
+				return e.bnd()
+			}
+			delete(e.listEnv, b.Name)
+			e.inst(fmt.Sprintf("store ptr %s, ptr @%s", lb.reg, ts.sym))
+			return nil
+		}
+		g, ok := e.gcEnv[b.Name]
+		if !ok {
+			return e.bnd()
+		}
+		delete(e.gcEnv, b.Name)
+		e.inst(fmt.Sprintf("store ptr %s, ptr @%s", g.reg, ts.sym))
+		return nil
 	}
 	if ts.str {
 		bind, ok := e.strEnv[b.Name]
@@ -6896,23 +7119,69 @@ func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 // the chain's root register. The root is a let-bound record binding (or a
 // method's self, which binds the same way); every hop but the last must
 // load a record reference.
-func (e *emitter) chainOf(m *ast.Member) (base, recKey string, hops []string, ok bool) {
+// chainHead is a member chain's starting point: the record it names, and
+// where the base pointer lives. A local gc binding's is a register the
+// body already holds; a module-level one (T8-2B) is a global, and only the
+// head that actually reads the chain may take the load for it — the
+// classification callers ask the same question with the same walk and must
+// emit nothing.
+type chainHead struct {
+	rec string
+	reg string // a local binding's register; empty when sym names a global
+	sym string // the module-level global holding the handle
+}
+
+// chainHops walks a chain to its head without emitting. The head is a
+// local gc binding, a module-level record binding of the walked module, or
+// — where the innermost receiver is an import qualifier — the module-level
+// binding the first hop names in that module (`u1.node.value`): the
+// qualifier is no value at all, so the chain starts one hop in.
+func (e *emitter) chainHops(m *ast.Member) (chainHead, []string, bool) {
+	var hops []string
 	x := m
 	for {
 		hops = append([]string{x.Name}, hops...)
 		switch r := x.Recv.(type) {
 		case *ast.Ident:
-			g, ok := e.gcEnv[r.Name]
-			if !ok {
-				return "", "", nil, false
+			if g, ok := e.gcEnv[r.Name]; ok {
+				return chainHead{rec: g.rec, reg: g.reg}, hops, true
 			}
-			return g.reg, g.rec, hops, true
+			if ts, ok := e.topName(r.Name); ok && ts.gc && ts.rec != "" {
+				return chainHead{rec: ts.rec, sym: ts.sym}, hops, true
+			}
+			if e.isLocalName(r.Name) {
+				return chainHead{}, nil, false
+			}
+			k := e.resolveQual(r.Name)
+			if k == "" || len(hops) < 2 {
+				return chainHead{}, nil, false
+			}
+			ts, ok := e.topSlots[k+"."+hops[0]]
+			if !ok || !ts.gc || ts.rec == "" {
+				return chainHead{}, nil, false
+			}
+			return chainHead{rec: ts.rec, sym: ts.sym}, hops[1:], true
 		case *ast.Member:
 			x = r
 		default:
-			return "", "", nil, false
+			return chainHead{}, nil, false
 		}
 	}
+}
+
+func (e *emitter) chainOf(m *ast.Member) (base, recKey string, hops []string, ok bool) {
+	h, hops, ok := e.chainHops(m)
+	if !ok {
+		return "", "", nil, false
+	}
+	if h.reg != "" {
+		return h.reg, h.rec, hops, true
+	}
+	// A module-level head: one load of the binding's global, taken here at
+	// the chain's own position (the same read topRead takes).
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr @%s", v, h.sym))
+	return "%" + v, h.rec, hops, true
 }
 
 // walkHops loads the pointer hops before the last one, landing on the
@@ -7591,10 +7860,11 @@ func (e *emitter) memberKind(m *ast.Member) strKind {
 // chainField resolves a member chain's trailing field from the layouts
 // alone — the emit-free half of the member read.
 func (e *emitter) chainField(m *ast.Member) (fieldSlot, bool) {
-	_, recKey, hops, ok := e.chainOf(m)
+	h, hops, ok := e.chainHops(m)
 	if !ok {
 		return fieldSlot{}, false
 	}
+	recKey := h.rec
 	for _, h := range hops[:len(hops)-1] {
 		slot, ok := e.fieldSlotOf(recKey, h)
 		if !ok || (slot.kind != fkRef && slot.kind != fkVal) {
@@ -9668,11 +9938,15 @@ func (e *emitter) recvKeyOf(x ast.Expr) (string, bool) {
 			// underlying's, so no dispatch is resolved here.
 			return "", false
 		}
-		g, ok := e.gcEnv[v.Name]
-		if !ok {
-			return "", false
+		if g, ok := e.gcEnv[v.Name]; ok {
+			return g.rec, true
 		}
-		return g.rec, true
+		// A module-level record binding (T8-2B) names its record from the
+		// slot, without reading the global: the key is a compile-time fact.
+		if ts, ok := e.topName(v.Name); ok && ts.gc && ts.rec != "" {
+			return ts.rec, true
+		}
+		return "", false
 	case *ast.Member:
 		slot, ok := e.chainField(v)
 		if !ok || (slot.kind != fkRef && slot.kind != fkVal) {

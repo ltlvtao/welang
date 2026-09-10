@@ -28,11 +28,12 @@ import (
 //   - a panic inside an initializer takes the task-fail tail, so the
 //     process aborts: there is no capture boundary before main (R5).
 //
-// The face's stop is the scalar word. A binding whose value is a carrier
-// (a String, a list, a record) or anything the emitter cannot classify
-// statically stops at the boundary word: those are T8-2's (D7's global root
-// table) and the composites' respectively. The emitted shape is pinned
-// below; the answers are the conformance goldens'.
+// The face covers three storage shapes: a scalar word, a String's pair of
+// words, and one global holding a collectable handle (T8-2B, whose pins are
+// toplet_gc_test.go's). A binding the emitter cannot classify statically
+// still stops at the boundary word — the composites' faces are the ones
+// left. The emitted shape is pinned below; the answers are the conformance
+// goldens'.
 
 // topLetDecl is one module-level binding: `[pub] let name [: typ] = init`.
 func topLetDecl(name string, typ ast.TypeRef, init ast.Expr) *ast.TopLet {
@@ -325,20 +326,11 @@ func TestTopLetDiscardBindsNoGlobal(t *testing.T) {
 	wantNoIR(t, ir, "@main._", "a discard binds nothing")
 }
 
-// TestTopLetListStops: a list binding is a carrier handle — same face,
-// same stop.
-func TestTopLetListStops(t *testing.T) {
-	_, ni := EmitProgram(ModeBuild, []ProgModule{topProg([]ast.Item{
-		topLetDecl("xs", &ast.NamedType{Name: "List", Args: []ast.TypeRef{named("Int64")}},
-			&ast.ListLit{Elems: []ast.Expr{intLit("1"), intLit("2")}}),
-	})})
-	if ni == nil {
-		t.Fatal("a list binding is not the scalar word face")
-	}
-	if ni.What != "top-level value bindings in code generation" {
-		t.Fatalf("boundary word: %q", ni.What)
-	}
-}
+// TestTopLetListStops is retired: it pinned the list binding's STOP, and
+// T8-2B implemented that face — a List binding now owns a handle global and
+// registers it (TestTopLetListOwnsAHandleGlobalAndRegisters). The name is
+// gone rather than re-anchored because it names a fact that no longer
+// holds, exactly as the String face's stop was retired in T8-2A.
 
 // TestTopLetInitTrapAborts: chapter 15 R5 — an initializer that fails
 // aborts the process. The trap rides the task-fail tail inside the init

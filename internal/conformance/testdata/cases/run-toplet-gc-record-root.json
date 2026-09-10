@@ -1,0 +1,16 @@
+{
+  "name": "run-toplet-gc-record-root",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Big { a: Int64, b: Int64, c: Int64, d: Int64 }\n\nlet g: Big = Big { a: 1, b: 2, c: 3, d: 4 }\n\nfn churn() -> Int64 {\n    var i: Int64 = 0\n    while i < 80000 {\n        let xs: List<Int64> = []\n        let z: Int64 = i\n        i = z + 1\n    }\n    return i\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = churn()\n    let probe = Big { a: 9, b: 9, c: 9, d: 9 }\n    io.println(\"${g.a} ${probe.a} ${n}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "1 9 80000\n",
+  "stderr": ""
+}

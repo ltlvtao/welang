@@ -1,0 +1,16 @@
+{
+  "name": "run-toplet-gc-list-root",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nlet ns: List<Int64> = [10, 20, 30, 40]\n\nfn churn() -> Int64 {\n    var i: Int64 = 0\n    while i < 80000 {\n        let xs: List<Int64> = []\n        let z: Int64 = i\n        i = z + 1\n    }\n    return i\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let n = churn()\n    let probe: List<Int64> = [7, 7, 7, 7]\n    var s: Int64 = 0\n    for x in ns {\n        s = s + x\n    }\n    var p: Int64 = 0\n    for y in probe {\n        p = p + y\n    }\n    io.println(\"${s} ${p} ${n}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "100 28 80000\n",
+  "stderr": ""
+}
