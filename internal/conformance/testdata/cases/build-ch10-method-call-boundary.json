@@ -10,11 +10,7 @@
       "src/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    let text = u.describe()\n    return Err(Failed(\"unreachable\"))\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n",
-  "files": {
-    "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
-    "src/main.we": "interface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\npub type AppError = Failed(String)\npub fn main() -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    let text = u.describe()\n    return Err(Failed(\"unreachable\"))\n}\n"
-  }
+  "stderr": ""
 }

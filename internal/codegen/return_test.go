@@ -252,3 +252,34 @@ func TestTestDeepReturn(t *testing.T) {
 		t.Fatalf("an instruction lands after a terminator:\n%s", def)
 	}
 }
+
+// TestVoidBodyTrailingExpressionIsAStatement: a fn that declares no return
+// type has no implicit return — chapter 6 sends its trailing item to
+// chapter 8's value-discard rule instead ("未声明返回类型时，体末项由第 8
+// 章值丢弃规则治理：类型非 unit 的末项表达式 MUST 以 `let _ =` 显式丢弃，
+// unit 类型无需仪式"), and chapter 6's implicit return is granted to the
+// declared-return-type case alone ("声明了返回类型时，体块值是函数的隐式
+// 返回值"). So a void body's last expression statement is a statement like
+// any other: it emits and its value is dropped, and the define closes with
+// a plain ret void. Reading it as a value tail would hand the void family
+// a value it has nowhere to put — the boundary — which is exactly the
+// shape `impl Releasable`'s release body takes: the resource bodies this
+// build's scope resource statement dispatches to end in a method call.
+func TestVoidBodyTrailingExpressionIsAStatement(t *testing.T) {
+	fn := pubFn("note", nil, nil,
+		ioCall("io", "println", strLit(`"noted"`)),
+	)
+	ir := assertClean(t, drModule(fn), "define void @main.note()", "ret void")
+	at := strings.Index(ir, "define void @main.note()")
+	body := ir[at:]
+	if end := strings.Index(body, "\n}\n"); end >= 0 {
+		body = body[:end]
+	}
+	order(t, body, "load ptr, ptr @slot.io.println", "call void %", "ret void")
+	// The statement is not dropped either: the call emits once, in the
+	// body's own straight line — a promoted tail would lift it out of that
+	// line into a value block of its own.
+	if got := strings.Count(ir, "load ptr, ptr @slot.io.println"); got != 1 {
+		t.Fatalf("the trailing call emits once, got %d:\n%s", got, ir)
+	}
+}

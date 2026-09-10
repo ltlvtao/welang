@@ -1,0 +1,16 @@
+{
+  "name": "run-record-read-update",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Point { x: Int64, y: Int64, label: String }\n\nfn shift(p: Point) -> Point {\n    return Point { x: p.x + 10 with &p }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let p = Point { x: 1, y: 2, label: \"p\" }\n    let q = Point { x: 3 with &p }\n    io.println(\"${p.x} ${p.y} ${q.x} ${q.y} ${q.label}\")\n    let r = shift(q)\n    io.println(\"${r.x} ${r.y} ${r.label}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "1 2 3 2 p\n13 2 p\n",
+  "stderr": ""
+}

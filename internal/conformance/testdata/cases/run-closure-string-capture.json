@@ -1,0 +1,16 @@
+{
+  "name": "run-closure-string-capture",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let s = \"a\" + \"b\"\n    let m = conc.Mutex(0)\n    var n: Int64 = 0\n    n = m.update(|v| v + s.byteLength())\n    io.println(\"${n}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "2\n",
+  "stderr": ""
+}

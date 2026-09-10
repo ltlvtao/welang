@@ -1,0 +1,16 @@
+{
+  "name": "run-fn-value-higher-order",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn square(n: Int64) -> Int64 { return n * n }\n\nfn apply(f: fn(Int64) -> Int64, v: Int64) -> Int64 { return f(v) }\n\npub fn main() effect io -> Result<(), AppError> {\n    let g = apply\n    let a = g(square, 2)\n    let b = g(|x| x + 1, 10)\n    io.println(\"${a}\")\n    io.println(\"${b}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "4\n11\n",
+  "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+  "name": "run-newtype-erasure",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nnewtype UserId(Int64)\nnewtype Name(String)\n\nfn raw(id: UserId) -> Int64 {\n    return id.value\n}\n\nfn label(n: Name) -> String {\n    return n.value\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let id = UserId(41)\n    let alias = id\n    io.println(\"${raw(alias) + 1} ${label(Name(\"id\"))} ${id.value}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "42 id 41\n",
+  "stderr": ""
+}

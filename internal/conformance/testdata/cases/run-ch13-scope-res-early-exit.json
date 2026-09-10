@@ -1,0 +1,16 @@
+{
+  "name": "run-ch13-scope-res-early-exit",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Log { n: Int64 }\n\nimpl Log {\n    fn mark(mut self, id: Int64) { self.n = self.n * 10 + id }\n}\n\nbyres record Handle { log: Log, id: Int64 }\n\nimpl Releasable for Handle {\n    fn release(mut self) { self.log.mark(self.id) }\n}\n\nfn open(log: Log, id: Int64) -> Handle {\n    return Handle { log: log, id: id }\n}\n\nfn pick(log: Log, id: Int64) -> Int64 {\n    defer { log.mark(9) }\n    scope resource(h = open(log, id)) {\n        if id > 0 { return 7 }\n    }\n    return 0\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let log = Log { n: 0 }\n    io.println(\"${pick(log, 3)}\")\n    io.println(\"${log.n}\")\n    io.println(\"${pick(log, 0)}\")\n    io.println(\"${log.n}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "7\n39\n0\n3909\n",
+  "stderr": ""
+}

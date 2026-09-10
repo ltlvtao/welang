@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -41,11 +42,10 @@ type NotImplemented struct {
 // bndTestModule with the multi-function widening and adds the two rows
 // below.
 const (
-	bndMainBody     = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
-	bndErrPayload   = "Err payloads beyond one plain string-literal variant argument"
-	bndTopLets      = "top-level value bindings in code generation"
-	bndTaskBody     = "task bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
-	bndCallbackBody = "callback bodies beyond straight-line scalar expressions (no control flow, blocking calls, io, or captures of outer bindings)"
+	bndMainBody   = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
+	bndErrPayload = "Err payloads beyond one plain string-literal variant argument"
+	bndTopLets    = "top-level value bindings in code generation"
+	bndTaskBody   = "task bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	// M10b design D8, verbatim.
 	bndGenericFns = "generic functions in code generation (monomorphization is the B-track codegen-full widening)"
 	bndFnBody     = "function bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
@@ -57,7 +57,6 @@ const (
 func bndMain() *NotImplemented     { return &NotImplemented{What: bndMainBody} }
 func bndErrPay() *NotImplemented   { return &NotImplemented{What: bndErrPayload} }
 func bndTask() *NotImplemented     { return &NotImplemented{What: bndTaskBody} }
-func bndCallback() *NotImplemented { return &NotImplemented{What: bndCallbackBody} }
 func bndFn() *NotImplemented       { return &NotImplemented{What: bndFnBody} }
 func bndEqDomain() *NotImplemented { return &NotImplemented{What: bndAssertEqDomain} }
 
@@ -223,21 +222,26 @@ var stdFnEntries = map[string]map[string]stdEntry{
 }
 
 // A record field's emission shape: String is the double word (16 bytes,
-// not a gc reference — every M8 buffer is a constant, design D5), a gc
-// record reference is one pointer slot, and the 8-byte scalars ride the
-// construction-argument literal positions only.
+// not a gc reference — every M8 buffer is a constant, design D5), a
+// record reference is one pointer slot, and the 8-byte base types ride
+// one word each. A reference splits by the target's category, since the
+// two copy differently: a gc- or resource-category target is shared (the
+// copy keeps the pointer), a value-category target is copied with it
+// (chapter 8's value records share nothing).
 type fieldKind int
 
 const (
-	fkStr fieldKind = iota
-	fkRef
-	fkScalar
+	fkStr    fieldKind = iota
+	fkRef              // a gc- or resource-category record reference
+	fkVal              // a value-category record reference
+	fkScalar           // one i64 word
+	fkF64              // one double word
 )
 
 type fieldSlot struct {
 	off   int
 	kind  fieldKind
-	typ   string // the referenced record's name on fkRef
+	typ   string // the referenced record's key, or the scalar's base type name
 	isRef bool
 }
 
@@ -264,6 +268,55 @@ type gcBinding struct {
 	reg string
 }
 
+// fnValue is one bound function value (design D5): the single pointer a
+// binding holds — a gc carrier whose first word is the thunk's code
+// pointer and whose second is its capture environment (null when the
+// closure captures nothing). A call loads the pair out of the carrier;
+// the callback ABI takes the pair as its two pointer words.
+//
+// The signature rides beside the carrier rather than in it: the calling
+// shape is a static fact of the site that made the value, so a binding
+// carries it on in the environment maps and a capture hands it to the
+// thunk that reads the value back — exactly as a record capture hands on
+// the record's key. A fn value whose signature the emitter did not see
+// answers typed=false and stops at the fn body word rather than guessing
+// an ABI.
+type fnValue struct {
+	carrier string
+	abi     fnAbi
+	typed   bool
+}
+
+// tupBinding is one tuple value's handle: the stack aggregate that IS the
+// tuple, plus the element shapes it was laid out with. A tuple never
+// leaves the stack — it crosses a call boundary as its bare words (design
+// D4) and is rebuilt into an aggregate on the far side.
+type tupBinding struct {
+	ptr   string
+	elems []tupleElem
+}
+
+// tupleElem is one element's place in a tuple's aggregate: the family it
+// crosses a boundary as, the IR words it occupies there in order, and its
+// byte offset (design D4's `{f0, f1, ...}` layout, element per field).
+type tupleElem struct {
+	kind  fnAbiKind
+	key   string // the record key a gc element points at, "" otherwise
+	typ   string // the element's base-type name, for the interpolation domain
+	off   int
+	words []string // "i64", "double", or "ptr" — one per word, in order
+}
+
+// aggTyp renders a tuple aggregate's IR type from its element shapes: the
+// words the elements occupy, element by element.
+func aggTyp(elems []tupleElem) string {
+	var parts []string
+	for _, el := range elems {
+		parts = append(parts, el.words...)
+	}
+	return "{ " + strings.Join(parts, ", ") + " }"
+}
+
 // emitter is one Emit run's state: the collected tables, the constant
 // pool, the instruction stream, and the fresh-value counter. The M9b
 // additions ride alongside: the per-body context (which boundary word a
@@ -279,6 +332,13 @@ type emitter struct {
 
 	strEnv map[string]strBinding
 	gcEnv  map[string]gcBinding
+	// tupEnv holds a tuple binding's handle: the stack aggregate that IS
+	// the tuple value, plus the shape its elements were classified with.
+	tupEnv map[string]tupBinding
+	// ntEnv records the names whose static type is a newtype. Nothing in
+	// the value says so — the wrapper erases (design D4) — so the fact
+	// rides the environment, and the `.value` read is what spends it.
+	ntEnv map[string]string
 
 	strs     []strConst
 	strPool  map[string]string
@@ -300,10 +360,11 @@ type emitter struct {
 	scalars map[string]scalarSlot
 	sums2   map[string]sumSlot
 	prims   map[string]string
-	thunks  []string // finished callback and task defines
-	ovfs    []string // overflow report constants
-	divzs   []string // zero-divisor report constants
-	blocks  int      // fresh block-label suffix
+	fnEnv   map[string]fnValue // local fn values (their gc carriers)
+	thunks  []string           // finished callback and task defines
+	ovfs    []string           // overflow report constants
+	divzs   []string           // zero-divisor report constants
+	blocks  int                // fresh block-label suffix
 	// curBlock is the label of the block the running body is emitting
 	// into: the entry block until a label() opens another. A phi that
 	// joins a subexpression's branches names its predecessors from here
@@ -321,6 +382,8 @@ type emitter struct {
 	chanDescs []string        // channel element-bitmap descriptor globals
 	envMaps   []string        // task environment-block bitmap globals
 	cdsc      int             // fresh channel-element descriptor count
+	fnMap     string          // the fn-value carrier's trace descriptor
+	cbN       int             // fresh closure-thunk count
 
 	// T1 env scoping: per-block snapshots of the five env maps (see
 	// pushEnv/popEnv). Block-local registrations land on the block's
@@ -347,6 +410,24 @@ type emitter struct {
 	slotSeen   map[string]bool
 	curKey     string // the module whose body is being walked/emitted
 	curImports map[string]string
+
+	// T5 method table (design D4). A method is keyed by its head type's
+	// module-qualified key plus the method name — the receiver's record
+	// names the head, so a call site resolves by what it already knows.
+	// The interface's own face contributes no entry: an `impl Iface for
+	// Head` method lands under Head, and a default body the interface
+	// declares instantiates once per implementing head (a bare signature
+	// never does). methodsOrd keeps the define order deterministic.
+	methods    map[string]*fnDef
+	methodsOrd []string
+	// newtypes maps a newtype's key to its underlying type (design D4):
+	// a value of the newtype IS a value of the underlying, at every
+	// position, so the table answers `classType` and the `.value` read
+	// alike. Generic newtypes are B1b's.
+	newtypes   map[string]ast.TypeRef
+	ifaceDefs  map[string]*ast.InterfaceDecl // "<module>.<interface>" -> decl
+	ifaceHeads map[string][]string           // interface key -> implementing head keys, impl order
+	ifaceSeen  map[string]map[string]bool    // interface key -> head keys already bound
 
 	// M12 foreign state (design D4/D5). Opaque records live in their own
 	// table — no layout, no constructor, no records/order entry (E1707
@@ -380,8 +461,17 @@ type emitter struct {
 	allocas    []string
 	loopFrames []loopFrame
 	scopeLive  []liveScope
-	exit       *exitSite
-	inExit     bool
+	// resFrames is the stack of open scope resource statements (chapter
+	// 13) — one frame per block entered and not yet left, each holding
+	// its bindings in declaration order. nest is the body's nesting
+	// ordinal: every compound scope and every resource block takes the
+	// next one as it opens, so a loop frame's or an exit's mark compares
+	// against both stacks by one number — which is what lets a piercing
+	// exit discharge the two kinds in the order they actually nest.
+	resFrames []resFrame
+	nest      int
+	exit      *exitSite
+	inExit    bool
 
 	// M10b test state (design D5). tests collects the TestDecls pass one
 	// sees in test mode (module order, source order within); the tower
@@ -390,6 +480,91 @@ type emitter struct {
 	// exitSite{kind: exitTest} like every other body's exit.
 	tests  []testRef
 	drives []driveStep
+}
+
+// collectImpl enters one impl block's methods into the method table
+// (design D4). The head names the table's key, so `impl Greeter for User`
+// and `impl User` land in the same place — which is what lets a default
+// body's `self.greet()` resolve. A generic impl is B1b's (its methods
+// instantiate per type argument); a non-nominal head has no key to hang a
+// method on. An interface impl also records the head under its interface,
+// the pairing collectDefaults instantiates from.
+func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
+	if len(d.TypeParams) != 0 {
+		return &NotImplemented{What: bndGenericFns}
+	}
+	head, ok := d.Head.(*ast.NamedType)
+	if !ok || head.Qual != "" || len(head.Args) != 0 {
+		return e.bnd()
+	}
+	headKey := modKey + "." + head.Name
+	for _, md := range d.Methods {
+		if len(md.TypeParams) != 0 {
+			return &NotImplemented{What: bndGenericFns}
+		}
+		key := headKey + "." + md.Name
+		if _, seen := e.methods[key]; seen {
+			continue // the first definition wins; a duplicate is the check stage's (E0807)
+		}
+		e.methods[key] = &fnDef{key: modKey, name: md.Name, recvKey: headKey, decl: md}
+		e.methodsOrd = append(e.methodsOrd, key)
+	}
+	if iface, ok := d.Iface.(*ast.NamedType); ok && iface.Qual == "" && len(iface.Args) == 0 {
+		ik := modKey + "." + iface.Name
+		if e.ifaceSeen[ik] == nil {
+			e.ifaceSeen[ik] = make(map[string]bool)
+		}
+		if !e.ifaceSeen[ik][headKey] {
+			e.ifaceSeen[ik][headKey] = true
+			e.ifaceHeads[ik] = append(e.ifaceHeads[ik], headKey)
+		}
+	}
+	return nil
+}
+
+// collectDefaults instantiates every interface default body once per
+// implementing head (design D4) — the step that makes a default method
+// real. A head that defines the method itself keeps its own definition: a
+// default is what an impl leaves unsaid. Runs after pass one, when every
+// module's interfaces and impls are known, whatever their source order.
+func (e *emitter) collectDefaults() {
+	for ik, iface := range e.ifaceDefs {
+		for _, headKey := range e.ifaceHeads[ik] {
+			for _, m := range iface.Methods {
+				if m.Body == nil {
+					continue // a bare signature is the impl's obligation, not a body
+				}
+				key := headKey + "." + m.Name
+				if _, ok := e.methods[key]; ok {
+					continue
+				}
+				e.methods[key] = &fnDef{
+					key:     ik[:strings.LastIndex(ik, ".")],
+					name:    m.Name,
+					recvKey: headKey,
+					decl:    defaultFnDecl(m),
+				}
+				e.methodsOrd = append(e.methodsOrd, key)
+			}
+		}
+	}
+}
+
+// defaultFnDecl restates one interface default body as the fn declaration
+// its per-head instantiation emits — the same signature, the body the
+// interface wrote.
+func defaultFnDecl(m ast.MethodSig) *ast.FnDecl {
+	d := &ast.FnDecl{
+		Name:       m.Name,
+		Recv:       m.Recv,
+		Params:     m.Params,
+		EffectTags: m.EffectTags,
+		Body:       *m.Body,
+	}
+	if m.HasRet {
+		d.Ret = m.Ret
+	}
+	return d
 }
 
 // enterModule loads m's import faces into the working fields — call
@@ -453,6 +628,20 @@ type fnDef struct {
 	abi     fnAbi
 	abiOK   bool
 	foreign bool
+	// recvKey is the head type's module-qualified key on a method (design
+	// D4's method table); empty on a plain fn. It names the symbol's
+	// middle segment — and, inside the body, the record `self` holds.
+	recvKey string
+}
+
+// sym renders one fn's IR symbol: `<module>.<name>` for a plain fn,
+// `<module>.<Head>.<name>` for a method — the head type's segment keeps a
+// method from colliding with a same-named plain fn of its module.
+func (fd *fnDef) sym() string {
+	if fd.recvKey != "" {
+		return fd.recvKey + "." + fd.name
+	}
+	return fd.key + "." + fd.name
 }
 
 // captureSet is one task block's environment face: the names the body
@@ -477,6 +666,41 @@ func (c *captureSet) slot(name string) (int, bool) {
 	return 0, false
 }
 
+// capSlot is one binding a closure captures, and its place in the
+// environment block (design D5): the words start at off, n of them, and
+// trace says per word whether the block's bitmap marks it a gc reference.
+// A scalar is one untraced word — the copy capture of a value binding,
+// frozen at the creation site. A primitive handle or a record pointer is
+// one traced word — the reference capture of a gc binding, which stays
+// one object with its enclosing scope. A String is its header's pair: the
+// data pointer (traced) plus the length (not a pointer).
+type capSlot struct {
+	name  string
+	off   int
+	n     int
+	trace [2]bool
+	prim  bool    // the traced word is a primitive handle, not a fn carrier
+	key   string  // a gc record capture names the record it points at
+	kind  strKind // a scalar capture keeps its interpolation domain
+	abi   fnAbi   // a fn capture keeps the signature its carrier was built with
+	typed bool    // the capture above carries a signature at all
+}
+
+// closureEnv is one closure's capture set in layout order — the slots its
+// environment block holds, and the length the allocation takes.
+type closureEnv struct {
+	slots []capSlot
+}
+
+// words is the block's payload word count.
+func (c *closureEnv) words() int {
+	n := 0
+	for _, s := range c.slots {
+		n += s.n
+	}
+	return n
+}
+
 // bodyCtx is which straight-line set is being emitted — the boundary
 // word a stop reports depends on it (design D9): the same out-of-set
 // form names the task body inside a task and the main body elsewhere.
@@ -487,7 +711,6 @@ type bodyCtx int
 const (
 	ctxMain bodyCtx = iota
 	ctxTask
-	ctxCallback
 	ctxFn
 )
 
@@ -495,8 +718,6 @@ func (e *emitter) bnd() *NotImplemented {
 	switch e.ctx {
 	case ctxTask:
 		return bndTask()
-	case ctxCallback:
-		return bndCallback()
 	case ctxFn:
 		return bndFn()
 	default:
@@ -662,6 +883,9 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		records:    make(map[string]*ast.RecordDecl),
 		strEnv:     make(map[string]strBinding),
 		gcEnv:      make(map[string]gcBinding),
+		tupEnv:     make(map[string]tupBinding),
+		ntEnv:      make(map[string]string),
+		newtypes:   make(map[string]ast.TypeRef),
 		strPool:    make(map[string]string),
 		usedRecs:   make(map[string]bool),
 		declUsed:   make(map[string]bool),
@@ -671,6 +895,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		scalars:    make(map[string]scalarSlot),
 		sums2:      make(map[string]sumSlot),
 		prims:      make(map[string]string),
+		fnEnv:      make(map[string]fnValue),
 		modKeys:    make(map[string]bool),
 		modImports: make(map[string]map[string]string),
 		modStd:     make(map[string]map[string]string),
@@ -678,6 +903,10 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		fnTable:    make(map[string]*fnDef),
 		slotSeen:   make(map[string]bool),
 		opaques:    make(map[string]bool),
+		methods:    make(map[string]*fnDef),
+		ifaceDefs:  make(map[string]*ast.InterfaceDecl),
+		ifaceHeads: make(map[string][]string),
+		ifaceSeen:  make(map[string]map[string]bool),
 		mode:       mode,
 	}
 	root := mods[len(mods)-1]
@@ -726,16 +955,29 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				e.records[key] = d
 			case *ast.NewtypeDecl:
 				// Newtypes are zero-cost wrappers (chapter 8): the layout
-				// erases and their value expressions stop at the body
-				// boundary within the accepted shapes.
-				continue
-			case *ast.InterfaceDecl, *ast.ImplDecl:
-				// Interfaces and impls erase (design D11 of the generics
-				// change): a declaration-level fact only — the member sets
-				// live in the type stage — so neither emits IR. An
-				// explicit case, not a silent fall-through: a future form
-				// arriving here must decide, never vanish.
-				continue
+				// erases (design D4), so the table carries what a value of
+				// the wrapper erases to. The generic form is B1b's, like
+				// every other generic declaration's.
+				if len(d.TypeParams) != 0 {
+					return "", &NotImplemented{What: bndGenericFns}
+				}
+				e.newtypes[m.Key+"."+d.Name] = d.Underlying
+			case *ast.InterfaceDecl:
+				// The interface itself emits no IR — its member set is a
+				// declaration-level fact the check stage consumes. Its
+				// default bodies do reach IR, but never under the
+				// interface's name: each instantiates per implementing
+				// head (see collectDefaults), because a default body's
+				// `self.m()` dispatches to the head's own method.
+				e.ifaceDefs[m.Key+"."+d.Name] = d
+			case *ast.ImplDecl:
+				// An impl's methods reach IR under the head type's key —
+				// the method table of design D4. The impl's own face (the
+				// interface it satisfies, its where clause) stays a
+				// declaration-level fact.
+				if ni := e.collectImpl(m.Key, d); ni != nil {
+					return "", ni
+				}
 			case *ast.EffectDecl:
 				// Effect declarations erase (M7 design D10): chapter 16 is
 				// a compile-time discipline — the check stage consumes
@@ -829,6 +1071,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 	// Pass two: bodies. The entry emits first — value numbering starts at
 	// v0 there — then every fn define, each under the snapshot protocol
 	// the task thunks use (its own local environments and gc window).
+	e.collectDefaults()
 	if mode == ModeBuild {
 		if entry == nil {
 			// Defensive: Project-mode typecheck rejects a missing main (E1305).
@@ -859,6 +1102,14 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 	}
 	for i := range e.fns {
 		if ni := e.emitFnDefine(&e.fns[i]); ni != nil {
+			return "", ni
+		}
+	}
+	// The method table's defines (design D4), in collection order: an
+	// impl's own methods first, then the defaults an interface contributes
+	// to the heads that left them unsaid.
+	for _, key := range e.methodsOrd {
+		if ni := e.emitFnDefine(e.methods[key]); ni != nil {
 			return "", ni
 		}
 	}
@@ -965,7 +1216,10 @@ func (e *emitter) emitStmt(st ast.Stmt) *NotImplemented {
 	}
 	switch s := st.(type) {
 	case *ast.Binding:
-		if s.Pat != nil || (s.Kw != "let" && s.Kw != "var") {
+		if s.Pat != nil {
+			return e.emitLetPattern(s)
+		}
+		if s.Kw != "let" && s.Kw != "var" {
 			return e.bnd()
 		}
 		if s.Kw == "var" {
@@ -974,7 +1228,20 @@ func (e *emitter) emitStmt(st ast.Stmt) *NotImplemented {
 		return e.emitLetBinding(s)
 	case *ast.Assign:
 		if s.Field != "" {
-			return e.bnd() // the record field write is design D4's
+			// `self.field = value` (design D1's field write, design D4's
+			// mut self): a store through the receiver pointer at the
+			// field's layout offset — the write half of the unified
+			// member face. The name is `self` by the grammar (chapter 10
+			// admits no other target), so the binding settles it.
+			g, ok := e.gcEnv[s.Name]
+			if !ok {
+				return e.bnd()
+			}
+			slot, ok := e.fieldSlotOf(g.rec, s.Field)
+			if !ok {
+				return e.bnd()
+			}
+			return e.emitFieldStore(g.reg, slot, s.Value)
 		}
 		slot, ok := e.scalars[s.Name]
 		if !ok || slot.alloca == "" {
@@ -1005,6 +1272,8 @@ func (e *emitter) emitStmt(st ast.Stmt) *NotImplemented {
 		return e.emitContinue()
 	case *ast.Return:
 		return e.emitReturn(s)
+	case *ast.ScopeRes:
+		return e.emitScopeRes(s)
 	case *ast.Defer:
 		// Inverted emission: the block runs at body exit, reverse
 		// registration order (the main tail and every task thunk drain
@@ -1071,6 +1340,13 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 		if s.Name == "_" {
 			return nil
 		}
+		if k, is := e.ntEnv[init.Name]; is {
+			e.ntEnv[s.Name] = k
+		}
+		if b, ok := e.tupEnv[init.Name]; ok {
+			e.tupEnv[s.Name] = b
+			return nil
+		}
 		if b, ok := e.strEnv[init.Name]; ok {
 			e.strEnv[s.Name] = b
 			return nil
@@ -1097,11 +1373,54 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			e.prims[s.Name] = v
 			return nil
 		}
+		if v, ok := e.fnEnv[init.Name]; ok {
+			e.fnEnv[s.Name] = v
+			return nil
+		}
+		// A program fn named in value position: the constant pair, whose
+		// slot-loaded code pointer already carries the signature.
+		if !e.isLocalName(init.Name) {
+			if fd, ok := e.fnTable[e.curKey+"."+init.Name]; ok {
+				res, ni := e.emitFnRef(fd)
+				if ni != nil {
+					return ni
+				}
+				return e.bindResult(s.Name, res)
+			}
+		}
 		if v, ok := e.gcEnv[init.Name]; ok {
+			// Binding a value record copies the whole value (chapter 8:
+			// every binding of a value record takes its own object); a gc
+			// or resource record binds the same reference.
+			if r, ok := e.records[v.rec]; ok && r.Cat == "value" {
+				e.gcEnv[s.Name] = gcBinding{rec: v.rec, reg: e.emitRecCopy(v.reg, v.rec)}
+				return nil
+			}
 			e.gcEnv[s.Name] = v
 			return nil
 		}
 		return e.bnd()
+	case *ast.Closure:
+		// A closure literal in value position (design D5): the thunk is
+		// emitted where the creation site's bindings live, its captures
+		// frozen into the environment block, and the name holds the one
+		// carrier both parts travel in.
+		res, ni := e.emitClosureValue(init, s.Typ)
+		if ni != nil {
+			return ni
+		}
+		return e.bindResult(s.Name, res)
+	case *ast.Tuple:
+		// A tuple binding holds the aggregate's handle (design D4): the
+		// value is its stack slots, and its members are the elements.
+		ptr, elems, ni := e.emitTupleAgg(init)
+		if ni != nil {
+			return ni
+		}
+		if s.Name != "_" {
+			e.tupEnv[s.Name] = tupBinding{ptr: ptr, elems: elems}
+		}
+		return nil
 	case *ast.Construct:
 		reg, rkey, ni := e.emitConstruct(init)
 		if ni != nil {
@@ -1111,6 +1430,21 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			e.gcEnv[s.Name] = gcBinding{rec: rkey, reg: reg}
 		}
 		return nil
+	case *ast.Member:
+		// A field read binds the field's own face: a String pair, a
+		// scalar word, or a nested record's reference. A value record
+		// read out of another record is copied — the binding takes its
+		// own object (chapter 8), not a share of the owner's.
+		res, ni := e.emitMemberValue(init)
+		if ni != nil {
+			return ni
+		}
+		if res.kind == ckGc {
+			if r, ok := e.records[res.recKey]; ok && r.Cat == "value" {
+				res.gcReg = e.emitRecCopy(res.gcReg, res.recKey)
+			}
+		}
+		return e.bindResult(s.Name, res)
 	case *ast.Binary, *ast.Unary, *ast.If, *ast.Match, *ast.BlockExpr:
 		// The operator family and the value-position control forms bind
 		// through one path: the operand carries its domain into the slot
@@ -1232,8 +1566,24 @@ func (e *emitter) emitNumericValue(x ast.Expr) (callResult, *NotImplemented) {
 // bindResult stores one call-shaped value under the binding's name (the
 // discard `_` keeps no environment face).
 func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
+	if name != "_" && res.ntype != "" {
+		// The binding's static type is a newtype: nothing in the value
+		// says so (design D4's erasure), so the fact rides the name and
+		// the `.value` read is what spends it.
+		e.ntEnv[name] = res.ntype
+	}
 	switch res.kind {
 	case ckVoid:
+		return nil
+	case ckTuple:
+		if name != "_" {
+			e.tupEnv[name] = res.tup
+		}
+		return nil
+	case ckFn:
+		if name != "_" {
+			e.fnEnv[name] = res.fn
+		}
 		return nil
 	case ckIo:
 		if name != "_" {
@@ -1360,13 +1710,15 @@ func (e *emitter) emitIoCall(call *ast.Call) *NotImplemented {
 type callKind int
 
 const (
-	ckIo   callKind = iota // an io call, emitted by the M8 path
-	ckVoid                 // emitted, no value
-	ckI64                  // a scalar value in the i64 domain (or a double)
-	ckPrim                 // a primitive pointer (gc-rooted at construction)
-	ckSum                  // an Option/Result two-slot value
-	ckStr                  // a String double word (M10b fn returns)
-	ckGc                   // a record pointer (M10b fn returns and ctors)
+	ckIo    callKind = iota // an io call, emitted by the M8 path
+	ckVoid                  // emitted, no value
+	ckI64                   // a scalar value in the i64 domain (or a double)
+	ckPrim                  // a primitive pointer (gc-rooted at construction)
+	ckSum                   // an Option/Result two-slot value
+	ckStr                   // a String double word (M10b fn returns)
+	ckGc                    // a record pointer (M10b fn returns and ctors)
+	ckTuple                 // a tuple value (its stack aggregate)
+	ckFn                    // a function value (its gc carrier, D5)
 )
 
 type callResult struct {
@@ -1381,6 +1733,17 @@ type callResult struct {
 	// declaration fixed it (design D3's interpolation domain); empty when
 	// the call's face does not carry one.
 	typeName string
+	// ntype is the newtype this result is a value of, where the site that
+	// produced it knows (a construction). The value is the underlying's —
+	// that is the erasure — so the tag exists only so a binding can
+	// remember that `.value` unwraps it.
+	ntype string
+	// tup is the aggregate handle a tuple-valued result lands in; kind is
+	// ckTuple when it is set.
+	tup tupBinding
+	// fn is the carrier a function-valued result holds; kind is ckFn when
+	// it is set.
+	fn fnValue
 }
 
 // isLocalName reports whether name is bound in the current body — locals
@@ -1399,6 +1762,9 @@ func (e *emitter) isLocalName(name string) bool {
 		return true
 	}
 	if _, ok := e.sums2[name]; ok {
+		return true
+	}
+	if _, ok := e.tupEnv[name]; ok {
 		return true
 	}
 	_, ok := e.caps.slot(name)
@@ -1497,6 +1863,17 @@ func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
 		// through a result slot, and the loaded value is an operand like
 		// any other.
 		res, ni := e.emitValueForm(v)
+		if ni != nil {
+			return "", false, ni
+		}
+		if res.kind != ckI64 {
+			return "", false, e.bnd()
+		}
+		return res.i64, res.isFloat, nil
+	case *ast.Member:
+		// A scalar or double field read (design D4's unified member read):
+		// one getelementptr at the field's offset plus the load.
+		res, ni := e.emitMemberValue(v)
 		if ni != nil {
 			return "", false, ni
 		}
@@ -2129,11 +2506,27 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			e.inst(fmt.Sprintf("%%%s = call ptr @__we_sig_current()", v))
 			return callResult{kind: ckPrim, i64: "%" + v}, nil
 		}
+		// A newtype construction (chapter 8's `Name(expr)`): the wrapper
+		// costs nothing and shows nowhere — design D4's erasure means the
+		// result simply IS the inner expression's value, at the underlying
+		// family's own face.
+		if key, ok := e.newtypeOf(&ast.NamedType{Name: id.Name}); ok {
+			if len(call.Args) != 1 {
+				return callResult{}, e.bnd()
+			}
+			return e.emitNewtypeCtor(key, call.Args[0])
+		}
 		// The bare record constructor: the positional face (the check
 		// stage accepts both); a parsed program constructs through the
 		// named-field form. Both land in the same protocol.
 		if _, ok := e.records[e.curKey+"."+id.Name]; ok {
 			return e.emitCtorCall(id.Name, call.Args)
+		}
+		// A local fn value is called through its carrier (design D5) —
+		// before the program-fn row, since a local binding shadows a fn
+		// name of the same spelling exactly as it shadows anything else.
+		if fv, ok := e.fnEnv[id.Name]; ok {
+			return e.emitFnValueCall(fv, call.Args)
 		}
 		// A program fn of the walked module, through its slot.
 		if fd, ok := e.fnTable[e.curKey+"."+id.Name]; ok {
@@ -2167,6 +2560,16 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			v := e.value()
 			e.inst(fmt.Sprintf("%%%s = inttoptr i64 %s to ptr", v, op))
 			return e.emitPrimCall("%"+v, fn.Name, call.Args)
+		}
+	}
+	if recvKey, ok := e.recvKeyOf(fn.Recv); ok {
+		// The method table (design D4): the receiver's record names the
+		// head, the member name the method, and the pair resolves to one
+		// define. The receiver's key is read from the layouts without
+		// emitting, so a member that turns out to be no method leaves the
+		// boundary to the faces below rather than a half-emitted operand.
+		if fd, is := e.methods[recvKey+"."+fn.Name]; is {
+			return e.emitMethodCall(fd, fn.Recv, call.Args)
 		}
 	}
 	if e.valueKind(fn.Recv) == skStr {
@@ -2332,18 +2735,52 @@ func (e *emitter) emitPrimCall(ptr, method string, args []ast.Expr) (callResult,
 		if !one() {
 			return callResult{}, e.bnd()
 		}
-		cl, ok := args[0].(*ast.Closure)
-		if !ok {
+		// The predicate is a closure literal or a name already bound to
+		// one; either way what the ABI wants is the pair — the thunk and
+		// its environment block — which is exactly what a fn value holds
+		// (design D5: the callback face and the fn-value face are one).
+		var parts closureParts
+		switch a := args[0].(type) {
+		case *ast.Closure:
+			// The predicate's own signature (chapter 18): the cell's
+			// element in and out for update, a Bool for wait, and read's
+			// U the call's own text determines. The check stage owns
+			// whether the closure may be there at all; the shape below is
+			// the callback ABI's, so a predicate whose return is not the
+			// value the runtime hands back stops at the fn body word.
+			var p, r ast.TypeRef = &ast.NamedType{Name: "Int64"}, &ast.NamedType{Name: "Int64"}
+			if method == "wait" {
+				r = &ast.NamedType{Name: "Bool"}
+			}
+			ex, ok := e.closureForType(&ast.FnType{Params: []ast.TypeRef{p}, Ret: r})
+			if !ok {
+				return callResult{}, bndFn()
+			}
+			ps, abi, ni := e.emitClosure(a, &ex)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			if abi.ret != abiI64 || len(abi.params) != 1 || abi.params[0].kind != abiI64 {
+				return callResult{}, bndFn()
+			}
+			parts = ps
+		case *ast.Ident:
+			fv, ok := e.fnEnv[a.Name]
+			if !ok || !fv.typed {
+				return callResult{}, e.bnd()
+			}
+			parts = e.fnParts(fv)
+		default:
 			return callResult{}, e.bnd()
 		}
-		thunk, ni := e.emitCallback(cl)
-		if ni != nil {
-			return callResult{}, ni
-		}
+		// The callback's environment is the closure's own block — null for
+		// one that captures nothing, which is the shape this face has
+		// always had, so a capture-free predicate's module bytes are
+		// unchanged.
 		sym := map[string]string{"update": "__we_prim_update", "read": "__we_prim_read", "wait": "__we_cond_wait"}[method]
 		e.use(sym)
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = call i64 @%s(ptr %s, ptr %s, ptr null)", v, sym, ptr, thunk))
+		e.inst(fmt.Sprintf("%%%s = call i64 @%s(ptr %s, ptr %s, ptr %s)", v, sym, ptr, parts.fnptr, parts.env))
 		return callResult{kind: ckI64, i64: "%" + v}, nil
 	case "set", "send":
 		if !one() {
@@ -2443,50 +2880,860 @@ func (e *emitter) emitValOrRef(x ast.Expr) (string, *NotImplemented) {
 	return "", e.bnd()
 }
 
-// emitCallback emits one callback predicate as an internal thunk define:
-// `i64 (ptr env, i64 v)`, zero-capture (env is null — a closure that
-// reaches an outer binding stops at the callback word), the body a
-// single straight-line numeric expression (design D8's callback face).
-func (e *emitter) emitCallback(cl *ast.Closure) (string, *NotImplemented) {
-	if !cl.Short || len(cl.Params) != 1 || cl.Ret != nil || len(cl.Body.Items) != 1 {
-		return "", bndCallback()
+// --- T6 closures and fn values (design D5) ------------------------------------
+
+// walkBody visits every expression a body holds in evaluation order —
+// including the bodies of the closures it nests, whose free names the
+// enclosing capture collection must see. It reports false when the body
+// holds a node shape it does not know: a capture set that might be
+// missing a name may not be used at all, so an unknown shape stops the
+// closure at the body boundary rather than compiling a wrong one.
+func walkBody(b ast.Block, visit func(ast.Expr)) bool {
+	ok := true
+	var we func(ast.Expr)
+	var ws func(ast.Stmt)
+	var wb func(ast.Block)
+	var wp func(ast.Pattern)
+
+	we = func(x ast.Expr) {
+		switch v := x.(type) {
+		case nil, *ast.Ident, *ast.Literal, *ast.Unit:
+		case *ast.Unary:
+			we(v.X)
+		case *ast.Binary:
+			we(v.L)
+			we(v.R)
+		case *ast.Call:
+			we(v.Fn)
+			for _, a := range v.Args {
+				we(a)
+			}
+		case *ast.Member:
+			we(v.Recv)
+		case *ast.BlockExpr:
+			wb(v.Block)
+		case *ast.If:
+			we(v.Cond)
+			wb(v.Then)
+			we(v.Else)
+		case *ast.Match:
+			we(v.Scrutinee)
+			for _, a := range v.Arms {
+				wp(a.Pat)
+				we(a.Guard)
+				we(a.Body)
+			}
+		case *ast.TaskExpr:
+			wb(v.Body)
+		case *ast.ScopeExpr:
+			we(v.Timeout)
+			wb(v.Body)
+		case *ast.SelectExpr:
+			for _, c := range v.Cases {
+				we(c.Source)
+				we(c.Body)
+			}
+		case *ast.Construct:
+			for _, f := range v.Fields {
+				we(f.Value)
+			}
+			we(v.Base)
+		case *ast.Tuple:
+			for _, el := range v.Elems {
+				we(el)
+			}
+		case *ast.ListLit:
+			for _, el := range v.Elems {
+				we(el)
+			}
+		case *ast.Closure:
+			wb(v.Body)
+		case *ast.Prop:
+			we(v.X)
+		default:
+			ok = false
+		}
+		visit(x)
 	}
-	es, ok := cl.Body.Items[0].(*ast.ExprStmt)
+	wp = func(p ast.Pattern) {
+		switch v := p.(type) {
+		case nil, *ast.PatLiteral, *ast.PatWildcard, *ast.PatBinding:
+		case *ast.PatOr:
+			for _, br := range v.Branches {
+				wp(br)
+			}
+		case *ast.PatTuple:
+			for _, el := range v.Elems {
+				wp(el)
+			}
+		case *ast.PatVariant:
+			for _, a := range v.Args {
+				wp(a)
+			}
+		default:
+			ok = false
+		}
+	}
+	ws = func(st ast.Stmt) {
+		switch v := st.(type) {
+		case *ast.Binding:
+			we(v.Init)
+		case *ast.Assign:
+			we(v.Value)
+		case *ast.ExprStmt:
+			we(v.Expr)
+		case *ast.Return:
+			we(v.Value)
+		case *ast.While:
+			we(v.Cond)
+			wb(v.Body)
+		case *ast.Loop:
+			wb(v.Body)
+		case *ast.Defer:
+			wb(v.Block)
+		case *ast.ForStmt:
+			wp(v.Pat)
+			we(v.Iter)
+			wb(v.Body)
+		case *ast.ScopeRes:
+			for _, b := range v.Binds {
+				we(b.Val)
+			}
+			wb(v.Body)
+		case *ast.Break, *ast.Continue, *ast.MockDecl:
+		default:
+			ok = false
+		}
+	}
+	wb = func(blk ast.Block) {
+		for _, st := range blk.Items {
+			ws(st)
+		}
+	}
+	wb(b)
+	return ok
+}
+
+// collectBoundNames gathers every name a body binds — the `let`/`var`
+// names (pattern bindings included), the for-in heads, the scope-resource
+// heads, and a nested closure's parameters with its own locals — so a
+// capture walk can tell a closure's own local from a free name.
+func collectBoundNames(items []ast.Stmt, into map[string]bool) {
+	var wp func(ast.Pattern)
+	var we func(ast.Expr)
+	wp = func(p ast.Pattern) {
+		switch v := p.(type) {
+		case *ast.PatBinding:
+			into[v.Name] = true
+		case *ast.PatOr:
+			for _, br := range v.Branches {
+				wp(br)
+			}
+		case *ast.PatTuple:
+			for _, el := range v.Elems {
+				wp(el)
+			}
+		case *ast.PatVariant:
+			for _, a := range v.Args {
+				wp(a)
+			}
+		}
+	}
+	we = func(x ast.Expr) {
+		switch v := x.(type) {
+		case *ast.Closure:
+			for _, p := range v.Params {
+				into[p.Name] = true
+			}
+			collectBoundNames(v.Body.Items, into)
+		case *ast.BlockExpr:
+			collectBoundNames(v.Block.Items, into)
+		case *ast.If:
+			collectBoundNames(v.Then.Items, into)
+			we(v.Else)
+		case *ast.Match:
+			for _, a := range v.Arms {
+				wp(a.Pat)
+				we(a.Body)
+			}
+		case *ast.TaskExpr:
+			collectBoundNames(v.Body.Items, into)
+		case *ast.ScopeExpr:
+			collectBoundNames(v.Body.Items, into)
+		case *ast.SelectExpr:
+			for _, c := range v.Cases {
+				if c.Name != "" {
+					into[c.Name] = true
+				}
+				we(c.Body)
+			}
+		}
+	}
+	for _, st := range items {
+		switch v := st.(type) {
+		case *ast.Binding:
+			if v.Name != "" {
+				into[v.Name] = true
+			}
+			wp(v.Pat)
+			we(v.Init)
+		case *ast.ExprStmt:
+			we(v.Expr)
+		case *ast.Assign:
+			we(v.Value)
+		case *ast.Return:
+			we(v.Value)
+		case *ast.While:
+			collectBoundNames(v.Body.Items, into)
+		case *ast.Loop:
+			collectBoundNames(v.Body.Items, into)
+		case *ast.Defer:
+			collectBoundNames(v.Block.Items, into)
+		case *ast.ForStmt:
+			wp(v.Pat)
+			collectBoundNames(v.Body.Items, into)
+		case *ast.ScopeRes:
+			for _, b := range v.Binds {
+				into[b.Name] = true
+			}
+			collectBoundNames(v.Body.Items, into)
+		}
+	}
+}
+
+// captureOf classifies one free name at a closure's creation site: the
+// value/gc split design D5 fixes. A scalar copies its word, frozen at the
+// creation site; a primitive handle, a record pointer, and a fn value copy
+// their pointer (the object stays one object, reachable through the env
+// block's trace bitmap); a String copies its header's pair. A name bound
+// nowhere the creation site can see reports false — the closure body's
+// read of it stops at the body boundary on its own.
+func (e *emitter) captureOf(name string) (capSlot, bool) {
+	if sl, ok := e.scalars[name]; ok && sl.alloca == "" {
+		return capSlot{name: name, n: 1, kind: sl.kind}, true
+	}
+	if _, ok := e.prims[name]; ok {
+		return capSlot{name: name, n: 1, trace: [2]bool{true}, prim: true}, true
+	}
+	if _, ok := e.strEnv[name]; ok {
+		// A String's bytes are not this collector's: the runtime carves
+		// them with malloc (runtime/c/str.c's str_alloc) and never frees
+		// them, and the literal form points straight into the module's
+		// read-only pool. The trace bitmap says which words are gc
+		// references, so neither word is traced — a mark bit written
+		// through a static pointer is a write to rodata and one written
+		// through a heap buffer is a write into the string's own bytes.
+		return capSlot{name: name, n: 2}, true
+	}
+	if g, ok := e.gcEnv[name]; ok {
+		return capSlot{name: name, n: 1, trace: [2]bool{true}, key: g.rec}, true
+	}
+	if v, ok := e.fnEnv[name]; ok {
+		return capSlot{name: name, n: 1, trace: [2]bool{true}, abi: v.abi, typed: v.typed}, true
+	}
+	if i, ok := e.caps.slot(name); ok {
+		// Created inside a task body: the name is the enclosing scope's
+		// capture, and the task's own two classes are what it can be.
+		return capSlot{name: name, n: 1, trace: [2]bool{true}, prim: e.caps.prim[i]}, true
+	}
+	return capSlot{}, false
+}
+
+// collectClosureCaptures walks one closure body for the bindings it reads
+// from the creation site's scope, in layout order — each slot's offset
+// assigned here so the block's words follow one another.
+func (e *emitter) collectClosureCaptures(cl *ast.Closure) ([]capSlot, bool) {
+	locals := map[string]bool{"_": true}
+	for _, p := range cl.Params {
+		locals[p.Name] = true
+	}
+	collectBoundNames(cl.Body.Items, locals)
+
+	var slots []capSlot
+	seen := map[string]bool{}
+	ok := walkBody(cl.Body, func(x ast.Expr) {
+		id, is := x.(*ast.Ident)
+		if !is || id.Name == "" || locals[id.Name] || seen[id.Name] {
+			return
+		}
+		s, found := e.captureOf(id.Name)
+		if !found {
+			return
+		}
+		seen[id.Name] = true
+		slots = append(slots, s)
+	})
 	if !ok {
-		return "", bndCallback()
+		return nil, false
 	}
-	savedCtx, savedScalars, savedBody := e.ctx, e.scalars, e.body
+	off := 0
+	for i := range slots {
+		slots[i].off = 16 + 8*off
+		off += slots[i].n
+	}
+	return slots, true
+}
+
+// emitEnvBlock opens one environment block and stores the captured words
+// into it: the frozen header's trace bitmap (one bit per word, set where
+// the word holds a gc reference), the root push that keeps the block —
+// and through it everything it points at — alive for the creating body's
+// lifetime, and one store per captured word.
+func (e *emitter) emitEnvBlock(slots []capSlot, wordsOf func(capSlot) ([]string, *NotImplemented)) (string, *NotImplemented) {
+	words := 0
+	for _, s := range slots {
+		words += s.n
+	}
+	bitmap := make([]uint64, (words+63)/64)
+	for _, s := range slots {
+		wi := (s.off - 16) / 8
+		for k := 0; k < s.n; k++ {
+			if s.trace[k] {
+				bitmap[(wi+k)/64] |= 1 << uint((wi+k)%64)
+			}
+		}
+	}
+	envMap := fmt.Sprintf("@.emap%d", len(e.envMaps))
+	parts := make([]string, len(bitmap))
+	for i, w := range bitmap {
+		parts[i] = fmt.Sprintf("i64 %d", w)
+	}
+	e.envMaps = append(e.envMaps, fmt.Sprintf("%s = private unnamed_addr constant [%d x i64] [%s]",
+		envMap, len(bitmap), strings.Join(parts, ", ")))
+	e.use("__we_alloc")
+	e.use("__we_root_push")
+	e.pushes++
+	env := "%" + e.value()
+	e.inst(fmt.Sprintf("%s = call ptr @__we_alloc(i64 %d)", env, 16+8*words))
+	e.inst(fmt.Sprintf("store ptr %s, ptr %s", envMap, env))
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", env))
+	for _, s := range slots {
+		ops, ni := wordsOf(s)
+		if ni != nil {
+			return "", ni
+		}
+		for k, op := range ops {
+			e.gepStore(env, s.off+8*k, "i64 "+op)
+		}
+	}
+	return env, nil
+}
+
+// captureWords loads one capture's words as i64 operands — the store
+// side's half of the block's uniform i64 storage. A pointer capture
+// arrives as its address word, which the thunk's load side inttoptrs back.
+func (e *emitter) captureWords(s capSlot) ([]string, *NotImplemented) {
+	switch {
+	case s.key != "":
+		return []string{e.ptrWord(e.gcEnv[s.name].reg)}, nil
+	case s.prim:
+		if p, ok := e.prims[s.name]; ok {
+			return []string{e.ptrWord(p)}, nil
+		}
+		// The enclosing capture's handle: the word is already an address.
+		op, _, ni := e.loadCapture(s.name)
+		if ni != nil {
+			return nil, ni
+		}
+		return []string{op}, nil
+	case s.n == 2:
+		// The pair resolves exactly as any String read does — a static
+		// literal interns into the module's constants, a computed one
+		// carries its own operand pair.
+		p, l, ni := e.emitStringExpr(&ast.Ident{Name: s.name})
+		if ni != nil {
+			return nil, ni
+		}
+		return []string{e.ptrWord(p), l}, nil
+	case s.trace[0]:
+		return []string{e.ptrWord(e.fnEnv[s.name].carrier)}, nil
+	}
+	op, isF, ni := e.emitNumExpr(&ast.Ident{Name: s.name})
+	if ni != nil {
+		return nil, ni
+	}
+	if isF {
+		// A float capture would ride the block as its bits re-read as an
+		// integer; the two faces must agree, so it stops here (T11).
+		return nil, e.bnd()
+	}
+	return []string{op}, nil
+}
+
+// materializeCaptures loads one closure's environment block into the
+// thunk's own binding environments at its entry: every captured name then
+// resolves exactly as a local does, at every face the body can use it — a
+// scalar's word, a record's pointer (with its record key), a String's
+// pair, a primitive's handle, a fn value's carrier.
+func (e *emitter) materializeCaptures(slots []capSlot, env string) {
+	for _, s := range slots {
+		word := func(k int) string {
+			p := e.value()
+			e.inst(fmt.Sprintf("%%%s = getelementptr i8, ptr %s, i64 %d", p, env, s.off+8*k))
+			w := e.value()
+			e.inst(fmt.Sprintf("%%%s = load i64, ptr %%%s", w, p))
+			return "%" + w
+		}
+		switch {
+		case s.n == 2:
+			e.strEnv[s.name] = strBinding{dataOp: e.wordPtr(word(0)), lenOp: word(1)}
+		case s.key != "":
+			e.gcEnv[s.name] = gcBinding{rec: s.key, reg: e.wordPtr(word(0))}
+		case s.prim:
+			e.prims[s.name] = e.wordPtr(word(0))
+		case s.trace[0]:
+			e.fnEnv[s.name] = fnValue{carrier: e.wordPtr(word(0)), abi: s.abi, typed: s.typed}
+		default:
+			e.scalars[s.name] = scalarSlot{operand: word(0), kind: s.kind}
+		}
+	}
+}
+
+// ptrWord converts one pointer operand to its address word, and wordPtr
+// converts back — the two directions the environment block's uniform i64
+// storage needs.
+func (e *emitter) ptrWord(ptr string) string {
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = ptrtoint ptr %s to i64", v, ptr))
+	return "%" + v
+}
+
+func (e *emitter) wordPtr(word string) string {
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = inttoptr i64 %s to ptr", v, word))
+	return "%" + v
+}
+
+// closureParts is a closure's two operands as emitted: the thunk's code
+// pointer and its environment block — the pair a callback ABI takes as
+// its two pointer words, and what makeFnValue puts behind one value.
+type closureParts struct {
+	fnptr string
+	env   string
+}
+
+// closureAbi resolves one closure's calling shape. A position that fixes
+// it — a callback parameter, a fn-typed argument, an annotated binding —
+// hands the classified signature in, and the closure's own declarations
+// must agree with it where it writes any (chapter 12's E0501 is the check
+// stage's rule; this is the emitter's own agreement: same arity, same
+// word families). Without one, every parameter must name its type and the
+// return is the closure's own or, where it names none, the body tail's
+// domain. Anything else reports false — the closure stops at the fn body
+// word rather than guessing an ABI.
+func (e *emitter) closureAbi(cl *ast.Closure, expected *fnAbi) (fnAbi, bool) {
+	if expected != nil {
+		if len(cl.Params) != len(expected.params) {
+			return fnAbi{}, false
+		}
+		for i, p := range cl.Params {
+			if p.Type == nil {
+				continue // a bare parameter takes the position's own type
+			}
+			k, _, ok := e.classType(p.Type)
+			if !ok || k != expected.params[i].kind {
+				return fnAbi{}, false
+			}
+		}
+		if cl.Ret != nil {
+			k, _, ok := e.classType(cl.Ret)
+			if !ok || k != expected.ret {
+				return fnAbi{}, false
+			}
+		}
+		return *expected, true
+	}
+	params := make([]ast.Param, len(cl.Params))
+	for i, p := range cl.Params {
+		params[i] = p
+		if p.Type == nil {
+			return fnAbi{}, false // nothing in reach names this parameter
+		}
+	}
+	if cl.Ret != nil {
+		return e.fitAbi(cl.Ret, params)
+	}
+	// The closure names no return type: a short closure's body IS its
+	// return (chapter 12 — the last expression's value is the closure's),
+	// so the value's own domain is what the signature carries. A body
+	// whose tail is no expression binds nothing and returns nothing; one
+	// whose tail is an expression of no nameable domain is a shape this
+	// face does not read, and the closure stops rather than guessing a
+	// void thunk over a value the check stage knows is there.
+	if len(cl.Body.Items) == 0 {
+		return e.fitAbi(nil, params)
+	}
+	last, ok := cl.Body.Items[len(cl.Body.Items)-1].(*ast.ExprStmt)
+	if !ok {
+		return e.fitAbi(nil, params)
+	}
+	name := strKindName(e.valueKindIn(params, last.Expr))
+	if name == "" {
+		return fnAbi{}, false
+	}
+	return e.fitAbi(&ast.NamedType{Name: name}, params)
+}
+
+// closureForType classifies one written function type into the signature
+// its thunks and call sites share.
+func (e *emitter) closureForType(ft *ast.FnType) (fnAbi, bool) {
+	if ft == nil || len(ft.EffectTags) != 0 {
+		return fnAbi{}, false
+	}
+	return e.fitAbi(ft.Ret, paramsOfType(ft))
+}
+
+// valueKindIn classifies one expression with the enclosing closure's
+// parameters in scope: the domain inference the signature's unnamed
+// return needs runs before the thunk exists, so the parameters it reads
+// are seeded from their own declarations rather than from the define's
+// environments. The seeding is a scratch view — the creation site's
+// environments are untouched.
+func (e *emitter) valueKindIn(params []ast.Param, x ast.Expr) strKind {
+	savedScalars, savedStr, savedGc := e.scalars, e.strEnv, e.gcEnv
+	e.scalars = make(map[string]scalarSlot, len(savedScalars))
+	for k, v := range savedScalars {
+		e.scalars[k] = v
+	}
+	e.strEnv = make(map[string]strBinding, len(savedStr))
+	for k, v := range savedStr {
+		e.strEnv[k] = v
+	}
+	e.gcEnv = make(map[string]gcBinding, len(savedGc))
+	for k, v := range savedGc {
+		e.gcEnv[k] = v
+	}
+	for _, p := range params {
+		name := ""
+		if t, ok := p.Type.(*ast.NamedType); ok && t.Qual == "" && len(t.Args) == 0 {
+			name = t.Name
+		}
+		switch k := baseStrKind(name); k {
+		case skStr:
+			e.strEnv[p.Name] = strBinding{}
+		case skNone:
+			// A named record parameter: its key is the module-qualified
+			// name the creation site's module resolves it in, so a field
+			// read off it classifies as the field's own domain.
+			if name != "" {
+				if _, ok := e.records[e.curKey+"."+name]; ok {
+					e.gcEnv[p.Name] = gcBinding{rec: e.curKey + "." + name}
+				}
+			}
+		default:
+			e.scalars[p.Name] = scalarSlot{kind: k}
+		}
+	}
+	k := e.valueKind(x)
+	e.scalars, e.strEnv, e.gcEnv = savedScalars, savedStr, savedGc
+	return k
+}
+
+// emitClosure emits one closure as an internal thunk define (design D5,
+// chapter 12): the body IS a function body — its tail expression the
+// implicit value, its `return`s the thunk's own, its `defer`s at the
+// thunk's exit — and every binding the body reads from its creation
+// site's scope is copied into an environment block there, where the
+// bindings still live. The thunk's first parameter is that block; the
+// declared parameters follow at the signature's own ABI.
+func (e *emitter) emitClosure(cl *ast.Closure, expected *fnAbi) (closureParts, fnAbi, *NotImplemented) {
+	abi, ok := e.closureAbi(cl, expected)
+	if !ok {
+		return closureParts{}, fnAbi{}, bndFn()
+	}
+	name := fmt.Sprintf("@.cb%d", e.cbN)
+	e.cbN++
+	slots, ok := e.collectClosureCaptures(cl)
+	if !ok {
+		return closureParts{}, fnAbi{}, bndFn()
+	}
+	// The environment block, built at the creation site: the captured
+	// values are read here, before the thunk's own environments replace
+	// these.
+	env := "null"
+	if len(slots) > 0 {
+		blk, ni := e.emitEnvBlock(slots, e.captureWords)
+		if ni != nil {
+			return closureParts{}, fnAbi{}, ni
+		}
+		env = blk
+	}
+
+	savedCtx, savedBody := e.ctx, e.body
+	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
-	savedDiverged, savedCur := e.diverged, e.curBlock
+	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedFns := e.fnEnv
+	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedTup, savedNt := e.tupEnv, e.ntEnv
+	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
+	savedFrames := e.frames
+	savedDiverged := e.diverged
 	savedExit, savedInExit := e.exit, e.inExit
-	e.ctx = ctxCallback
-	e.scalars = map[string]scalarSlot{cl.Params[0].Name: {operand: "%v0"}}
+	savedLoops, savedScopes := e.loopFrames, e.scopeLive
+	savedRes, savedNest := e.resFrames, e.nest
+	restore := func() {
+		e.ctx, e.body = savedCtx, savedBody
+		e.curBlock = savedCur
+		e.allocas, e.assigned = savedAllocas, savedAssigned
+		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.fnEnv = savedFns
+		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.tupEnv, e.ntEnv = savedTup, savedNt
+		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
+		e.frames = savedFrames
+		e.diverged = savedDiverged
+		e.exit, e.inExit = savedExit, savedInExit
+		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.resFrames, e.nest = savedRes, savedNest
+	}
+	e.ctx = ctxFn
 	e.beginBody()
+	e.curBlock = ""
 	e.allocas = nil
 	e.assigned = make(map[string]bool)
 	e.diverged = false
-	// The callback is a single expression, not a body: no return protocol.
-	e.exit, e.inExit = nil, false
-	op, _, ni := e.emitNumExpr(es.Expr)
-	// The callback's text snapshots before the restore — reading e.body
-	// after would return the caller's builder (the swap-back already
-	// happened), and the callback's own instructions would vanish.
-	cb := e.bodyText()
-	diverged := e.diverged
-	e.body, e.ctx, e.scalars, e.diverged = savedBody, savedCtx, savedScalars, savedDiverged
-	e.curBlock = savedCur
-	e.allocas, e.assigned = savedAllocas, savedAssigned
-	e.exit, e.inExit = savedExit, savedInExit
-	if ni != nil || diverged {
-		// A diverged predicate is outside the face by contract: the
-		// callback owes its caller a value (a Never call returns none).
-		return "", bndCallback()
+	e.scalars = make(map[string]scalarSlot)
+	e.fnEnv = make(map[string]fnValue)
+	e.sums2 = make(map[string]sumSlot)
+	e.prims = make(map[string]string)
+	e.strEnv = make(map[string]strBinding)
+	e.gcEnv = make(map[string]gcBinding)
+	e.tupEnv = make(map[string]tupBinding)
+	e.ntEnv = make(map[string]string)
+	e.defers = nil
+	e.caps = nil
+	e.pushes = 0
+	e.exit = &exitSite{kind: exitFn, abi: abi}
+	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	e.resFrames, e.nest = nil, 0
+	collectAssigned(cl.Body.Items, e.assigned)
+	ps := e.bindDefineParams(cl.Params, abi)
+	e.materializeCaptures(slots, "%env")
+	body, retOp, diverged, ni := e.emitBodyCore(cl.Body.Items, abi, abi.ret != abiVoid)
+	if ni != nil {
+		restore()
+		return closureParts{}, fnAbi{}, ni
 	}
-	name := fmt.Sprintf("@.cb%d", len(e.thunks))
+	restore()
+	head := strings.Join(ps, ", ")
+	if head != "" {
+		head = ", " + head
+	}
+	if diverged {
+		e.thunks = append(e.thunks, fmt.Sprintf(
+			"define internal %s %s(ptr %%env%s) {\nentry:\n%s}\n", abi.retTyp, name, head, body))
+	} else {
+		e.thunks = append(e.thunks, fmt.Sprintf(
+			"define internal %s %s(ptr %%env%s) {\nentry:\n%s  ret %s\n}\n",
+			abi.retTyp, name, head, body, retOp))
+	}
+	return closureParts{fnptr: name, env: env}, abi, nil
+}
+
+// emitClosureValue emits one closure literal in value position: the thunk
+// and its environment block behind the single carrier a fn value is. The
+// binding's annotation, where it writes the function type, is the
+// signature the closure's bare parameters read.
+func (e *emitter) emitClosureValue(cl *ast.Closure, typ ast.TypeRef) (callResult, *NotImplemented) {
+	var sig *fnAbi
+	if ft, ok := typ.(*ast.FnType); ok {
+		abi, ok := e.closureForType(ft)
+		if !ok {
+			return callResult{}, bndFn()
+		}
+		sig = &abi
+	}
+	parts, abi, ni := e.emitClosure(cl, sig)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	return callResult{kind: ckFn, fn: e.makeFnValue(parts, abi)}, nil
+}
+
+// emitFnRef emits a program fn named in value position: the constant pair
+// design D5 gives it — a null environment (a declared fn captures
+// nothing) and a code pointer. The pointer is an adapter thunk's, not the
+// fn's own symbol: every fn value is called as `<fnptr>(env, args...)`,
+// which is the closure thunk's shape, so a declared fn — whose own
+// signature has no environment parameter — is reached through the thunk
+// that supplies one. One convention at every call site is what lets a
+// body call through a parameter without knowing which kind of fn value
+// arrived.
+func (e *emitter) emitFnRef(fd *fnDef) (callResult, *NotImplemented) {
+	if fd.foreign {
+		return callResult{}, bndFn()
+	}
+	abi, ok := e.classify(fd)
+	if !ok {
+		return callResult{}, bndFn()
+	}
+	parts, ni := e.fnAdapter(fd, abi)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	return callResult{kind: ckFn, fn: e.makeFnValue(parts, abi)}, nil
+}
+
+// fnAdapter emits the env-taking thunk that fronts one declared fn in
+// value position: the fn's own ABI without the environment parameter,
+// forwarded word for word.
+func (e *emitter) fnAdapter(fd *fnDef, abi fnAbi) (closureParts, *NotImplemented) {
+	name := fmt.Sprintf("@.cb%d", e.cbN)
+	e.cbN++
+	var decl, args []string
+	n := 0
+	for _, p := range abi.params {
+		for _, wt := range abiWordTypes(p) {
+			reg := fmt.Sprintf("%%a%d", n)
+			decl = append(decl, wt+" "+reg)
+			args = append(args, wt+" "+reg)
+			n++
+		}
+	}
+	head := strings.Join(decl, ", ")
+	if head != "" {
+		head = ", " + head
+	}
+	call := fmt.Sprintf("call %s %s(%s)", abi.retTyp, "@"+fd.sym(), strings.Join(args, ", "))
+	var body string
+	if abi.ret == abiVoid {
+		body = "  " + call + "\n  ret void\n"
+	} else {
+		body = fmt.Sprintf("  %%r = %s\n  ret %s %%r\n", call, abi.retTyp)
+	}
 	e.thunks = append(e.thunks, fmt.Sprintf(
-		"define internal i64 %s(ptr %%env, i64 %%v0) {\nentry:\n%s  ret i64 %s\n}\n",
-		name, cb, op))
-	return name, nil
+		"define internal %s %s(ptr %%env%s) {\nentry:\n%s}\n", abi.retTyp, name, head, body))
+	return closureParts{fnptr: name, env: "null"}, nil
+}
+
+// abiWordTypes lists the IR words one classified parameter crosses as.
+func abiWordTypes(p fnParamAbi) []string {
+	switch p.kind {
+	case abiI64:
+		return []string{"i64"}
+	case abiDouble:
+		return []string{"double"}
+	case abiStr:
+		return []string{"ptr", "i64"}
+	case abiSum:
+		return []string{"i64", "i64"}
+	case abiGc, abiFn:
+		return []string{"ptr"}
+	case abiTuple:
+		var ws []string
+		for _, el := range p.elems {
+			ws = append(ws, el.words...)
+		}
+		return ws
+	}
+	return nil
+}
+
+// fnValueCall emits a call through a bound fn value: the pair loads back
+// out of the carrier — the code pointer the call goes through, the
+// environment the thunk's first parameter — and the arguments follow at
+// the signature the value was built with.
+func (e *emitter) emitFnValueCall(fv fnValue, args []ast.Expr) (callResult, *NotImplemented) {
+	if !fv.typed {
+		return callResult{}, bndFn()
+	}
+	if len(args) != len(fv.abi.params) {
+		return callResult{}, e.bnd()
+	}
+	parts := e.fnParts(fv)
+	return e.emitCallCore(fv.abi, parts.fnptr, []string{"ptr " + parts.env}, args)
+}
+
+// fnMapName is the carrier's trace descriptor: one payload word pair,
+// whose second word is the gc environment (the first is a code pointer,
+// never a gc reference).
+func (e *emitter) fnMapName() string {
+	if e.fnMap == "" {
+		e.fnMap = fmt.Sprintf("@.fnmap%d", len(e.envMaps))
+		e.envMaps = append(e.envMaps, e.fnMap+" = private unnamed_addr constant [1 x i64] [i64 2]")
+	}
+	return e.fnMap
+}
+
+// makeFnValue turns a closure's two operands into one function value: the
+// gc carrier design D5 stores the pair in ({fnptr, env}), rooted by the
+// creating body. The carrier is one pointer everywhere a fn value goes,
+// and the pair loads back out of it at a call — or is handed straight to
+// a callback ABI, whose (fn, env) shape it already is.
+func (e *emitter) makeFnValue(parts closureParts, abi fnAbi) fnValue {
+	e.use("__we_alloc")
+	e.use("__we_root_push")
+	e.pushes++
+	car := "%" + e.value()
+	e.inst(fmt.Sprintf("%s = call ptr @__we_alloc(i64 32)", car))
+	e.inst(fmt.Sprintf("store ptr %s, ptr %s", e.fnMapName(), car))
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", car))
+	e.gepStore(car, 16, "ptr "+parts.fnptr)
+	e.gepStore(car, 24, "ptr "+parts.env)
+	return fnValue{carrier: car, abi: abi, typed: true}
+}
+
+// emitFnArg yields one function value in argument position: the carrier
+// the callee reads, emitted at this call site so the closure's captures
+// freeze where the argument is written. sig is the parameter's declared
+// signature, which a closure literal's bare parameters take their types
+// from and which a name's own signature must agree with.
+func (e *emitter) emitFnArg(a ast.Expr, sig *fnAbi) (fnValue, *NotImplemented) {
+	switch v := a.(type) {
+	case *ast.Closure:
+		parts, abi, ni := e.emitClosure(v, sig)
+		if ni != nil {
+			return fnValue{}, ni
+		}
+		if sig != nil && !sameAbi(abi, *sig) {
+			return fnValue{}, e.bnd()
+		}
+		return e.makeFnValue(parts, abi), nil
+	case *ast.Ident:
+		if fv, ok := e.fnEnv[v.Name]; ok {
+			if sig != nil && (!fv.typed || !sameAbi(fv.abi, *sig)) {
+				return fnValue{}, e.bnd()
+			}
+			return fv, nil
+		}
+		if !e.isLocalName(v.Name) {
+			if fd, ok := e.fnTable[e.curKey+"."+v.Name]; ok {
+				res, ni := e.emitFnRef(fd)
+				if ni != nil {
+					return fnValue{}, ni
+				}
+				if sig != nil && !sameAbi(res.fn.abi, *sig) {
+					return fnValue{}, e.bnd()
+				}
+				return res.fn, nil
+			}
+		}
+	}
+	return fnValue{}, e.bnd()
+}
+
+// sameAbi reports whether two signatures are the same shape: the word
+// counts and families a call must agree on (chapter 12's E0501 — the
+// check stage owns the rule, this is the emitter's own agreement).
+func sameAbi(a, b fnAbi) bool {
+	if a.ret != b.ret || len(a.params) != len(b.params) {
+		return false
+	}
+	for i := range a.params {
+		if a.params[i].kind != b.params[i].kind {
+			return false
+		}
+	}
+	return true
+}
+
+// fnParts loads one bound function value's pair back out of its carrier.
+func (e *emitter) fnParts(fv fnValue) closureParts {
+	return closureParts{
+		fnptr: e.gepLoadPtr(fv.carrier, 16),
+		env:   e.gepLoadPtr(fv.carrier, 24),
+	}
 }
 
 // --- the M9b control-flow and concurrent forms --------------------------------
@@ -2529,6 +3776,8 @@ type envFrame struct {
 	scalars map[string]scalarSlot
 	strEnv  map[string]strBinding
 	gcEnv   map[string]gcBinding
+	tupEnv  map[string]tupBinding
+	ntEnv   map[string]string
 	sums2   map[string]sumSlot
 	prims   map[string]string
 }
@@ -2539,11 +3788,13 @@ type envFrame struct {
 func (e *emitter) pushEnv() {
 	e.frames = append(e.frames, envFrame{
 		scalars: e.scalars, strEnv: e.strEnv, gcEnv: e.gcEnv,
-		sums2: e.sums2, prims: e.prims,
+		tupEnv: e.tupEnv, ntEnv: e.ntEnv, sums2: e.sums2, prims: e.prims,
 	})
 	e.scalars = maps.Clone(e.scalars)
 	e.strEnv = maps.Clone(e.strEnv)
 	e.gcEnv = maps.Clone(e.gcEnv)
+	e.tupEnv = maps.Clone(e.tupEnv)
+	e.ntEnv = maps.Clone(e.ntEnv)
 	e.sums2 = maps.Clone(e.sums2)
 	e.prims = maps.Clone(e.prims)
 }
@@ -2552,7 +3803,8 @@ func (e *emitter) pushEnv() {
 func (e *emitter) popEnv() {
 	f := e.frames[len(e.frames)-1]
 	e.frames = e.frames[:len(e.frames)-1]
-	e.scalars, e.strEnv, e.gcEnv, e.sums2, e.prims = f.scalars, f.strEnv, f.gcEnv, f.sums2, f.prims
+	e.scalars, e.strEnv, e.gcEnv, e.tupEnv, e.ntEnv = f.scalars, f.strEnv, f.gcEnv, f.tupEnv, f.ntEnv
+	e.sums2, e.prims = f.sums2, f.prims
 }
 
 // valueForm is one value-position expression's join (design D2): the arms
@@ -2785,32 +4037,84 @@ type exitSite struct {
 }
 
 // loopFrame is one open loop's break/continue targets (chapter 3: the
-// innermost enclosing loop). scopeAt is len(scopeLive) when the loop
-// opened: every scope opened at or above it is lexically inside the loop
-// body, and a piercing exit from the loop must discharge exactly those.
+// innermost enclosing loop). depth is the nesting ordinal the loop opened
+// at: every compound scope and every resource block opened at or above it
+// is lexically inside the loop body, and a piercing exit from the loop
+// must discharge exactly those.
 type loopFrame struct {
-	brk     string // break target: the loop's exit label
-	cont    string // continue target: the re-evaluation point
-	scopeAt int
+	brk   string // break target: the loop's exit label
+	cont  string // continue target: the re-evaluation point
+	depth int
 }
 
 // liveScope is one compound scope entered and not yet left: the handle
-// __we_scope_enter returned and whether its exit collects (joins across
-// panics) instead of cancelling (the fail-fast faces).
+// __we_scope_enter returned, whether its exit collects (joins across
+// panics) instead of cancelling (the fail-fast faces), and the nesting
+// ordinal it opened at.
 type liveScope struct {
 	handle  string
 	collect bool
+	depth   int
 }
 
-// pierce discharges the live scopes at [from, top), innermost first
-// (chapter 18:231 — an early return, break, or continue through an open
-// scope discharges the scope's remaining handles without violation). A
-// collect scope joins: its leave parks until every task returns. A plain
-// or timeout scope is fail-fast: cancel marks it timed out and cancels
-// its unfinished tasks, then its leave waits out the cooperative returns.
-func (e *emitter) pierce(from int) {
-	for i := len(e.scopeLive) - 1; i >= from; i-- {
-		ls := e.scopeLive[i]
+// resFrame is one open scope resource statement (chapter 13): its
+// bindings in declaration order, each naming the block binding, the
+// resource record's key — the release dispatches on the head — and the
+// record pointer the head produced, which is the receiver. depth is the
+// nesting ordinal the block opened at.
+type resFrame struct {
+	live  []resBinding
+	depth int
+}
+
+// resBinding is one binding of a scope resource head.
+type resBinding struct {
+	name string
+	key  string
+	reg  string
+}
+
+// unwind discharges every open compound scope and resource block at or
+// above depth, innermost first (chapter 18:231 — an early return, break,
+// or continue through an open scope discharges the scope's remaining
+// handles without violation; chapter 13 — an exit a return, break or
+// continue pierces is that block's exit and releases like any other).
+// One sequence serves both kinds because their nesting is what orders
+// them, not which kind they are: the entries of the two stacks interleave
+// by the ordinal they opened at. A collect scope joins — its leave parks
+// until every task returns; a plain or timeout scope is fail-fast:
+// cancel marks it timed out and cancels its unfinished tasks, then its
+// leave waits out the cooperative returns. A resource block releases its
+// bindings in reverse declaration order. Nothing is popped here: the
+// stacks are lexical, and the block that opened an entry closes it — a
+// site that discharged on a diverging path leaves the enclosing emission
+// to skip its own copy, the discipline drainDefers rides too.
+func (e *emitter) unwind(depth int) *NotImplemented {
+	type opening struct {
+		depth int
+		scope int // index into scopeLive, or -1 for a resource block
+		res   int // index into resFrames when scope is -1
+	}
+	var open []opening
+	for i := range e.scopeLive {
+		if e.scopeLive[i].depth >= depth {
+			open = append(open, opening{depth: e.scopeLive[i].depth, scope: i, res: -1})
+		}
+	}
+	for i := range e.resFrames {
+		if e.resFrames[i].depth >= depth {
+			open = append(open, opening{depth: e.resFrames[i].depth, scope: -1, res: i})
+		}
+	}
+	sort.Slice(open, func(i, j int) bool { return open[i].depth > open[j].depth })
+	for _, op := range open {
+		if op.scope < 0 {
+			if ni := e.releaseRes(e.resFrames[op.res].live); ni != nil {
+				return ni
+			}
+			continue
+		}
+		ls := e.scopeLive[op.scope]
 		if !ls.collect {
 			e.use("__we_scope_cancel")
 			e.inst(fmt.Sprintf("call void @__we_scope_cancel(ptr %s)", ls.handle))
@@ -2818,6 +4122,31 @@ func (e *emitter) pierce(from int) {
 		e.use("__we_scope_leave")
 		e.inst(fmt.Sprintf("call i64 @__we_scope_leave(ptr %s)", ls.handle))
 	}
+	return nil
+}
+
+// releaseRes discharges one resource block's bindings: exactly one
+// release call per binding, in reverse declaration order (chapter 13).
+// The call is a method call through the T5 table — the head's own
+// `release`, the body `impl Releasable for Head` contributes — with the
+// binding's record pointer as the receiver. A head whose record the
+// table cannot name stops at the fn body word: the release is the one
+// thing this statement owes and it may not be silently dropped.
+func (e *emitter) releaseRes(live []resBinding) *NotImplemented {
+	for i := len(live) - 1; i >= 0; i-- {
+		fd, ok := e.methods[live[i].key+".release"]
+		if !ok {
+			return e.bnd()
+		}
+		abi, ok := e.classify(fd)
+		if !ok {
+			return bndFn()
+		}
+		if _, ni := e.emitCallCore(abi, "@"+fd.sym(), []string{"ptr " + live[i].reg}, nil); ni != nil {
+			return ni
+		}
+	}
+	return nil
 }
 
 // emitBreak leaves the innermost loop: discharge the scopes the exit
@@ -2827,7 +4156,7 @@ func (e *emitter) emitBreak() *NotImplemented {
 		return e.bnd() // E0201 owns this face; the bnd is the checked-world defense
 	}
 	fr := e.loopFrames[len(e.loopFrames)-1]
-	e.pierce(fr.scopeAt)
+	e.unwind(fr.depth)
 	e.inst(fmt.Sprintf("br label %%%s", fr.brk))
 	e.diverged = true
 	return nil
@@ -2840,7 +4169,7 @@ func (e *emitter) emitContinue() *NotImplemented {
 		return e.bnd()
 	}
 	fr := e.loopFrames[len(e.loopFrames)-1]
-	e.pierce(fr.scopeAt)
+	e.unwind(fr.depth)
 	e.inst(fmt.Sprintf("br label %%%s", fr.cont))
 	e.diverged = true
 	return nil
@@ -2863,7 +4192,7 @@ func (e *emitter) emitWhile(s *ast.While) *NotImplemented {
 	}
 	e.inst(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", c, body, exit))
 	e.label(body)
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: head, scopeAt: len(e.scopeLive)})
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: head, depth: e.nest})
 	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
 		return ni
 	}
@@ -2926,7 +4255,7 @@ func (e *emitter) emitReturn(r *ast.Return) *NotImplemented {
 		if r.HasValue {
 			return e.bnd()
 		}
-		e.pierce(0)
+		e.unwind(0)
 		if ni := e.drainDefers(); ni != nil {
 			return ni
 		}
@@ -2940,7 +4269,7 @@ func (e *emitter) emitReturn(r *ast.Return) *NotImplemented {
 		if !r.HasValue {
 			return bndMain()
 		}
-		e.pierce(0)
+		e.unwind(0)
 		if ni := e.emitTail(r.Value); ni != nil {
 			return ni
 		}
@@ -2957,7 +4286,7 @@ func (e *emitter) emitReturn(r *ast.Return) *NotImplemented {
 			}
 			val = op
 		}
-		e.pierce(0)
+		e.unwind(0)
 		if ni := e.drainDefers(); ni != nil {
 			return ni
 		}
@@ -2969,7 +4298,7 @@ func (e *emitter) emitReturn(r *ast.Return) *NotImplemented {
 		if ni != nil {
 			return ni
 		}
-		e.pierce(0)
+		e.unwind(0)
 		if ni := e.drainDefers(); ni != nil {
 			return ni
 		}
@@ -2991,7 +4320,7 @@ func (e *emitter) emitLoop(s *ast.Loop) *NotImplemented {
 	exit := fmt.Sprintf("lpexit%d", n)
 	e.inst(fmt.Sprintf("br label %%%s", body))
 	e.label(body)
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: body, scopeAt: len(e.scopeLive)})
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: body, depth: e.nest})
 	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
 		return ni
 	}
@@ -3066,7 +4395,7 @@ func (e *emitter) emitForRange(s *ast.ForStmt, rng *ast.Binary) *NotImplemented 
 	if ni := e.bindForPattern(s.Pat, cur, skI64); ni != nil {
 		return ni
 	}
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, scopeAt: len(e.scopeLive)})
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, depth: e.nest})
 	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
 		return ni
 	}
@@ -3129,7 +4458,7 @@ func (e *emitter) emitForString(s *ast.ForStmt) *NotImplemented {
 	if ni := e.bindForPattern(s.Pat, "%"+ch, skRune); ni != nil {
 		return ni
 	}
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, scopeAt: len(e.scopeLive)})
+	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, depth: e.nest})
 	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
 		return ni
 	}
@@ -3859,21 +5188,27 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
 	savedDiverged := e.diverged
 	savedExit, savedInExit := e.exit, e.inExit
 	savedLoops, savedScopes := e.loopFrames, e.scopeLive
+	savedRes, savedNest := e.resFrames, e.nest
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
 		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.resFrames, e.nest = savedRes, savedNest
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxTask
@@ -3882,16 +5217,20 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
+	e.fnEnv = make(map[string]fnValue)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
 	e.gcEnv = make(map[string]gcBinding)
+	e.tupEnv = make(map[string]tupBinding)
+	e.ntEnv = make(map[string]string)
 	e.defers = nil
 	// The thunk is its own body: a return inside it answers i64, whatever
 	// its depth, and neither a loop nor a scope of the enclosing body
 	// crosses the boundary.
 	e.exit = &exitSite{kind: exitTask}
 	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	e.resFrames, e.nest = nil, 0
 	collectAssigned(t.Body.Items, e.assigned)
 	caps.ptr = "%env"
 	e.caps = caps
@@ -3977,7 +5316,8 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 	// scalars) roll back at leave, so nothing the body registered is
 	// readable after it.
 	e.pushEnv()
-	e.scopeLive = append(e.scopeLive, liveScope{handle: "%" + sc, collect: s.CollectAll})
+	e.scopeLive = append(e.scopeLive, liveScope{handle: "%" + sc, collect: s.CollectAll, depth: e.nest})
+	e.nest++
 	for _, st := range items {
 		if ni := e.emitStmt(st); ni != nil {
 			return callResult{}, ni
@@ -4027,6 +5367,116 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 		tag: tagSlot, pay: paySlot,
 		variants: []string{"Ok", "Err"}, errMsg: "error: TimedOut",
 	}}, nil
+}
+
+// emitScopeRes emits chapter 13's scope resource statement. The heads
+// evaluate left to right, in source order; each name becomes the block's
+// binding — the resource record the head produced, which is what every
+// `f.fd` inside the block reads through. Every exit of the block runs
+// exactly one release per binding in reverse declaration order: the exit
+// that falls out of the block releases here, an exit that pierces the
+// block releases at its own site (emitReturn, emitBreak, emitContinue
+// through unwind), and this statement's own emission then finds the
+// block diverged and stays silent — each runtime path releases once. The
+// statement produces no value (it is not an expression).
+func (e *emitter) emitScopeRes(s *ast.ScopeRes) *NotImplemented {
+	if len(s.Binds) == 0 {
+		return e.bnd() // at least one binding is the grammar's (E1105's face)
+	}
+	// The bindings are the block's: registered in the enclosing
+	// environment, so the body's own block scope sees them and nothing
+	// after the block does.
+	e.pushEnv()
+	var live []resBinding
+	for _, b := range s.Binds {
+		reg, key, ni := e.emitResHead(b.Val)
+		if ni != nil {
+			return ni
+		}
+		e.gcEnv[b.Name] = gcBinding{rec: key, reg: reg}
+		live = append(live, resBinding{name: b.Name, key: key, reg: reg})
+	}
+	e.resFrames = append(e.resFrames, resFrame{live: live, depth: e.nest})
+	e.nest++
+	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+		return ni
+	}
+	e.resFrames = e.resFrames[:len(e.resFrames)-1]
+	e.popEnv()
+	if !e.diverged {
+		return e.releaseRes(live)
+	}
+	// The block ended in its own terminator: the path that left it
+	// discharged at its site. The continuation label still opens — the
+	// statement after the block needs a block to live in, exactly as an
+	// if's join does.
+	n := e.blocks
+	e.blocks++
+	e.label(fmt.Sprintf("srex%d", n))
+	return nil
+}
+
+// emitResHead yields the handle a scope resource head denotes, with the
+// head key its release dispatches under. A resource is a `byres record`,
+// and chapter 19 lets a module declare one in either of two places: its
+// own record list — a We-side record with fields, allocated and laid out
+// like any other — or a foreign block, an opaque handle the native side
+// owns and the We side only holds. The two live in different tables and
+// take different emission faces; both name a head the method table keys
+// `release` under, which is what makes the release dispatch one face.
+//
+// An opaque head can arrive only by crossing (chapter 19: a foreign
+// function's declared return is the value's one way in — construction is
+// E1707), so a call is the only further form to try, and its own
+// classifier — not the callee's spelling — says which face it took.
+func (e *emitter) emitResHead(x ast.Expr) (string, string, *NotImplemented) {
+	c, ok := x.(*ast.Call)
+	if !ok {
+		return e.emitRecordValue(x)
+	}
+	res, ni := e.emitCall(c, nil)
+	if ni != nil {
+		return "", "", ni
+	}
+	if res.kind == ckGc {
+		return res.gcReg, res.recKey, nil
+	}
+	if res.kind != ckPrim {
+		return "", "", e.bnd()
+	}
+	d := e.calleeDecl(c)
+	if d == nil {
+		return "", "", e.bnd()
+	}
+	key, is := e.opaqueKeyOf(d.Ret)
+	if !is {
+		return "", "", e.bnd()
+	}
+	return res.i64, key, nil
+}
+
+// calleeDecl resolves a call expression's callee to its declaration in the
+// fn table — the module's own name, or a qualified one through its imports
+// (the same two lookups emitCall dispatches through). A callee that is no
+// fn at all answers nil: a method, a constructor, an unknown name.
+func (e *emitter) calleeDecl(c *ast.Call) *ast.FnDecl {
+	switch fn := c.Fn.(type) {
+	case *ast.Ident:
+		if fd, ok := e.fnTable[e.curKey+"."+fn.Name]; ok {
+			return fd.decl
+		}
+	case *ast.Member:
+		recv, ok := fn.Recv.(*ast.Ident)
+		if !ok {
+			return nil
+		}
+		if k := e.resolveQual(recv.Name); k != "" {
+			if fd, ok := e.fnTable[k+"."+fn.Name]; ok {
+				return fd.decl
+			}
+		}
+	}
+	return nil
 }
 
 // emitSelect emits the racing select: one select object, one
@@ -4192,11 +5642,12 @@ func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 	}
 }
 
-// emitFieldChainString resolves `root.f.g…s` where root names a let-bound
-// gc record, the intermediate hops load record-reference fields, and the
-// final hop loads a String field's double word.
-func (e *emitter) emitFieldChainString(m *ast.Member) (string, string, *NotImplemented) {
-	var hops []string
+// chainOf resolves a member chain to the record that owns its last hop:
+// the hops from the base binding to the member, the base's record key, and
+// the chain's root register. The root is a let-bound record binding (or a
+// method's self, which binds the same way); every hop but the last must
+// load a record reference.
+func (e *emitter) chainOf(m *ast.Member) (base, recKey string, hops []string, ok bool) {
 	x := m
 	for {
 		hops = append([]string{x.Name}, hops...)
@@ -4204,33 +5655,378 @@ func (e *emitter) emitFieldChainString(m *ast.Member) (string, string, *NotImple
 		case *ast.Ident:
 			g, ok := e.gcEnv[r.Name]
 			if !ok {
-				return "", "", e.bnd()
+				return "", "", nil, false
 			}
-			return e.walkChain(g.reg, g.rec, hops)
+			return g.reg, g.rec, hops, true
 		case *ast.Member:
 			x = r
 		default:
-			return "", "", e.bnd()
+			return "", "", nil, false
 		}
 	}
 }
 
-// walkChain emits the loads for hops over base (a record pointer of the
-// type recKey names); the last hop must land on a String field.
-func (e *emitter) walkChain(base, recKey string, hops []string) (string, string, *NotImplemented) {
+// walkHops loads the pointer hops before the last one, landing on the
+// record that owns the final field.
+func (e *emitter) walkHops(base, recKey string, hops []string) (string, string, bool) {
 	for _, h := range hops[:len(hops)-1] {
 		slot, ok := e.fieldSlotOf(recKey, h)
-		if !ok || slot.kind != fkRef {
-			return "", "", e.bnd()
+		if !ok || (slot.kind != fkRef && slot.kind != fkVal) {
+			return "", "", false
 		}
 		base = e.gepLoadPtr(base, slot.off)
 		recKey = slot.typ
 	}
+	return base, recKey, true
+}
+
+// emitMemberValue reads one field: the unified member read of design D4.
+// The chain's trailing hop decides its face — a scalar's word, a double,
+// a String's pair, or a nested record's pointer — and every face is one
+// getelementptr plus the load of what it holds (the String-only chain the
+// M8 era carried was the shape's one special case).
+// emitNewtypeCtor emits one newtype construction: the result is the
+// argument's own value — no allocation, no call, no wrapper (design D4's
+// erasure) — carrying the wrapper's name for the `.value` read that
+// spends it.
+func (e *emitter) emitNewtypeCtor(key string, arg ast.Expr) (callResult, *NotImplemented) {
+	under, ok := e.newtypes[key]
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	k, recKey, ok := e.classType(under)
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	res := callResult{ntype: key, typeName: baseTypeName(e.derefNewtype(under))}
+	switch k {
+	case abiI64:
+		op, isF, ni := e.emitNumExpr(arg)
+		if ni != nil || isF {
+			return callResult{}, e.bnd()
+		}
+		res.kind, res.i64 = ckI64, op
+	case abiDouble:
+		op, isF, ni := e.emitNumExpr(arg)
+		if ni != nil || !isF {
+			return callResult{}, e.bnd()
+		}
+		res.kind, res.i64, res.isFloat = ckI64, op, true
+	case abiStr:
+		p, l, ni := e.emitStringExpr(arg)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		res.kind, res.strBind = ckStr, strBinding{dataOp: p, lenOp: l}
+	case abiGc:
+		// Constructing a wrapper around a value constructs a value: the
+		// underlying record's own category decides whether it copies.
+		reg, _, ni := e.emitOwnedRecord(arg)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		res.kind, res.gcReg, res.recKey = ckGc, reg, recKey
+	default:
+		return callResult{}, e.bnd()
+	}
+	return res, nil
+}
+
+// tupleElemVal is one emitted tuple element on its way into the
+// aggregate: the shape it takes there, and the operands that fill it.
+type tupleElemVal struct {
+	el  tupleElem
+	op  string // the single-word operand (i64, double, or ptr)
+	p   string // a String element's data word
+	l   string // a String element's length word
+	sum sumSlot
+}
+
+// emitTupleAgg materializes a tuple expression: the elements emit first —
+// their own domains are what the aggregate's field types come from — and
+// the aggregate that holds them is reserved behind them (design D4's
+// `{f0, f1, ...}` stack value).
+func (e *emitter) emitTupleAgg(t *ast.Tuple) (string, []tupleElem, *NotImplemented) {
+	if len(t.Elems) < 2 {
+		return "", nil, e.bnd() // `( e )` is a grouping and `()` is unit
+	}
+	vals := make([]tupleElemVal, 0, len(t.Elems))
+	off := 0
+	for _, x := range t.Elems {
+		v, ni := e.emitTupleElemValue(x)
+		if ni != nil {
+			return "", nil, ni
+		}
+		v.el.off = off
+		off += 8 * len(v.el.words)
+		vals = append(vals, v)
+	}
+	elems := make([]tupleElem, len(vals))
+	for i, v := range vals {
+		elems[i] = v.el
+	}
+	agg := e.slot(aggTyp(elems))
+	for _, v := range vals {
+		e.storeTupleElem(agg, v)
+	}
+	return agg, elems, nil
+}
+
+// emitTupleElemValue emits one element's value at its own face: the
+// family comes from the expression's domain — the same classification
+// every other value face reads — and a call's from the call's result.
+func (e *emitter) emitTupleElemValue(x ast.Expr) (tupleElemVal, *NotImplemented) {
+	if c, ok := x.(*ast.Call); ok {
+		res, ni := e.emitCall(c, nil)
+		if ni != nil {
+			return tupleElemVal{}, ni
+		}
+		switch res.kind {
+		case ckI64:
+			if res.isFloat {
+				return tupleElemVal{el: tupleElem{kind: abiDouble, typ: res.typeName, words: []string{"double"}}, op: res.i64}, nil
+			}
+			return tupleElemVal{el: tupleElem{kind: abiI64, typ: res.typeName, words: []string{"i64"}}, op: res.i64}, nil
+		case ckStr:
+			return tupleElemVal{el: tupleElem{kind: abiStr, typ: "String", words: []string{"ptr", "i64"}},
+				p: res.strBind.dataOp, l: res.strBind.lenOp}, nil
+		case ckGc:
+			return tupleElemVal{el: tupleElem{kind: abiGc, key: res.recKey, words: []string{"ptr"}}, op: res.gcReg}, nil
+		case ckSum:
+			return tupleElemVal{el: tupleElem{kind: abiSum, words: []string{"i64", "i64"}}, sum: res.sum}, nil
+		}
+		return tupleElemVal{}, e.bnd()
+	}
+	switch k := e.valueKind(x); k {
+	case skStr:
+		p, l, ni := e.emitStringExpr(x)
+		if ni != nil {
+			return tupleElemVal{}, ni
+		}
+		return tupleElemVal{el: tupleElem{kind: abiStr, typ: "String", words: []string{"ptr", "i64"}},
+			p: p, l: l}, nil
+	case skF64:
+		op, isF, ni := e.emitNumExpr(x)
+		if ni != nil || !isF {
+			return tupleElemVal{}, e.bnd()
+		}
+		return tupleElemVal{el: tupleElem{kind: abiDouble, typ: "Float64", words: []string{"double"}}, op: op}, nil
+	case skI64, skU64, skBool, skRune:
+		op, isF, ni := e.emitNumExpr(x)
+		if ni != nil || isF {
+			return tupleElemVal{}, e.bnd()
+		}
+		return tupleElemVal{el: tupleElem{kind: abiI64, typ: strKindName(k), words: []string{"i64"}}, op: op}, nil
+	}
+	if key, ok := e.recvKeyOf(x); ok {
+		// A record element constructs (or copies) at the aggregate's own
+		// store: the tuple holds values, never shares (chapter 8).
+		reg, _, ni := e.emitOwnedRecord(x)
+		if ni != nil {
+			return tupleElemVal{}, ni
+		}
+		return tupleElemVal{el: tupleElem{kind: abiGc, key: key, words: []string{"ptr"}}, op: reg}, nil
+	}
+	if id, ok := x.(*ast.Ident); ok {
+		if sl, ok := e.sums2[id.Name]; ok {
+			return tupleElemVal{el: tupleElem{kind: abiSum, words: []string{"i64", "i64"}}, sum: sl}, nil
+		}
+	}
+	return tupleElemVal{}, e.bnd()
+}
+
+// storeTupleElem writes one emitted element's words into the aggregate at
+// its offset.
+func (e *emitter) storeTupleElem(agg string, v tupleElemVal) {
+	switch v.el.kind {
+	case abiI64:
+		e.gepStore(agg, v.el.off, "i64 "+v.op)
+	case abiDouble:
+		e.gepStore(agg, v.el.off, "double "+v.op)
+	case abiGc:
+		e.gepStore(agg, v.el.off, "ptr "+v.op)
+	case abiStr:
+		e.gepStore(agg, v.el.off, "ptr "+v.p)
+		e.gepStore(agg, v.el.off+8, "i64 "+v.l)
+	case abiSum:
+		e.gepStore(agg, v.el.off, "i64 "+e.loadNum(v.sum.tag, false))
+		e.gepStore(agg, v.el.off+8, "i64 "+e.loadNum(v.sum.pay, false))
+	}
+}
+
+// emitTupleOperand yields a tuple-valued expression's aggregate handle
+// and shapes: the shared entry of the construction, the destructuring
+// pattern, and the call argument's expansion.
+func (e *emitter) emitTupleOperand(x ast.Expr) (string, []tupleElem, *NotImplemented) {
+	switch v := x.(type) {
+	case *ast.Tuple:
+		return e.emitTupleAgg(v)
+	case *ast.Ident:
+		if b, ok := e.tupEnv[v.Name]; ok {
+			return b.ptr, b.elems, nil
+		}
+	case *ast.Call:
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return "", nil, ni
+		}
+		if res.kind == ckTuple {
+			return res.tup.ptr, res.tup.elems, nil
+		}
+	}
+	return "", nil, e.bnd()
+}
+
+// emitLetPattern binds one destructuring `let`: chapter 8's tuple pattern
+// binds each name from the element it stands for (design D4's 模式解构)
+// — a load per element, never a call.
+func (e *emitter) emitLetPattern(s *ast.Binding) *NotImplemented {
+	if s.Kw != "let" {
+		return e.bnd()
+	}
+	pt, ok := s.Pat.(*ast.PatTuple)
+	if !ok {
+		return e.bnd()
+	}
+	ptr, elems, ni := e.emitTupleOperand(s.Init)
+	if ni != nil {
+		return ni
+	}
+	if len(pt.Elems) != len(elems) {
+		return e.bnd()
+	}
+	for i, sub := range pt.Elems {
+		switch b := sub.(type) {
+		case *ast.PatWildcard:
+		case *ast.PatBinding:
+			if b.Name == "_" {
+				continue
+			}
+			res, ni := e.loadTupleElem(ptr, elems[i])
+			if ni != nil {
+				return ni
+			}
+			// An element read out of a value record's aggregate is the
+			// same value the aggregate holds a copy of; binding it takes
+			// its own object (chapter 8's "every binding of a value
+			// record takes its own object").
+			if res.kind == ckGc {
+				if r, ok := e.records[res.recKey]; ok && r.Cat == "value" {
+					res.gcReg = e.emitRecCopy(res.gcReg, res.recKey)
+				}
+			}
+			if ni := e.bindResult(b.Name, res); ni != nil {
+				return ni
+			}
+		default:
+			// A nested pattern names a sub-tuple's own elements: the
+			// aggregate nests with the pattern (a follow-up).
+			return e.bnd()
+		}
+	}
+	return nil
+}
+
+// bindingFace returns name's own value face — what a `.value` unwrap
+// hands back. A name lives in exactly one environment, so the lookups are
+// exclusive.
+func (e *emitter) bindingFace(name string) (callResult, *NotImplemented) {
+	if b, ok := e.strEnv[name]; ok {
+		return callResult{kind: ckStr, strBind: b}, nil
+	}
+	if b, ok := e.gcEnv[name]; ok {
+		return callResult{kind: ckGc, gcReg: b.reg, recKey: b.rec}, nil
+	}
+	if sl, ok := e.scalars[name]; ok {
+		op := sl.operand
+		if sl.alloca != "" {
+			op = e.loadNum(sl.alloca, sl.isFloat)
+		}
+		return callResult{kind: ckI64, i64: op, isFloat: sl.isFloat}, nil
+	}
+	return callResult{}, e.bnd()
+}
+
+// loadTupleElem reads one element out of a tuple's aggregate at its own
+// face — the element's value, never a call.
+func (e *emitter) loadTupleElem(agg string, el tupleElem) (callResult, *NotImplemented) {
+	switch el.kind {
+	case abiI64:
+		return callResult{kind: ckI64, i64: e.gepLoadI64(agg, el.off), typeName: el.typ}, nil
+	case abiDouble:
+		return callResult{kind: ckI64, i64: e.gepLoadDouble(agg, el.off), isFloat: true, typeName: el.typ}, nil
+	case abiStr:
+		return callResult{kind: ckStr, strBind: strBinding{
+			dataOp: e.gepLoadPtr(agg, el.off), lenOp: e.gepLoadI64(agg, el.off+8)}}, nil
+	case abiGc:
+		return callResult{kind: ckGc, gcReg: e.gepLoadPtr(agg, el.off), recKey: el.key}, nil
+	}
+	return callResult{}, e.bnd()
+}
+
+func (e *emitter) emitMemberValue(m *ast.Member) (callResult, *NotImplemented) {
+	if id, ok := m.Recv.(*ast.Ident); ok {
+		if _, is := e.ntEnv[id.Name]; is {
+			// A newtype value's one member is `.value` (chapter 8): the
+			// wrapper erased, so the read is the identity — the binding's
+			// own face. Any other name is no member of the wrapper's.
+			if m.Name != "value" {
+				return callResult{}, e.bnd()
+			}
+			res, ni := e.bindingFace(id.Name)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			if res.kind == ckI64 && res.typeName == "" {
+				// The unwrapped value's domain is the underlying's, which
+				// the wrapper's declaration names exactly.
+				res.typeName = baseTypeName(e.derefNewtype(e.newtypes[e.ntEnv[id.Name]]))
+			}
+			return res, nil
+		}
+	}
+	base, recKey, hops, ok := e.chainOf(m)
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	base, recKey, ok = e.walkHops(base, recKey, hops)
+	if !ok {
+		return callResult{}, e.bnd()
+	}
 	slot, ok := e.fieldSlotOf(recKey, hops[len(hops)-1])
-	if !ok || slot.kind != fkStr {
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	switch slot.kind {
+	case fkStr:
+		return callResult{kind: ckStr, strBind: strBinding{
+			dataOp: e.gepLoadPtr(base, slot.off),
+			lenOp:  e.gepLoadI64(base, slot.off+8),
+		}}, nil
+	case fkScalar:
+		return callResult{kind: ckI64, i64: e.gepLoadI64(base, slot.off),
+			typeName: slot.typ}, nil
+	case fkF64:
+		return callResult{kind: ckI64, i64: e.gepLoadDouble(base, slot.off), isFloat: true,
+			typeName: slot.typ}, nil
+	case fkRef, fkVal:
+		return callResult{kind: ckGc, gcReg: e.gepLoadPtr(base, slot.off),
+			recKey: slot.typ}, nil
+	}
+	return callResult{}, e.bnd()
+}
+
+// emitFieldChainString is the String member face: the same read, with the
+// pair as its only admissible result.
+func (e *emitter) emitFieldChainString(m *ast.Member) (string, string, *NotImplemented) {
+	res, ni := e.emitMemberValue(m)
+	if ni != nil {
+		return "", "", ni
+	}
+	if res.kind != ckStr {
 		return "", "", e.bnd()
 	}
-	return e.gepLoadPtr(base, slot.off), e.gepLoadI64(base, slot.off+8), nil
+	return res.strBind.dataOp, res.strBind.lenOp, nil
 }
 
 // --- the T4 String emission set (design D3) ----------------------------------
@@ -4281,6 +6077,27 @@ func baseStrKind(name string) strKind {
 		return skRune
 	}
 	return skNone
+}
+
+// strKindName is the domain name one classification spells back out —
+// the element a tuple value's own type contributes where the site that
+// emitted it had only the domain to go on.
+func strKindName(k strKind) string {
+	switch k {
+	case skStr:
+		return "String"
+	case skU64:
+		return "UInt64"
+	case skI64:
+		return "Int64"
+	case skF64:
+		return "Float64"
+	case skBool:
+		return "Bool"
+	case skRune:
+		return "Rune"
+	}
+	return ""
 }
 
 // baseTypeName returns t's bare base-type name where the reference spells
@@ -4353,10 +6170,7 @@ func (e *emitter) valueKind(x ast.Expr) strKind {
 		}
 		return skNone
 	case *ast.Member:
-		if e.strChain(v) {
-			return skStr
-		}
-		return skNone
+		return e.memberKind(v)
 	case *ast.Unary:
 		switch v.Op {
 		case "!":
@@ -4437,6 +6251,14 @@ func (e *emitter) callStrKind(call *ast.Call) strKind {
 	if e.valueKind(fn.Recv) == skStr {
 		return strMemberKind(fn.Name)
 	}
+	// A method call carries its method's return family (design D4): the
+	// table answers what the fn table answers for a plain call, so a
+	// method result joins the String domain like any other.
+	if recvKey, ok := e.recvKeyOf(fn.Recv); ok {
+		if fd, is := e.methods[recvKey+"."+fn.Name]; is {
+			return e.fnRetKind(fd)
+		}
+	}
 	recv, ok := fn.Recv.(*ast.Ident)
 	if !ok || e.isLocalName(recv.Name) {
 		return skNone
@@ -4473,41 +6295,49 @@ func strMemberKind(method string) strKind {
 	return skNone
 }
 
-// strChain reports whether a member chain ends at a String field of a
-// let-bound record — the same face emitFieldChainString resolves, decided
-// without emitting anything.
-func (e *emitter) strChain(m *ast.Member) bool {
-	hops := []string{m.Name}
-	var x ast.Expr = m.Recv
-	for {
-		switch r := x.(type) {
-		case *ast.Ident:
-			g, ok := e.gcEnv[r.Name]
-			if !ok {
-				return false
+// memberKind classifies a member chain's value statically (design D3's
+// domain): a String field is skStr, a scalar field is its declared base
+// type's kind, and a nested record's pointer is outside the domain.
+func (e *emitter) memberKind(m *ast.Member) strKind {
+	if id, ok := m.Recv.(*ast.Ident); ok {
+		if _, is := e.ntEnv[id.Name]; is {
+			// The unwrap's domain is the underlying's — for a scalar
+			// binding the slot already carries it; a String binding
+			// renders as a String whatever the wrapper is called.
+			if m.Name != "value" {
+				return skNone
 			}
-			return e.chainEndsStr(g.rec, hops)
-		case *ast.Member:
-			hops = append([]string{r.Name}, hops...)
-			x = r.Recv
-		default:
-			return false
+			return e.valueKind(id)
 		}
 	}
+	slot, ok := e.chainField(m)
+	if !ok {
+		return skNone
+	}
+	switch slot.kind {
+	case fkStr:
+		return skStr
+	case fkScalar, fkF64:
+		return baseStrKind(slot.typ)
+	}
+	return skNone
 }
 
-// chainEndsStr walks the hops' kinds statically: every hop before the last
-// must be a record reference, the last must be a String field.
-func (e *emitter) chainEndsStr(recKey string, hops []string) bool {
+// chainField resolves a member chain's trailing field from the layouts
+// alone — the emit-free half of the member read.
+func (e *emitter) chainField(m *ast.Member) (fieldSlot, bool) {
+	_, recKey, hops, ok := e.chainOf(m)
+	if !ok {
+		return fieldSlot{}, false
+	}
 	for _, h := range hops[:len(hops)-1] {
 		slot, ok := e.fieldSlotOf(recKey, h)
-		if !ok || slot.kind != fkRef {
-			return false
+		if !ok || (slot.kind != fkRef && slot.kind != fkVal) {
+			return fieldSlot{}, false
 		}
 		recKey = slot.typ
 	}
-	slot, ok := e.fieldSlotOf(recKey, hops[len(hops)-1])
-	return ok && slot.kind == fkStr
+	return e.fieldSlotOf(recKey, hops[len(hops)-1])
 }
 
 // strCall emits one String-family runtime call whose result is the
@@ -4713,8 +6543,8 @@ func (e *emitter) emitConcat(b *ast.Binary) (string, string, *NotImplemented) {
 // layout computes a record's field slots: offsets from 16 (the frozen
 // header {map@0, size@8} of design D6), sizes, and the reference bitmap
 // derived kinds. key is the module the record declares in — a reference
-// field resolves in the record's own module, so fkRef targets carry
-// key+"."+FieldName. A field outside the M8 shape fails the whole
+// field resolves in the record's own module, so a reference target
+// carries key+"."+FieldName. A field outside the family fails the whole
 // emission.
 func (e *emitter) layout(key string, rec *ast.RecordDecl) ([]fieldSlot, int, bool) {
 	slots := make([]fieldSlot, len(rec.Fields))
@@ -4729,15 +6559,30 @@ func (e *emitter) layout(key string, rec *ast.RecordDecl) ([]fieldSlot, int, boo
 		case "String":
 			slots[i].kind = fkStr
 			off += 16
-		case "Int64", "UInt64", "Bool":
+		case "Float64":
+			slots[i].kind = fkF64
+			slots[i].typ = n.Name
+			off += 8
+		case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool":
+			// The widths share one i64 word until the narrow-width track
+			// gives each its own storage face (T11); the declared name is
+			// kept so the read carries its domain (design D3's table).
 			slots[i].kind = fkScalar
+			slots[i].typ = n.Name
 			off += 8
 		default:
 			r, ok := e.records[key+"."+n.Name]
-			if !ok || r.Cat != "gc" || len(r.TypeParams) != 0 {
+			if !ok || len(r.TypeParams) != 0 {
 				return nil, 0, false
 			}
-			slots[i].kind = fkRef
+			switch r.Cat {
+			case "value":
+				slots[i].kind = fkVal
+			case "gc", "resource":
+				slots[i].kind = fkRef
+			default:
+				return nil, 0, false
+			}
 			slots[i].typ = key + "." + n.Name
 			slots[i].isRef = true
 			off += 8
@@ -4776,13 +6621,16 @@ func (e *emitter) fieldSlotOf(recKey, field string) (fieldSlot, bool) {
 	return fieldSlot{}, false
 }
 
-// emitConstruct emits the gc construction protocol of design D4: alloc,
-// map store, root push — the object is rooted before any field value
+// emitConstruct emits the construction protocol of design D4: alloc, map
+// store, root push — the object is rooted before any field value
 // evaluates, so a nested allocation never races a collection with its
-// parent unrooted — then the field stores in source order. The record
-// resolves in the walked module (a qualified head resolves its module
-// first — cross-module records construct the same way, each under its
-// own module's symbols); the return pairs the pointer with the record's
+// parent unrooted — then the field stores in source order. An update
+// expression (`with &old`) takes the same protocol with the base's fields
+// standing in for the unnamed ones: a fresh object, the base's values
+// copied in, then the named fields overwritten. The record resolves in
+// the walked module (a qualified head resolves its module first —
+// cross-module records construct the same way, each under its own
+// module's symbols); the return pairs the pointer with the record's
 // module-qualified key, the name every later field walk keys by.
 func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplemented) {
 	key := e.curKey
@@ -4793,7 +6641,7 @@ func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplement
 		}
 	}
 	rec, ok := e.records[key+"."+c.Name]
-	if !ok || rec.Cat != "gc" || len(rec.TypeParams) != 0 || len(c.TypeArgs) != 0 {
+	if !ok || len(rec.TypeParams) != 0 || len(c.TypeArgs) != 0 {
 		return "", "", e.bnd()
 	}
 	slots, total, ok := e.layout(key, rec)
@@ -4802,13 +6650,21 @@ func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplement
 	}
 	rkey := key + "." + rec.Name
 	e.usedRecs[rkey] = true
-	e.use("__we_alloc")
-	e.use("__we_root_push")
-	e.pushes++
-	reg := "%" + e.value()
-	e.inst(fmt.Sprintf("%s = call ptr @__we_alloc(i64 %d)", reg, total))
-	e.inst(fmt.Sprintf("store ptr @.map.%s, ptr %s", rkey, reg))
-	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
+	var reg string
+	if c.Base != nil {
+		// The update's base must be the head's own record (chapter 8's
+		// E0603); the copy carries every unnamed field from it.
+		base, baseKey, ni := e.emitRecordValue(c.Base)
+		if ni != nil {
+			return "", "", ni
+		}
+		if baseKey != rkey {
+			return "", "", e.bnd()
+		}
+		reg = e.emitRecCopy(base, rkey)
+	} else {
+		reg = e.allocRecord(rkey, total)
+	}
 	byName := make(map[string]int, len(rec.Fields))
 	for i, fd := range rec.Fields {
 		byName[fd.Name] = i
@@ -4818,38 +6674,159 @@ func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplement
 		if !ok {
 			return "", "", e.bnd()
 		}
-		slot := slots[idx]
-		switch slot.kind {
-		case fkStr:
-			lit, ok := fi.Value.(*ast.Literal)
-			if !ok || lit.Kind != "string" {
-				return "", "", e.bnd()
-			}
-			data, ok := decodeStringLiteral(lit.Text)
-			if !ok {
-				return "", "", e.bnd()
-			}
-			e.gepStore(reg, slot.off, "ptr "+e.intern(data))
-			e.gepStore(reg, slot.off+8, "i64 "+strconv.Itoa(len(data)))
-		case fkRef:
-			nc, ok := fi.Value.(*ast.Construct)
-			if !ok {
-				return "", "", e.bnd()
-			}
-			child, _, ni := e.emitConstruct(nc)
-			if ni != nil {
-				return "", "", ni
-			}
-			e.gepStore(reg, slot.off, "ptr "+child)
-		case fkScalar:
-			imm, ok := scalarImmediate(fi.Value)
-			if !ok {
-				return "", "", e.bnd()
-			}
-			e.gepStore(reg, slot.off, "i64 "+imm)
+		if ni := e.emitFieldStore(reg, slots[idx], fi.Value); ni != nil {
+			return "", "", ni
 		}
 	}
 	return reg, rkey, nil
+}
+
+// allocRecord opens one record object: the allocation, the frozen header's
+// map word, and the root push every construction owes before a field value
+// can allocate.
+func (e *emitter) allocRecord(recKey string, total int) string {
+	e.use("__we_alloc")
+	e.use("__we_root_push")
+	e.pushes++
+	reg := "%" + e.value()
+	e.inst(fmt.Sprintf("%s = call ptr @__we_alloc(i64 %d)", reg, total))
+	e.inst(fmt.Sprintf("store ptr @.map.%s, ptr %s", recKey, reg))
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
+	return reg
+}
+
+// emitFieldStore writes one field of a record under construction (or one
+// named field of an update, or one `self.field =` write) at its slot.
+func (e *emitter) emitFieldStore(reg string, slot fieldSlot, value ast.Expr) *NotImplemented {
+	switch slot.kind {
+	case fkStr:
+		p, l, ni := e.emitStringExpr(value)
+		if ni != nil {
+			return ni
+		}
+		e.gepStore(reg, slot.off, "ptr "+p)
+		e.gepStore(reg, slot.off+8, "i64 "+l)
+	case fkScalar:
+		op, isF, ni := e.emitNumExpr(value)
+		if ni != nil {
+			return ni
+		}
+		if isF {
+			return e.bnd()
+		}
+		e.gepStore(reg, slot.off, "i64 "+op)
+	case fkF64:
+		op, isF, ni := e.emitNumExpr(value)
+		if ni != nil {
+			return ni
+		}
+		if !isF {
+			return e.bnd()
+		}
+		e.gepStore(reg, slot.off, "double "+op)
+	case fkRef:
+		child, _, ni := e.emitRecordValue(value)
+		if ni != nil {
+			return ni
+		}
+		e.gepStore(reg, slot.off, "ptr "+child)
+	case fkVal:
+		child, _, ni := e.emitOwnedRecord(value)
+		if ni != nil {
+			return ni
+		}
+		e.gepStore(reg, slot.off, "ptr "+child)
+	}
+	return nil
+}
+
+// emitRecordValue yields the record pointer an expression denotes — a
+// binding, a construction or update, a call's result, a field read. It
+// shares whatever object the expression names; ownership is the caller's
+// business (see emitOwnedRecord).
+func (e *emitter) emitRecordValue(x ast.Expr) (string, string, *NotImplemented) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		g, ok := e.gcEnv[v.Name]
+		if !ok {
+			return "", "", e.bnd()
+		}
+		return g.reg, g.rec, nil
+	case *ast.Construct:
+		return e.emitConstruct(v)
+	case *ast.Call:
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return "", "", ni
+		}
+		if res.kind != ckGc {
+			return "", "", e.bnd()
+		}
+		return res.gcReg, res.recKey, nil
+	case *ast.Member:
+		res, ni := e.emitMemberValue(v)
+		if ni != nil {
+			return "", "", ni
+		}
+		if res.kind != ckGc {
+			return "", "", e.bnd()
+		}
+		return res.gcReg, res.recKey, nil
+	}
+	return "", "", e.bnd()
+}
+
+// emitOwnedRecord yields a record value the caller owns: a value-category
+// record is copied unless the expression already produced a fresh object
+// (a construction or update — chapter 8's value semantics, "two bindings
+// of a copied value share nothing"). A gc- or resource-category record is
+// shared, which is what its category means.
+func (e *emitter) emitOwnedRecord(x ast.Expr) (string, string, *NotImplemented) {
+	reg, recKey, ni := e.emitRecordValue(x)
+	if ni != nil {
+		return "", "", ni
+	}
+	if r, ok := e.records[recKey]; ok && r.Cat == "value" {
+		if _, fresh := x.(*ast.Construct); !fresh {
+			return e.emitRecCopy(reg, recKey), recKey, nil
+		}
+	}
+	return reg, recKey, nil
+}
+
+// emitRecCopy emits the copy face of design D4 — a second object holding
+// the source's fields. The two categories copy differently: a gc- or
+// resource-category reference is shared (the copy keeps the pointer), a
+// value-category reference is copied with its owner (deep — "share
+// nothing" reaches every level). The new object is rooted like any other
+// construction, and its push is the body's to pop.
+func (e *emitter) emitRecCopy(src, recKey string) string {
+	rec, ok := e.records[recKey]
+	if !ok {
+		return src
+	}
+	slots, total, ok := e.layout(recModKey(recKey), rec)
+	if !ok {
+		return src
+	}
+	e.usedRecs[recKey] = true
+	dst := e.allocRecord(recKey, total)
+	for _, s := range slots {
+		switch s.kind {
+		case fkStr:
+			e.gepStore(dst, s.off, "ptr "+e.gepLoadPtr(src, s.off))
+			e.gepStore(dst, s.off+8, "i64 "+e.gepLoadI64(src, s.off+8))
+		case fkScalar:
+			e.gepStore(dst, s.off, "i64 "+e.gepLoadI64(src, s.off))
+		case fkF64:
+			e.gepStore(dst, s.off, "double "+e.gepLoadDouble(src, s.off))
+		case fkRef:
+			e.gepStore(dst, s.off, "ptr "+e.gepLoadPtr(src, s.off))
+		case fkVal:
+			e.gepStore(dst, s.off, "ptr "+e.emitRecCopy(e.gepLoadPtr(src, s.off), s.typ))
+		}
+	}
+	return dst
 }
 
 // splitIntSuffix splits an integer literal's digits from its type suffix
@@ -4990,22 +6967,35 @@ const (
 	abiStr // { ptr, i64 }
 	abiGc  // ptr
 	abiSum // { i64, i64 }
+	// abiTuple crosses a boundary as its elements' bare words — one IR
+	// parameter (or one returned field) per word, never a pointer (design
+	// D4's 传参逐字段展开). In the body it is a stack aggregate, which is
+	// what the value IS: a tuple never leaves the stack.
+	abiTuple
+	// abiFn is a function value at a parameter position (chapter 12's
+	// apply(f, v)): the one carrier pointer design D5 makes a fn value,
+	// carrying its own signature statically (fnParamAbi.sig) so the body
+	// may call through it.
+	abiFn
 )
 
 type fnParamAbi struct {
-	kind fnAbiKind
-	key  string // the record/sum's module-qualified key (abiGc/abiSum)
-	typ  string // the declared base type name, where the parameter names one
+	kind  fnAbiKind
+	key   string      // the record/sum's module-qualified key (abiGc/abiSum)
+	typ   string      // the declared base type name, where the parameter names one
+	elems []tupleElem // the element shapes (abiTuple)
+	sig   *fnAbi      // the parameter's own signature (abiFn)
 }
 
 // fnAbi is one fn's calling shape: the return family plus one entry per
 // source parameter (a String or sum parameter takes two IR words).
 type fnAbi struct {
 	ret      fnAbiKind
-	retTyp   string   // the define's result type spelling
-	retKey   string   // the ret record/sum's key ("Result" for the prelude sum)
-	retName  string   // the declared base type name, where the return names one
-	variants []string // the ret sum's variant names, decl order (abiSum)
+	retTyp   string      // the define's result type spelling
+	retKey   string      // the ret record/sum's key ("Result" for the prelude sum)
+	retName  string      // the declared base type name, where the return names one
+	variants []string    // the ret sum's variant names, decl order (abiSum)
+	elems    []tupleElem // the returned tuple's element shapes (abiTuple)
 	params   []fnParamAbi
 }
 
@@ -5013,47 +7003,98 @@ type fnAbi struct {
 // tables (enter the fn's module first). A type the families cannot name —
 // a qualified reference, a generic application, an unknown name —
 // reports false and the caller stops at the fn body word.
-func (e *emitter) fnAbiOf(d *ast.FnDecl) (fnAbi, bool) {
-	class := func(t ast.TypeRef) (fnAbiKind, string, bool) {
-		n, ok := t.(*ast.NamedType)
-		if !ok || n.Qual != "" {
-			return abiVoid, "", false
+// newtypeOf reports the module-qualified key when t names a newtype the
+// walked module declares — the wrapper design D4 erases.
+func (e *emitter) newtypeOf(t ast.TypeRef) (string, bool) {
+	n, ok := t.(*ast.NamedType)
+	if !ok || n.Qual != "" {
+		return "", false
+	}
+	key := e.curKey + "." + n.Name
+	if _, ok := e.newtypes[key]; !ok {
+		return "", false
+	}
+	return key, true
+}
+
+// derefNewtype strips a newtype wrapper from a type reference: a value of
+// the wrapper IS a value of the underlying (chapter 8's zero-cost promise,
+// design D4's erasure), so every classification reads through the chain.
+// A self-referential declaration (which the check stage rejects) stops the
+// walk rather than the compiler.
+func (e *emitter) derefNewtype(t ast.TypeRef) ast.TypeRef {
+	seen := make(map[string]bool)
+	for {
+		key, ok := e.newtypeOf(t)
+		if !ok || seen[key] {
+			return t
 		}
-		if n.Name == "Result" && len(n.Args) == 2 {
-			return abiSum, "Result", true // the prelude sum — Ok/Err
-		}
-		if len(n.Args) != 0 {
-			return abiVoid, "", false
-		}
-		switch n.Name {
-		case "String":
-			return abiStr, "", true
-		case "Float64":
-			return abiDouble, "", true
-		case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool":
-			return abiI64, "", true
-		}
-		key := e.curKey + "." + n.Name
-		if _, ok := e.records[key]; ok {
-			return abiGc, key, true
-		}
-		if _, ok := e.sums[key]; ok {
-			return abiSum, key, true
-		}
+		seen[key] = true
+		t = e.newtypes[key]
+	}
+}
+
+// classType classifies one type reference: the ABI family it crosses a
+// boundary as, and the module-qualified key a record or sum carries. The
+// tables are the walked module's, so the caller enters that module first
+// (classify does for a fn, emitNewtypeCtor for a construction).
+func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
+	t = e.derefNewtype(t)
+	n, ok := t.(*ast.NamedType)
+	if !ok || n.Qual != "" {
 		return abiVoid, "", false
 	}
+	if n.Name == "Result" && len(n.Args) == 2 {
+		return abiSum, "Result", true // the prelude sum — Ok/Err
+	}
+	if len(n.Args) != 0 {
+		return abiVoid, "", false
+	}
+	switch n.Name {
+	case "String":
+		return abiStr, "", true
+	case "Float64":
+		return abiDouble, "", true
+	case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool":
+		return abiI64, "", true
+	}
+	key := e.curKey + "." + n.Name
+	if _, ok := e.records[key]; ok {
+		return abiGc, key, true
+	}
+	if _, ok := e.sums[key]; ok {
+		return abiSum, key, true
+	}
+	return abiVoid, "", false
+}
+
+func (e *emitter) fnAbiOf(d *ast.FnDecl) (fnAbi, bool) {
+	return e.fitAbi(d.Ret, d.Params)
+}
+
+// fitAbi classifies one signature — a declared fn's or a closure's — into
+// the calling shape its define and its call sites share.
+func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
+	class := e.classType
 	var abi fnAbi
-	switch t := d.Ret.(type) {
+	switch t := ret.(type) {
 	case nil:
 		abi.ret = abiVoid
 		abi.retTyp = "void"
+	case *ast.TupleType:
+		elems, ok := e.tupleShapeOf(t)
+		if !ok {
+			return abi, false
+		}
+		abi.ret, abi.retTyp, abi.elems = abiTuple, aggTyp(elems), elems
+		return e.bindTupleParams(&abi, params)
 	case *ast.NamedType:
 		k, key, ok := class(t)
 		if !ok {
 			return abi, false
 		}
 		abi.ret, abi.retKey = k, key
-		abi.retName = baseTypeName(t)
+		abi.retName = baseTypeName(e.derefNewtype(t))
 		switch k {
 		case abiI64:
 			abi.retTyp = "i64"
@@ -5074,14 +7115,90 @@ func (e *emitter) fnAbiOf(d *ast.FnDecl) (fnAbi, bool) {
 	default:
 		return abi, false
 	}
-	for _, p := range d.Params {
-		k, key, ok := class(p.Type)
-		if !ok {
-			return abi, false
-		}
-		abi.params = append(abi.params, fnParamAbi{kind: k, key: key, typ: baseTypeName(p.Type)})
+	return e.bindTupleParams(&abi, params)
+}
+
+// paramsOfType turns one function type's parameter list into the Param
+// shape the signature classifier takes (the type is all a fn value's own
+// signature carries — no name, nothing else).
+func paramsOfType(ft *ast.FnType) []ast.Param {
+	ps := make([]ast.Param, len(ft.Params))
+	for i, t := range ft.Params {
+		ps[i] = ast.Param{Type: t}
 	}
-	return abi, true
+	return ps
+}
+
+// bindTupleParams classifies one signature's parameters and fills abi's
+// parameter table — the shared tail of fitAbi, reached from both return
+// paths (a tuple return returns early).
+func (e *emitter) bindTupleParams(abi *fnAbi, params []ast.Param) (fnAbi, bool) {
+	for _, p := range params {
+		if tt, ok := p.Type.(*ast.TupleType); ok {
+			elems, ok := e.tupleShapeOf(tt)
+			if !ok {
+				return *abi, false
+			}
+			abi.params = append(abi.params, fnParamAbi{kind: abiTuple, elems: elems})
+			continue
+		}
+		if ft, ok := p.Type.(*ast.FnType); ok {
+			// A fn-typed parameter (chapter 12): its own signature is a
+			// static fact of the declaration, so the body's `f(v)` knows
+			// the shape it calls. A signature the families cannot name —
+			// an effect segment, a generic application, a nested fn
+			// parameter this build does not carry — reports false.
+			if len(ft.EffectTags) != 0 {
+				return *abi, false
+			}
+			sig, ok := e.fitAbi(ft.Ret, paramsOfType(ft))
+			if !ok {
+				return *abi, false
+			}
+			abi.params = append(abi.params, fnParamAbi{kind: abiFn, sig: &sig})
+			continue
+		}
+		k, key, ok := e.classType(p.Type)
+		if !ok {
+			return *abi, false
+		}
+		abi.params = append(abi.params, fnParamAbi{kind: k, key: key, typ: baseTypeName(e.derefNewtype(p.Type))})
+	}
+	return *abi, true
+}
+
+// tupleShapeOf lays out a tuple type's elements: the same words each
+// element crosses a boundary with, at their offsets in one aggregate.
+func (e *emitter) tupleShapeOf(t *ast.TupleType) ([]tupleElem, bool) {
+	var elems []tupleElem
+	off := 0
+	for _, et := range t.Elems {
+		k, key, ok := e.classType(et)
+		if !ok {
+			return nil, false
+		}
+		el := tupleElem{kind: k, key: key, typ: baseTypeName(e.derefNewtype(et)), off: off}
+		switch k {
+		case abiI64:
+			el.words = []string{"i64"}
+		case abiDouble:
+			el.words = []string{"double"}
+		case abiGc:
+			el.words = []string{"ptr"}
+		case abiStr:
+			el.words = []string{"ptr", "i64"}
+		case abiSum:
+			el.words = []string{"i64", "i64"}
+		default:
+			return nil, false
+		}
+		off += 8 * len(el.words)
+		elems = append(elems, el)
+	}
+	if len(elems) < 2 {
+		return nil, false // `( e )` is a grouping and `()` is unit
+	}
+	return elems, true
 }
 
 // classify resolves fd's ABI lazily — in fd's own module's tables — and
@@ -5120,9 +7237,9 @@ func isCustomEffect(d *ast.FnDecl) bool {
 // exploration face, not a calling-face change).
 func fnSlotTarget(fd *fnDef) string {
 	if isCustomEffect(fd.decl) {
-		return fmt.Sprintf("@%s.%s.fxgate", fd.key, fd.name)
+		return fmt.Sprintf("@%s.fxgate", fd.sym())
 	}
-	return fmt.Sprintf("@%s.%s", fd.key, fd.name)
+	return "@" + fd.sym()
 }
 
 // emitFxGate emits one custom-effect fn's passthrough gate (M10c design
@@ -5154,7 +7271,7 @@ func (e *emitter) emitFxGate(fd *fnDef, abi fnAbi) {
 	e.use("__we_explore_fx_check")
 	// The forwarded arguments keep their typed spellings — the call reads
 	// exactly as the define's own parameter list.
-	call := fmt.Sprintf("call %s @%s.%s(%s)", abi.retTyp, fd.key, fd.name,
+	call := fmt.Sprintf("call %s @%s(%s)", abi.retTyp, fd.sym(),
 		strings.Join(ps, ", "))
 	var body strings.Builder
 	fmt.Fprintf(&body, "  call void @__we_explore_fx_check(ptr %s, i64 %d)\n", name, len(fd.name))
@@ -5164,8 +7281,8 @@ func (e *emitter) emitFxGate(fd *fnDef, abi fnAbi) {
 		fmt.Fprintf(&body, "  %%r = %s\n  ret %s %%r\n", call, abi.retTyp)
 	}
 	e.thunks = append(e.thunks, fmt.Sprintf(
-		"define internal %s @%s.%s.fxgate(%s) {\nentry:\n%s}\n",
-		abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body.String()))
+		"define internal %s @%s.fxgate(%s) {\nentry:\n%s}\n",
+		abi.retTyp, fd.sym(), strings.Join(ps, ", "), body.String()))
 }
 
 // --- chapter 19: the foreign ABI (M12 design D4) -----------------------------------
@@ -5211,21 +7328,31 @@ func bareTypeName(t ast.TypeRef) string {
 	return ""
 }
 
-// isOpaqueRef reports whether t names a foreign opaque record: the
-// walked module's own name, or a qualified one through its imports (the
-// no-import module-key fallback resolveQual carries).
-func (e *emitter) isOpaqueRef(t ast.TypeRef) bool {
+// opaqueKeyOf names the foreign opaque record a type reference denotes:
+// the walked module's own name, or a qualified one through its imports
+// (the no-import module-key fallback resolveQual carries). It is the
+// opaque table's one reader — `isOpaqueRef` for the yes-or-no question,
+// the scope resource head for the key a release dispatches under.
+func (e *emitter) opaqueKeyOf(t ast.TypeRef) (string, bool) {
 	n, ok := t.(*ast.NamedType)
 	if !ok || len(n.Args) != 0 {
-		return false
+		return "", false
 	}
 	if n.Qual == "" {
-		return e.opaques[e.curKey+"."+n.Name]
+		key := e.curKey + "." + n.Name
+		return key, e.opaques[key]
 	}
 	if k := e.resolveQual(n.Qual); k != "" {
-		return e.opaques[k+"."+n.Name]
+		key := k + "." + n.Name
+		return key, e.opaques[key]
 	}
-	return false
+	return "", false
+}
+
+// isOpaqueRef reports whether t names a foreign opaque record.
+func (e *emitter) isOpaqueRef(t ast.TypeRef) bool {
+	_, ok := e.opaqueKeyOf(t)
+	return ok
 }
 
 // foreignRet is a foreign entry's return face: the call's IR result
@@ -5343,11 +7470,26 @@ func (e *emitter) emitForeignCall(fd *fnDef, args []ast.Expr) (callResult, *NotI
 			if !e.isOpaqueRef(p.Type) {
 				return callResult{}, bndFn()
 			}
-			// The handle face: a bound opaque is a primitive pointer in
-			// the environment, a nested foreign call's return is the
-			// same face fresh.
+			// The handle face: a bound opaque is a pointer in the
+			// environment, a nested foreign call's return is the same
+			// face fresh.
 			switch v := a.(type) {
 			case *ast.Ident:
+				// An opaque the body holds under a record-ish binding:
+				// a method's receiver (an opaque head's only handle on
+				// itself — chapter 19's release idiom passes it straight
+				// to the native close, the type having no field to pass
+				// instead) and a scope resource head (the call's fresh
+				// result) both bind in the gc environment. Chapter 19's
+				// other route in — a plain let of a foreign call's
+				// return — lands in the prim table below.
+				if g, is := e.gcEnv[v.Name]; is {
+					if !e.opaques[g.rec] {
+						return callResult{}, e.bnd()
+					}
+					ops = append(ops, "ptr "+g.reg)
+					break
+				}
 				ptr, is := e.prims[v.Name]
 				if !is {
 					return callResult{}, e.bnd()
@@ -5441,6 +7583,62 @@ func (e *emitter) narrowForeign(op string, k foreignKind) (string, *NotImplement
 	return "%" + v, nil
 }
 
+// emitBodyCore emits one function body's statements and its return
+// protocol — the tail item (a `return`, or the implicit value a declared
+// return type gives the trailing expression, chapter 6), the deferred
+// blocks in inversion, and the body's own gc window's pops — and returns
+// the body text with the return line's operand. Every body that answers a
+// return protocol shares it: the program fn, the method, the mock and
+// test defines, and (chapter 12's 闭包体即函数体) every closure thunk. A
+// body that diverged reports it through diverged instead: its terminator
+// stands as the define's own, with no return, defers, or pops.
+func (e *emitter) emitBodyCore(items []ast.Stmt, abi fnAbi, implicitTail bool) (string, string, bool, *NotImplemented) {
+	var tail *ast.Return
+	if len(items) > 0 {
+		switch last := items[len(items)-1].(type) {
+		case *ast.Return:
+			tail = last
+			items = items[:len(items)-1]
+		case *ast.ExprStmt:
+			// Chapter 6: it is a declared return type that makes the
+			// body value the function's implicit return ("声明了返回
+			// 类型时，体块值是函数的隐式返回值：末项表达式返回它").
+			// Without one the trailing item is governed by chapter 8's
+			// value-discard rule instead — a plain statement whose
+			// value no one takes, unit needing no ceremony — so it
+			// stays in items and emits through emitStmt like any other.
+			if !implicitTail {
+				break
+			}
+			tail = &ast.Return{HasValue: true, Value: last.Expr}
+			items = items[:len(items)-1]
+		}
+	}
+	for _, st := range items {
+		if e.diverged {
+			break // a Never call already terminated the body
+		}
+		if ni := e.emitStmt(st); ni != nil {
+			return "", "", false, ni
+		}
+	}
+	if e.diverged {
+		return e.bodyText(), "", true, nil
+	}
+	ret, ni := e.fnRetVal(abi, tail)
+	if ni != nil {
+		return "", "", false, ni
+	}
+	if ni := e.drainDefers(); ni != nil {
+		return "", "", false, ni
+	}
+	for i := 0; i < e.pushes; i++ {
+		e.use("__we_root_pop")
+		e.inst("call void @__we_root_pop()")
+	}
+	return e.bodyText(), ret, false, nil
+}
+
 // emitFnDefine emits one program fn: the define under its
 // module-qualified symbol, the parameter environments (scalars, the
 // String double word, record pointers, the sum pair re-housed in two
@@ -5463,21 +7661,27 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
 	savedDiverged := e.diverged
 	savedExit, savedInExit := e.exit, e.inExit
 	savedLoops, savedScopes := e.loopFrames, e.scopeLive
+	savedRes, savedNest := e.resFrames, e.nest
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
 		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.resFrames, e.nest = savedRes, savedNest
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
@@ -5486,10 +7690,13 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
+	e.fnEnv = make(map[string]fnValue)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
 	e.gcEnv = make(map[string]gcBinding)
+	e.tupEnv = make(map[string]tupBinding)
+	e.ntEnv = make(map[string]string)
 	e.defers = nil
 	e.caps = nil
 	e.pushes = 0
@@ -5499,71 +7706,56 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	// body boundary.
 	e.exit = &exitSite{kind: exitFn, abi: abi}
 	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	e.resFrames, e.nest = nil, 0
 	// Which names this body writes is known before anything emits: a
 	// parameter among them takes a slot instead of its incoming register.
 	collectAssigned(fd.decl.Body.Items, e.assigned)
 
-	// The parameter list and environments (the shared define face).
+	// The parameter list and environments (the shared define face). A
+	// method's receiver rides ahead of the declared parameters: the head's
+	// record pointer, and the `self` binding every `self.field` and
+	// `self.m()` in the body resolves through.
 	ps := e.bindDefineParams(fd.decl.Params, abi)
+	if fd.recvKey != "" {
+		ps = append([]string{"ptr %self"}, ps...)
+		e.gcEnv["self"] = gcBinding{rec: fd.recvKey, reg: "%self"}
+	}
 
-	// The statements; a return at the tail is the shared value face, and
-	// one at any other depth emits its own exit sequence in place
-	// (emitReturn) — the statements after it are dead by construction.
-	items := fd.decl.Body.Items
-	var tail *ast.Return
-	if len(items) > 0 {
-		if r, ok := items[len(items)-1].(*ast.Return); ok {
-			tail = r
-			items = items[:len(items)-1]
-		}
+	// The statements and the return protocol (the shared body core).
+	body, ret, diverged, ni := e.emitBodyCore(fd.decl.Body.Items, abi, fd.decl.Ret != nil)
+	if ni != nil {
+		restore()
+		return ni
 	}
-	for _, st := range items {
-		if e.diverged {
-			break // a Never call already terminated the body
-		}
-		if ni := e.emitStmt(st); ni != nil {
-			restore()
-			return ni
-		}
-	}
-	if e.diverged {
+	if diverged {
 		// The body ended in unreachable (a Never-returning foreign
 		// call): no return value, no defers, no pops — the terminator
 		// stands as the define's own.
-		body := e.bodyText()
 		restore()
 		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
-			"define %s @%s.%s(%s) {\nentry:\n%s}\n",
-			abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body))
+			"define %s @%s(%s) {\nentry:\n%s}\n",
+			abi.retTyp, fd.sym(), strings.Join(ps, ", "), body))
 		if isCustomEffect(fd.decl) {
 			e.emitFxGate(fd, abi) // the gate's own call never diverges; its callee does, at runtime
 		}
 		return nil
 	}
-	ret, ni := e.fnRetVal(abi, tail)
-	if ni != nil {
-		restore()
-		return ni
-	}
-	if ni := e.drainDefers(); ni != nil {
-		restore()
-		return ni
-	}
-	for i := 0; i < e.pushes; i++ {
-		e.use("__we_root_pop")
-		e.inst("call void @__we_root_pop()")
-	}
-	body := e.bodyText()
 	restore()
 	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
-		"define %s @%s.%s(%s) {\nentry:\n%s  ret %s\n}\n",
-		abi.retTyp, fd.key, fd.name, strings.Join(ps, ", "), body, ret))
+		"define %s @%s(%s) {\nentry:\n%s  ret %s\n}\n",
+		abi.retTyp, fd.sym(), strings.Join(ps, ", "), body, ret))
 	// A custom-effect fn's default face is its gate, emitted behind the
 	// real define under the real define's unchanged name (M10c D6).
 	if isCustomEffect(fd.decl) {
 		e.emitFxGate(fd, abi)
 	}
-	e.slotFor(fd.key+"."+fd.name, fnSlotTarget(fd))
+	if fd.recvKey == "" {
+		// Program fns ride a slot so a mock can swap the pointer
+		// (design D3). A method's dispatch is static — its call sites
+		// name the symbol directly (emitMethodCall) — so a slot here
+		// would be a global nothing reads.
+		e.slotFor(fd.sym(), fnSlotTarget(fd))
+	}
 	return nil
 }
 
@@ -5577,6 +7769,12 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 	var ps []string
 	for i, p := range params {
 		pa := abi.params[i]
+		if key, ok := e.newtypeOf(p.Type); ok && p.Name != "_" {
+			// The parameter IS its underlying at the boundary (design
+			// D4's erasure); the name remembers the wrapper, which is
+			// what `.value` unwraps.
+			e.ntEnv[p.Name] = key
+		}
 		switch pa.kind {
 		case abiI64:
 			ps = append(ps, "i64 %"+p.Name)
@@ -5609,6 +7807,23 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 			if p.Name != "_" {
 				e.gcEnv[p.Name] = gcBinding{rec: pa.key, reg: "%" + p.Name}
 			}
+		case abiTuple:
+			// The words arrive flat (design D4's 传参逐字段展开) and the
+			// body sees the aggregate they rebuild: a tuple value is a
+			// stack aggregate wherever it is used.
+			agg := e.slot(aggTyp(pa.elems))
+			w := 0
+			for _, el := range pa.elems {
+				for i, wt := range el.words {
+					reg := fmt.Sprintf("%%%s.%d", p.Name, w)
+					ps = append(ps, wt+" "+reg)
+					e.gepStore(agg, el.off+8*i, wt+" "+reg)
+					w++
+				}
+			}
+			if p.Name != "_" {
+				e.tupEnv[p.Name] = tupBinding{ptr: agg, elems: pa.elems}
+			}
 		case abiSum:
 			ps = append(ps, "i64 %"+p.Name+"0", "i64 %"+p.Name+"1")
 			if p.Name != "_" {
@@ -5617,6 +7832,11 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 				pp := e.slot("i64")
 				e.inst(fmt.Sprintf("store i64 %%%s1, ptr %s", p.Name, pp))
 				e.sums2[p.Name] = sumSlot{tag: ts, pay: pp, variants: e.sumsOrd[pa.key]}
+			}
+		case abiFn:
+			ps = append(ps, "ptr %"+p.Name)
+			if p.Name != "_" {
+				e.fnEnv[p.Name] = fnValue{carrier: "%" + p.Name, abi: *pa.sig, typed: true}
 			}
 		}
 	}
@@ -5690,21 +7910,27 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
 	savedDiverged := e.diverged
 	savedExit, savedInExit := e.exit, e.inExit
 	savedLoops, savedScopes := e.loopFrames, e.scopeLive
+	savedRes, savedNest := e.resFrames, e.nest
 	restoreState := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
 		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.resFrames, e.nest = savedRes, savedNest
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
@@ -5713,15 +7939,19 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
+	e.fnEnv = make(map[string]fnValue)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
 	e.gcEnv = make(map[string]gcBinding)
+	e.tupEnv = make(map[string]tupBinding)
+	e.ntEnv = make(map[string]string)
 	e.defers = nil
 	e.caps = nil
 	e.pushes = 0
 	e.exit = &exitSite{kind: exitFn, abi: abi}
 	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	e.resFrames, e.nest = nil, 0
 
 	collectAssigned(md.Body.Items, e.assigned)
 	ps := e.bindDefineParams(md.Params, abi)
@@ -5786,21 +8016,27 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
 	savedScalars, savedSums, savedPrims := e.scalars, e.sums2, e.prims
+	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
+	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
 	savedDiverged := e.diverged
 	savedExit, savedInExit := e.exit, e.inExit
 	savedLoops, savedScopes := e.loopFrames, e.scopeLive
+	savedRes, savedNest := e.resFrames, e.nest
 	restore := func() {
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
+		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
+		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
 		e.diverged, e.curBlock = savedDiverged, savedCur
 		e.exit, e.inExit = savedExit, savedInExit
 		e.loopFrames, e.scopeLive = savedLoops, savedScopes
+		e.resFrames, e.nest = savedRes, savedNest
 		e.allocas, e.assigned = savedAllocas, savedAssigned
 	}
 	e.ctx = ctxFn
@@ -5809,10 +8045,13 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	e.assigned = make(map[string]bool)
 	e.diverged = false
 	e.scalars = make(map[string]scalarSlot)
+	e.fnEnv = make(map[string]fnValue)
 	e.sums2 = make(map[string]sumSlot)
 	e.prims = make(map[string]string)
 	e.strEnv = make(map[string]strBinding)
 	e.gcEnv = make(map[string]gcBinding)
+	e.tupEnv = make(map[string]tupBinding)
+	e.ntEnv = make(map[string]string)
 	e.defers = nil
 	e.caps = nil
 	e.pushes = 0
@@ -5820,6 +8059,7 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	// ret void (with the exit sequence ahead of it).
 	e.exit = &exitSite{kind: exitTest}
 	e.loopFrames, e.scopeLive, e.inExit = nil, nil, false
+	e.resFrames, e.nest = nil, 0
 	collectAssigned(td.Body.Items, e.assigned)
 
 	for _, st := range td.Body.Items {
@@ -6000,6 +8240,39 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 			return "double " + op, nil
 		}
 		return "i64 " + op, nil
+	case abiTuple:
+		if !hasValue {
+			return "", bndFn()
+		}
+		// The returned tuple is the multi-value return: the same
+		// register-level insertvalue face the String pair rides, one
+		// field per word (design D4).
+		ptr, elems, ni := e.emitTupleOperand(value)
+		if ni != nil {
+			return "", ni
+		}
+		if aggTyp(elems) != abi.retTyp {
+			return "", bndFn()
+		}
+		cur, w := "undef", 0
+		for _, el := range elems {
+			for i, wt := range el.words {
+				at := el.off + 8*i
+				var op string
+				switch wt {
+				case "i64":
+					op = "i64 " + e.gepLoadI64(ptr, at)
+				case "double":
+					op = "double " + e.gepLoadDouble(ptr, at)
+				case "ptr":
+					op = "ptr " + e.gepLoadPtr(ptr, at)
+				}
+				v := e.value()
+				e.inst(fmt.Sprintf("%%%s = insertvalue %s %s, %s, %d", v, abi.retTyp, cur, op, w))
+				cur, w = "%"+v, w+1
+			}
+		}
+		return abi.retTyp + " " + cur, nil
 	case abiStr:
 		if !hasValue {
 			return "", bndFn()
@@ -6040,9 +8313,10 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 				return "", bndFn()
 			}
 			return fmt.Sprintf("{ ptr, i64 } { ptr %s, i64 %d }", e.intern(data), len(data)), nil
-		case *ast.Binary:
-			// A returned concatenation (and any other String value
-			// expression the pair faces cover).
+		case *ast.Binary, *ast.Member:
+			// A returned concatenation, and any member read that lands in
+			// the String domain — a String field, a newtype's `.value`
+			// unwrap (T5): the pair faces cover both.
 			p, l, ni := e.emitStringExpr(v)
 			if ni != nil {
 				return "", ni
@@ -6063,21 +8337,14 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 		if !hasValue {
 			return "", bndFn()
 		}
-		switch v := value.(type) {
-		case *ast.Ident:
-			g, ok := e.gcEnv[v.Name]
-			if !ok {
-				return "", bndFn()
-			}
-			return "ptr " + g.reg, nil
-		case *ast.Construct:
-			reg, _, ni := e.emitConstruct(v)
-			if ni != nil {
-				return "", ni
-			}
-			return "ptr " + reg, nil
+		// The returned value copies out of the body when its record is a
+		// value record (chapter 8's "return copies the whole value"); a
+		// fresh construction is already the caller's own object.
+		reg, _, ni := e.emitOwnedRecord(value)
+		if ni != nil {
+			return "", ni
 		}
-		return "", bndFn()
+		return "ptr " + reg, nil
 	case abiSum:
 		if !hasValue {
 			return "", bndFn()
@@ -6114,6 +8381,70 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 	return "", bndFn()
 }
 
+// recvKeyOf resolves the record a receiver expression denotes without
+// emitting: a binding's own record, a record-typed field chain's, or a
+// construction's. It is the method table's lookup key half — anything it
+// cannot name is a boundary, never a wrong dispatch.
+func (e *emitter) recvKeyOf(x ast.Expr) (string, bool) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		if _, is := e.ntEnv[v.Name]; is {
+			// A newtype's own methods would key on the wrapper, which the
+			// erased value cannot name — the head a call site reads is the
+			// underlying's, so no dispatch is resolved here.
+			return "", false
+		}
+		g, ok := e.gcEnv[v.Name]
+		if !ok {
+			return "", false
+		}
+		return g.rec, true
+	case *ast.Member:
+		slot, ok := e.chainField(v)
+		if !ok || (slot.kind != fkRef && slot.kind != fkVal) {
+			return "", false
+		}
+		return slot.typ, true
+	case *ast.Construct:
+		key := e.curKey
+		if v.Qual != "" {
+			key = e.resolveQual(v.Qual)
+			if key == "" {
+				return "", false
+			}
+		}
+		if _, ok := e.records[key+"."+v.Name]; !ok {
+			return "", false
+		}
+		return key + "." + v.Name, true
+	}
+	return "", false
+}
+
+// emitMethodCall emits one method call (design D4): the receiver pointer
+// leads the arguments and the call goes straight to the method's own
+// symbol. The table is static — the receiver's type is known at the site —
+// so nothing is loaded through a slot here; mocking's indirection belongs
+// to program fns, and a receiver whose method the table does not name is
+// the check stage's to have rejected.
+func (e *emitter) emitMethodCall(fd *fnDef, recv ast.Expr, args []ast.Expr) (callResult, *NotImplemented) {
+	abi, ok := e.classify(fd)
+	if !ok {
+		return callResult{}, bndFn()
+	}
+	if len(args) != len(fd.decl.Params) {
+		return callResult{}, e.bnd()
+	}
+	// The receiver is read in the caller's own module: a method's head
+	// type key is already qualified, so no module switch is owed for the
+	// lookup, but the receiver expression itself resolves here.
+	reg, _, ni := e.emitRecordValue(recv)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	return e.emitCallCore(abi, "@"+fd.sym(), []string{"ptr " + reg}, args)
+}
+
 // emitFnCall emits one program-fn call through its slot (design D3): the
 // slot load, the argument list per the callee's families, and the result
 // per the return family — a String return extracts its two words into
@@ -6132,11 +8463,47 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 	if len(args) != len(fd.decl.Params) {
 		return callResult{}, e.bnd()
 	}
-	slot := e.slotFor(fd.key+"."+fd.name, fnSlotTarget(fd))
+	slot := e.slotFor(fd.sym(), fnSlotTarget(fd))
 	fp := e.value()
 	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
-	var ops []string
+	return e.emitCallCore(abi, "%"+fp, nil, args)
+}
+
+// emitCallCore emits one call's argument list and result: the operands per
+// the callee's families, the call itself, and the value face of its return
+// family. callee is the operand the call goes through — a program fn's
+// loaded slot register, or a method's own symbol (the table is static, so
+// a method call owes no indirection). recvOp, where present, is the
+// already-rendered receiver operand that leads the argument list.
+func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args []ast.Expr) (callResult, *NotImplemented) {
+	ops := append([]string(nil), preOps...)
 	for i, a := range args {
+		if abi.params[i].kind == abiTuple {
+			// A tuple argument expands field-per-word at the boundary
+			// (design D4): the aggregate's words are read back out and
+			// passed flat.
+			ptr, elems, ni := e.emitTupleOperand(a)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			if aggTyp(elems) != aggTyp(abi.params[i].elems) {
+				return callResult{}, e.bnd()
+			}
+			for _, el := range elems {
+				for j, wt := range el.words {
+					at := el.off + 8*j
+					switch wt {
+					case "i64":
+						ops = append(ops, "i64 "+e.gepLoadI64(ptr, at))
+					case "double":
+						ops = append(ops, "double "+e.gepLoadDouble(ptr, at))
+					case "ptr":
+						ops = append(ops, "ptr "+e.gepLoadPtr(ptr, at))
+					}
+				}
+			}
+			continue
+		}
 		// A call argument of the family's own ABI rides its result
 		// directly (the M10b goldens nest fn results: double(double(n))).
 		// The M9b expression emitters stay call-free — the resolution is
@@ -6162,6 +8529,15 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 					return callResult{}, e.bnd()
 				}
 				ops = append(ops, "ptr "+res.strBind.dataOp, "i64 "+res.strBind.lenOp)
+			case abiGc:
+				if res.kind != ckGc {
+					return callResult{}, e.bnd()
+				}
+				reg := res.gcReg
+				if r, ok := e.records[res.recKey]; ok && r.Cat == "value" {
+					reg = e.emitRecCopy(reg, res.recKey)
+				}
+				ops = append(ops, "ptr "+reg)
 			default:
 				return callResult{}, e.bnd()
 			}
@@ -6193,22 +8569,14 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 			}
 			ops = append(ops, "ptr "+p, "i64 "+l)
 		case abiGc:
-			switch v := a.(type) {
-			case *ast.Ident:
-				g, ok := e.gcEnv[v.Name]
-				if !ok {
-					return callResult{}, e.bnd()
-				}
-				ops = append(ops, "ptr "+g.reg)
-			case *ast.Construct:
-				reg, _, ni := e.emitConstruct(v)
-				if ni != nil {
-					return callResult{}, ni
-				}
-				ops = append(ops, "ptr "+reg)
-			default:
-				return callResult{}, e.bnd()
+			// An argument of a value-category record copies at the call
+			// site (chapter 8's "Passing copies"); a gc or resource
+			// record passes its own reference.
+			reg, _, ni := e.emitOwnedRecord(a)
+			if ni != nil {
+				return callResult{}, ni
 			}
+			ops = append(ops, "ptr "+reg)
 		case abiSum:
 			id, ok := a.(*ast.Ident)
 			if !ok {
@@ -6219,32 +8587,58 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 				return callResult{}, e.bnd()
 			}
 			ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false))
+		case abiFn:
+			// The argument crosses as its carrier. A closure literal is
+			// emitted here (its captures frozen at this call site), a
+			// bound fn value passes its own, and a program fn name takes
+			// the constant pair design D5 gives it.
+			fv, ni := e.emitFnArg(a, abi.params[i].sig)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			ops = append(ops, "ptr "+fv.carrier)
 		}
 	}
 	join := strings.Join(ops, ", ")
 	switch abi.ret {
 	case abiVoid:
-		e.inst(fmt.Sprintf("call void %%%s(%s)", fp, join))
+		e.inst(fmt.Sprintf("call void %s(%s)", callee, join))
 		return callResult{kind: ckVoid}, nil
 	case abiI64:
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = call i64 %%%s(%s)", v, fp, join))
+		e.inst(fmt.Sprintf("%%%s = call i64 %s(%s)", v, callee, join))
 		return callResult{kind: ckI64, i64: "%" + v, typeName: abi.retName}, nil
 	case abiDouble:
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = call double %%%s(%s)", v, fp, join))
+		e.inst(fmt.Sprintf("%%%s = call double %s(%s)", v, callee, join))
 		return callResult{kind: ckI64, i64: "%" + v, isFloat: true, typeName: abi.retName}, nil
 	case abiStr:
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = call { ptr, i64 } %%%s(%s)", v, fp, join))
+		e.inst(fmt.Sprintf("%%%s = call { ptr, i64 } %s(%s)", v, callee, join))
 		p := e.value()
 		e.inst(fmt.Sprintf("%%%s = extractvalue { ptr, i64 } %%%s, 0", p, v))
 		l := e.value()
 		e.inst(fmt.Sprintf("%%%s = extractvalue { ptr, i64 } %%%s, 1", l, v))
 		return callResult{kind: ckStr, strBind: strBinding{dataOp: "%" + p, lenOp: "%" + l}}, nil
+	case abiTuple:
+		// The returned aggregate comes back in registers; it lands in the
+		// stack handle a tuple value always is, one extractvalue per word.
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call %s %s(%s)", v, abi.retTyp, callee, join))
+		agg := e.slot(abi.retTyp)
+		w := 0
+		for _, el := range abi.elems {
+			for i, wt := range el.words {
+				ev := e.value()
+				e.inst(fmt.Sprintf("%%%s = extractvalue %s %%%s, %d", ev, abi.retTyp, v, w))
+				e.gepStore(agg, el.off+8*i, wt+" %"+ev)
+				w++
+			}
+		}
+		return callResult{kind: ckTuple, tup: tupBinding{ptr: agg, elems: abi.elems}}, nil
 	case abiGc:
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = call ptr %%%s(%s)", v, fp, join))
+		e.inst(fmt.Sprintf("%%%s = call ptr %s(%s)", v, callee, join))
 		reg := "%" + v
 		e.use("__we_root_push")
 		e.pushes++
@@ -6252,7 +8646,7 @@ func (e *emitter) emitFnCall(fd *fnDef, args []ast.Expr) (callResult, *NotImplem
 		return callResult{kind: ckGc, gcReg: reg, recKey: abi.retKey}, nil
 	case abiSum:
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = call { i64, i64 } %%%s(%s)", v, fp, join))
+		e.inst(fmt.Sprintf("%%%s = call { i64, i64 } %s(%s)", v, callee, join))
 		t := e.value()
 		e.inst(fmt.Sprintf("%%%s = extractvalue { i64, i64 } %%%s, 0", t, v))
 		p := e.value()
@@ -6291,6 +8685,15 @@ func (e *emitter) gepLoadI64(base string, off int) string {
 	e.inst(fmt.Sprintf("%%%s = getelementptr i8, ptr %s, i64 %d", v, base, off))
 	r := e.value()
 	e.inst(fmt.Sprintf("%%%s = load i64, ptr %%%s", r, v))
+	return "%" + r
+}
+
+// gepLoadDouble loads a double word at base+off.
+func (e *emitter) gepLoadDouble(base string, off int) string {
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = getelementptr i8, ptr %s, i64 %d", v, base, off))
+	r := e.value()
+	e.inst(fmt.Sprintf("%%%s = load double, ptr %%%s", r, v))
 	return "%" + r
 }
 
@@ -6351,10 +8754,12 @@ func (e *emitter) render(module string) string {
 			switch s.kind {
 			case fkStr:
 				parts = append(parts, "ptr", "i64")
-			case fkRef:
+			case fkRef, fkVal:
 				parts = append(parts, "ptr")
 			case fkScalar:
 				parts = append(parts, "i64")
+			case fkF64:
+				parts = append(parts, "double")
 			}
 			if s.isRef {
 				i := (s.off - 16) / 8

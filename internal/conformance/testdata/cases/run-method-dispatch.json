@@ -1,0 +1,16 @@
+{
+  "name": "run-method-dispatch",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Counter { n: Int64 }\n\nimpl Counter {\n    fn bump(mut self) -> Int64 {\n        self.n = self.n + 1\n        self.n\n    }\n}\n\ninterface Greeter {\n    fn greet(self) -> String\n    fn greetLoud(self) -> String {\n        self.greet() + \"!\"\n    }\n}\n\nrecord User { name: String }\n\nimpl Greeter for User {\n    fn greet(self) -> String {\n        \"hi\"\n    }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let c = Counter { n: 0 }\n    io.println(\"${c.bump()} ${c.bump()}\")\n    let u = User { name: \"a\" }\n    io.println(u.greetLoud())\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "1 2\nhi!\n",
+  "stderr": ""
+}

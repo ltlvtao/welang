@@ -1,0 +1,17 @@
+{
+  "name": "run-ch13-scope-res-opaque",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nforeign \"c\" {\n    byres record CFile { }\n    fn weOpen(id: Int64) effect -> CFile\n    fn weClose(f: CFile) effect\n    fn weCloses() effect -> Int64\n}\n\nimpl Releasable for CFile {\n    fn release(mut self) { weClose(self) }\n}\n\nfn pick(id: Int64) -> Int64 {\n    scope resource(f = weOpen(id)) {\n        if id > 0 { return 7 }\n    }\n    return 0\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    scope resource(a = weOpen(1), b = weOpen(2)) {\n        io.println(\"in\")\n    }\n    io.println(\"${weCloses()}\")\n    io.println(\"${pick(3)}\")\n    io.println(\"${weCloses()}\")\n    return Ok(())\n}\n",
+      "native/handle.c": "/* The probe's native side: a handle is its id, and the close log is a\n   decimal accumulator — the We side reads it back to see the order the\n   releases ran in. */\nstatic long closes = 0;\nvoid *weOpen(long id) { return (void *)id; }\nvoid weClose(void *f) { closes = closes * 10 + (long)f; }\nlong weCloses(void) { return closes; }\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "in\n21\n7\n213\n",
+  "stderr": ""
+}

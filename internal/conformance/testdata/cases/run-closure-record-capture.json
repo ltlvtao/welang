@@ -1,0 +1,16 @@
+{
+  "name": "run-closure-record-capture",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\n\npub fn main() effect io -> Result<(), AppError> {\n    let c = Cell { n: 5 }\n    let m = conc.Mutex(0)\n    var n: Int64 = 0\n    n = m.update(|v| v + c.n)\n    io.println(\"${n}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "5\n",
+  "stderr": ""
+}

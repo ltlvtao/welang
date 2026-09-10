@@ -217,3 +217,35 @@ func TestForeignNamesCollected(t *testing.T) {
 		t.Fatalf("an opaque record declares no symbol, got %+v", got)
 	}
 }
+
+// TestForeignOpaqueReceiverPassesToNativeClose: chapter 19's release idiom
+// ("calling a foreign `close` function is how the release is implemented")
+// over an opaque resource. An opaque type has no fields ("No field of an
+// opaque type exists to access"), so its `release` body holds the handle
+// itself — `mut self` — and passes it straight to the native close. The
+// receiver of an opaque head is the define's own `ptr %self`, bound in the
+// gc environment under its head key; nothing about it reaches the prim
+// table, which is where a plain `let` of a foreign return lands. Both are
+// the opaque handle face at the call boundary — one ptr, per the
+// positional ABI map.
+func TestForeignOpaqueReceiverPassesToNativeClose(t *testing.T) {
+	fb := &ast.ForeignBlock{ABI: "c", Line: 1, Col: 1, Items: []ast.Item{
+		recDecl("CFile", ""),
+		foreignFn("fclose", []ast.Param{{Name: "f", Type: named("CFile")}}, nil),
+	}}
+	release := implDecl("Releasable", "CFile", method("release", ast.RecvMutSelf, "",
+		&ast.ExprStmt{Expr: &ast.Call{Fn: ident("fclose"), Args: []ast.Expr{ident("self")}}}))
+	mod := ProgModule{Key: "main", ID: "demo", File: &ast.File{Items: []ast.Item{
+		fb, appError(), release, mainDecl(okReturn()),
+	}}}
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{mod})
+	if ni != nil {
+		t.Fatalf("unexpected boundary: %s", ni.What)
+	}
+	if !strings.Contains(ir, "declare void @fclose(ptr)") {
+		t.Fatalf("the native contract takes one opaque pointer:\n%s", ir)
+	}
+	if !strings.Contains(ir, "call void @fclose(ptr %self)") {
+		t.Fatalf("the release body passes its own handle to the native close:\n%s", ir)
+	}
+}

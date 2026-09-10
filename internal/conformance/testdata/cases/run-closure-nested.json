@@ -1,0 +1,16 @@
+{
+  "name": "run-closure-nested",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\n\nfn apply(f: fn(Int64) -> Int64, v: Int64) -> Int64 {\n    return f(v)\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let c = Cell { n: 40 }\n    let a = apply(|x| x + c.n, 2)\n    let g: fn(Int64) -> Int64 = |x| x * 3\n    let b = apply(g, 5)\n    let h: fn(Int64) -> Int64 = |x| apply(g, x) + 1\n    let d = h(2)\n    io.println(\"${a}\")\n    io.println(\"${b}\")\n    io.println(\"${d}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "42\n15\n7\n",
+  "stderr": ""
+}

@@ -11,10 +11,11 @@ import (
 // set (design D8/D9): main bodies and task bodies share one emitter, and
 // every concurrent form lands on the runtime ABI family pinned here by
 // name. The boundary Whats get their v2 vocabulary — bndMainBody reworded,
-// bndTaskBody and bndCallbackBody new — so a future emitter case cannot
-// silently swallow a form ("explicit case, never vanish", the M4
-// discipline). Red today: the v2 words do not exist and the emitter stops
-// at the M8 vocabulary.
+// bndTaskBody new, bndCallbackBody retired by B1a (a closure's body IS a
+// fn body now, so a callback predicate that cannot produce the value its
+// caller reads stops at the fn body word like any other body) — so a
+// future emitter case cannot silently swallow a form ("explicit case,
+// never vanish", the M4 discipline).
 
 // m9bModule wraps main-shaped statements with both std imports (io and
 // concurrent) and the skeleton error sum.
@@ -303,18 +304,22 @@ func TestM9bBoundaryWhats(t *testing.T) {
 				EffectTags: []string{"io"}, EffectLine: 1, EffectCol: 6,
 				Body: ast.Block{Items: []ast.Stmt{fnCall}},
 			}}, okReturn()), bndTaskBody},
-		{"callback body io call", m9bModule(
+		// A predicate's body is a fn body (B1a design D5): it owes its
+		// caller the value the callback ABI reads back, so a tail that is
+		// not that value stops at the fn body word — the same word every
+		// other fn body stops at.
+		{"predicate returning an io call", m9bModule(
 			&ast.Binding{Kw: "let", Name: "m", Init: mutexCtor()},
 			&ast.Binding{Kw: "let", Name: "n", Init: callOn(ident("m"), "update", &ast.Closure{
 				Params: []ast.Param{{Name: "v"}}, Short: true,
 				Body: ast.Block{Items: []ast.Stmt{ioCall("io", "println", ident("v"))}},
-			})}, okReturn()), bndCallbackBody},
-		{"callback body user fn call", m9bModule(
+			})}, okReturn()), bndFnBody},
+		{"predicate returning a user fn call", m9bModule(
 			&ast.Binding{Kw: "let", Name: "m", Init: mutexCtor()},
 			&ast.Binding{Kw: "let", Name: "n", Init: callOn(ident("m"), "update", &ast.Closure{
 				Params: []ast.Param{{Name: "v"}}, Short: true,
 				Body: ast.Block{Items: []ast.Stmt{fnCall}},
-			})}, okReturn()), bndCallbackBody},
+			})}, okReturn()), bndFnBody},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

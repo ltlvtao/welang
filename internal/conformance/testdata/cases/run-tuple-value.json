@@ -1,0 +1,16 @@
+{
+  "name": "run-tuple-value",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn pair() -> (Int64, String) {\n    return (7, \"seven\")\n}\n\nfn sum(p: (Int64, Int64)) -> Int64 {\n    let (lo, hi) = p\n    return lo + hi\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let (a, b) = pair()\n    io.println(\"${a} ${b}\")\n    let box = (3, 4)\n    io.println(\"${sum(box)} ${sum((10, 20))}\")\n    let (x, y) = (5, 6)\n    io.println(\"${x + y}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "7 seven\n7 30\n11\n",
+  "stderr": ""
+}

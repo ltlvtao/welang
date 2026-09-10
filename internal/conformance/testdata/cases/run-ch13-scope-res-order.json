@@ -1,0 +1,16 @@
+{
+  "name": "run-ch13-scope-res-order",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Log { n: Int64 }\n\nimpl Log {\n    fn mark(mut self, id: Int64) { self.n = self.n * 10 + id }\n}\n\nbyres record Handle { log: Log, id: Int64 }\n\nimpl Releasable for Handle {\n    fn release(mut self) { self.log.mark(self.id) }\n}\n\nfn open(log: Log, id: Int64) -> Handle {\n    return Handle { log: log, id: id }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let log = Log { n: 0 }\n    scope resource(a = open(log, 1), b = open(log, 2)) {\n        io.println(\"in\")\n    }\n    io.println(\"${log.n}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "in\n21\n",
+  "stderr": ""
+}
