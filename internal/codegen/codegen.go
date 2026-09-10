@@ -3997,7 +3997,15 @@ func (vf *valueForm) put(e *emitter, res callResult) *NotImplemented {
 // the tail walks as usual, then the tail — the block's value — computes
 // into the form's sink. A block whose last item is not an expression
 // carries no value: it is unit, and the arm stores nothing.
+//
+// The arm is a body like any block, so it discharges its own roots after
+// the tail has computed — both arms of the join must hand the code after
+// the if the depth the if opened with, and only the arm that pushed knows
+// what it owes. The discharge follows the store rather than preceding it:
+// the sink is where the value leaves the arm, and what the arm rooted is
+// owed from the moment after that.
 func (e *emitter) emitArmBlock(items []ast.Stmt, vf *valueForm) *NotImplemented {
+	base := e.pushes
 	e.pushEnv()
 	defer e.popEnv()
 	tail := ast.Expr(nil)
@@ -4012,10 +4020,16 @@ func (e *emitter) emitArmBlock(items []ast.Stmt, vf *valueForm) *NotImplemented 
 			return ni
 		}
 	}
-	if tail == nil || e.diverged {
-		return nil
+	if tail != nil && !e.diverged {
+		if ni := e.storeValue(tail, vf); ni != nil {
+			return ni
+		}
 	}
-	return e.storeValue(tail, vf)
+	if !e.diverged {
+		e.dischargeRoots(base)
+	}
+	e.pushes = base
+	return nil
 }
 
 // storeValue computes one value-position expression into the form's sink:
@@ -4044,12 +4058,28 @@ func (e *emitter) storeValue(x ast.Expr, vf *valueForm) *NotImplemented {
 	return vf.put(e, callResult{kind: ckI64, i64: op, isFloat: isF})
 }
 
-// emitBlockStmts emits a nested block's statements: a block introduces no
-// boundary of its own — the statements walk in order, and a return at any
-// depth is the enclosing body's own exit (emitReturn carries the exit
-// sequence). The body is one block scope: bindings it makes roll back
-// when it closes.
+// emitBlockStmts emits a nested block's statements: the statements walk in
+// order, and a return at any depth is the enclosing body's own exit
+// (emitReturn carries the exit sequence). The body is one block scope:
+// bindings it makes roll back when it closes.
+//
+// The block is also a body on the root face, and it closes as one: what it
+// pushed it pops where its emission ends, so the code that follows runs at
+// the window depth the block opened with. The block is emitted ONCE while
+// its runtime path may run many times — a loop body, an arm of an if that
+// runs on some passes and not others — so the pushes counted here are one
+// path's, and the discharge belongs on the path, not at the function's
+// exit. That is the accounting design D7's root protocol states ("根推送按
+// body 记账，每个 body 出口弹"), and a block's end is its exit.
+//
+// A block that ended in its own terminator (a return, a break, a continue)
+// owes nothing here: that edge carried its own discharge (emitReturn pops
+// the live set, emitBreak/emitContinue discharge to the loop body's
+// depth). The counter returns to the depth the block opened at either
+// way — text after a terminator is dead, and a join reached from an arm
+// must find the depth the arm did not change.
 func (e *emitter) emitBlockStmts(items []ast.Stmt) *NotImplemented {
+	base := e.pushes
 	e.pushEnv()
 	defer e.popEnv()
 	for _, st := range items {
@@ -4057,7 +4087,22 @@ func (e *emitter) emitBlockStmts(items []ast.Stmt) *NotImplemented {
 			return ni
 		}
 	}
+	if !e.diverged {
+		e.dischargeRoots(base)
+	}
+	e.pushes = base
 	return nil
+}
+
+// dischargeRoots pops the roots pushed since base — the body's own, last
+// push first, which is the order the runtime's shadow stack requires. It
+// emits nothing when the body pushed nothing, so the whole existing corpus
+// emits the same bytes it did before the accounting became per body.
+func (e *emitter) dischargeRoots(base int) {
+	for i := e.pushes - base; i > 0; i-- {
+		e.use("__we_root_pop")
+		e.inst("call void @__we_root_pop()")
+	}
 }
 
 // emitIf emits the conditional: then plus optional else (a block or a
@@ -4160,6 +4205,13 @@ type loopFrame struct {
 	brk   string // break target: the loop's exit label
 	cont  string // continue target: the re-evaluation point
 	depth int
+	// roots is the root depth the body opened at. A break or continue
+	// leaves the pass before the pass's own end, so the code that would
+	// have discharged its roots is exactly the code it jumps past; the
+	// edge carries the discharge itself, down to this depth — not to the
+	// function's, because everything below it (the enclosing body's own
+	// roots, a for's snapshot) is still live on the far side.
+	roots int
 }
 
 // liveScope is one compound scope entered and not yet left: the handle
@@ -4272,6 +4324,7 @@ func (e *emitter) emitBreak() *NotImplemented {
 	}
 	fr := e.loopFrames[len(e.loopFrames)-1]
 	e.unwind(fr.depth)
+	e.dischargeRoots(fr.roots)
 	e.inst(fmt.Sprintf("br label %%%s", fr.brk))
 	e.diverged = true
 	return nil
@@ -4285,9 +4338,22 @@ func (e *emitter) emitContinue() *NotImplemented {
 	}
 	fr := e.loopFrames[len(e.loopFrames)-1]
 	e.unwind(fr.depth)
+	e.dischargeRoots(fr.roots)
 	e.inst(fmt.Sprintf("br label %%%s", fr.cont))
 	e.diverged = true
 	return nil
+}
+
+// emitLoopBody emits one loop's body under its frame: the frame is what
+// break and continue address, and its roots entry is the depth the body
+// opened at — the same depth the body's own discharge returns the window
+// to, taken here so the two cannot drift apart.
+func (e *emitter) emitLoopBody(items []ast.Stmt, fr loopFrame) *NotImplemented {
+	fr.roots = e.pushes
+	e.loopFrames = append(e.loopFrames, fr)
+	ni := e.emitBlockStmts(items)
+	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
+	return ni
 }
 
 // emitWhile emits the loop: head re-evaluates the condition, the body
@@ -4307,11 +4373,9 @@ func (e *emitter) emitWhile(s *ast.While) *NotImplemented {
 	}
 	e.inst(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", c, body, exit))
 	e.label(body)
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: head, depth: e.nest})
-	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: head, depth: e.nest}); ni != nil {
 		return ni
 	}
-	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
 	// The back branch is guarded the same way the if joins are: a body
 	// that diverged ended in its own terminator, and only the head's false
 	// edge reaches the exit label then.
@@ -4435,11 +4499,9 @@ func (e *emitter) emitLoop(s *ast.Loop) *NotImplemented {
 	exit := fmt.Sprintf("lpexit%d", n)
 	e.inst(fmt.Sprintf("br label %%%s", body))
 	e.label(body)
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: body, depth: e.nest})
-	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: body, depth: e.nest}); ni != nil {
 		return ni
 	}
-	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
 	if !e.diverged {
 		e.inst(fmt.Sprintf("br label %%%s", body))
 	}
@@ -4514,11 +4576,9 @@ func (e *emitter) emitForRange(s *ast.ForStmt, rng *ast.Binary) *NotImplemented 
 	if ni := e.bindForPattern(s.Pat, cur, skI64); ni != nil {
 		return ni
 	}
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, depth: e.nest})
-	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: step, depth: e.nest}); ni != nil {
 		return ni
 	}
-	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
 	if !e.diverged {
 		e.inst(fmt.Sprintf("br label %%%s", step))
 	}
@@ -4577,11 +4637,9 @@ func (e *emitter) emitForString(s *ast.ForStmt) *NotImplemented {
 	if ni := e.bindForPattern(s.Pat, "%"+ch, skRune); ni != nil {
 		return ni
 	}
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, depth: e.nest})
-	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: step, depth: e.nest}); ni != nil {
 		return ni
 	}
-	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
 	if !e.diverged {
 		e.inst(fmt.Sprintf("br label %%%s", step))
 	}
@@ -4643,11 +4701,9 @@ func (e *emitter) emitForList(s *ast.ForStmt) *NotImplemented {
 	if ni := e.bindForListElem(s.Pat, "%"+w, face); ni != nil {
 		return ni
 	}
-	e.loopFrames = append(e.loopFrames, loopFrame{brk: exit, cont: step, depth: e.nest})
-	if ni := e.emitBlockStmts(s.Body.Items); ni != nil {
+	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: step, depth: e.nest}); ni != nil {
 		return ni
 	}
-	e.loopFrames = e.loopFrames[:len(e.loopFrames)-1]
 	if !e.diverged {
 		e.inst(fmt.Sprintf("br label %%%s", step))
 	}
