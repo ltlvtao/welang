@@ -47,7 +47,7 @@
 
 **可表达性披露。**两轴值得单列一段。悬空引用与隐式上下文的经典诱饵形被设计本身关死，两项独立裁决：引用类型终身不引入 We（第 18 章裁决——`Ref<T>` 不存在）；模块级可变状态不存在（`E0403`：无顶层 `var`）。不可表达的形做不成任务。context-passing 轴因此锚在相邻可表达形上——捕获与 effect 纪律（`E1602`/`E1603`）；dangling-reference 轴锚 task 句柄生命周期——句柄到 scope 退出未 await（`E1607`）与任何 scope 之外 spawn task（`E1618`）——因为本参考构建的 byres 运行面未实现（byres 资源在任何函数体内的使用都被运行面拒斥），`E1104`/`E1105` 留作 check 锚定的诱饵形、由 traps.md 在 prompt 邀到处注记。每枚此类任务的 `traps.md` 披露映射。这本身就是测量的一部分：模型写出被关死的形时 `we check` 直接拒——FPCR 受抑、回路收敛，正是设计生效的测量面。
 
-**运行面锚定。**参考构建的运行塔实现已批准语言的刻意子集，L1 任务锚在其内：sum 型（`Option`/`Result`/自有 sum）仅经原语调用物化——`channel.receive()`、scope timeout 的 `Result`、`task.await()` 的 `Result`——用户函数永不返回 `Some`/`None`；sum 型与同步型参数不入可跑槽（match scrutinee 是调用绑定的局部变量）；数值返回仅 `Int64`（`Int32` 返回被运行面拒斥）；`String` 相等只在 test 断言面；字符串拼接 `+` 是诚实边界（exit 70），而 `%` 与 `/` 已随 codegen-mono 表达式集发射检查算术；函数体以恰好一个尾 return 结束；等待属于 task 体——main 纤程停在自己的 timeout scope 内 `receive` 在虚拟钟下死锁。这些约束塑造任务编写，不削减模型自由度：越出子集的 attempt 被分类（boundary 或 test-malformed），绝不静默通过；子集本身随 codegen-full 线落地收缩。
+**运行面锚定。**参考构建的运行塔实现已批准语言的刻意子集，L1 任务锚在其内。该子集随 codegen-mono 线拓宽：sum 型可构造、可返回、可 match——用户函数可收可返 `Result`/`Option`/自有 sum，sum 因此不再被限制在产出它的那几枚原语调用里；sum 型与同步型参数入可跑槽；数值返回可为任意 checked 整型宽度而非仅 `Int64`（`fn sum(a: Int16, b: Int16) -> Int16` 可跑，且其算术按 `Int16` 检查，溢出陷阱点名该宽度）；`String` 相等与拼接可跑，记录方法、元组、新类型、`List` 迭代、闭包与 fn 值、顶层绑定亦然；`%` 与 `/` 发射检查算术；函数体可从任意深度 return，不限尾位。仍关死的面：泛型函数（`bndGenericFns` 边界）、普通 `scope { … }` 的值形、main 体内的 `?` 解包、元组值绑定读入 `String` 位、由值位 `if`/`match`/块绑定而来的 `let` 读入 `String` 位——五者皆为诚实边界（exit 70），皆在此披露。一条运行期规则未变：等待属于 task 体——main 纤程停在自己的 timeout scope 内 `receive` 在虚拟钟下死锁。这些约束塑造任务编写，不削减模型自由度：越出子集的 attempt 被分类（boundary 或 test-malformed），绝不静默通过；子集本身随 codegen-full 线落地收缩。
 
 ## 陷阱清单
 
