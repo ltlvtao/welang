@@ -36,20 +36,18 @@ func TestBlackboxBucketParity(t *testing.T) {
 		// then fails the test stage's compile. control-04's modulo carrier
 		// died with the codegen-mono expression set (T3: `%` and `/` are
 		// checked arithmetic now, so `return n % 2` is a clean program).
-		// The string-equality decline that replaced it retired with T4
-		// (the comparison emits and runs), so the live carrier is the
-		// mutable String binding this mutation also rides: the two-word
-		// slot is outside the emission set, and the test stage declines it.
+		// The string-equality decline that replaced it retired with T4,
+		// and the mutable String binding that replaced THAT retired with
+		// T9-4 (the two-word slot emits now, so that mutant runs and lands
+		// latent — traps_test.go carries it there). The live carrier is the
+		// generic-fn boundary: a generic declaration is ratified chapter 10
+		// and checks clean, and the test stage declines its code generation
+		// until B1b monomorphization lands. It is the last stop word this
+		// build owns, so the bucket stays calibrated on a real boundary
+		// rather than on a semantic mutation.
 		{"test-malformed", "control-03", attemptFiles(t, "control-03", func(src string) string {
-			return strings.Replace(src, `pub fn echo(s: String) -> String {
-    return s
-}`, `pub fn echo(s: String) -> String {
-    var r: String = s
-    if s == "mirror" {
-        r = "mirror-x"
-    }
-    return r
-}`, 1)
+			return strings.Replace(src, `pub fn echo(s: String) -> String {`,
+				`pub fn echo<T>(s: T) -> T {`, 1)
 		})},
 	}
 

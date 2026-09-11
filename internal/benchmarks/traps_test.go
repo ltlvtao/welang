@@ -85,9 +85,13 @@ func TestTrapCalibration(t *testing.T) {
 		// were both honest boundaries before T4 (check-clean but declined:
 		// the boundary bucket and the test-malformed bucket respectively).
 		// T4 ratified both faces, so each mutant now runs and its wrong
-		// output reaches the reference test — the latent bucket. The
-		// mutable String binding the third case rides is the face T4 does
-		// not carry yet, so it holds the test-malformed calibration.
+		// output reaches the reference test — the latent bucket. The third
+		// case's mutable String binding followed the same route in T9-4:
+		// the two-word slot is what T4 did not carry, and its arrival is
+		// the calibration traps.md predicted, so the mutant is latent now.
+		// control-03 thereby calibrates no test-malformed shape at all; the
+		// bucket's live carrier is the generic-fn boundary, exercised in
+		// blackbox_test.go.
 		{"control-03", "concatenation-latent", BucketLatent, func(s string) string {
 			return rep(s, "    return s", `    return s + "x"`)
 		}},
@@ -101,7 +105,7 @@ func TestTrapCalibration(t *testing.T) {
     return s
 }`)
 		}},
-		{"control-03", "string-mutable-binding-decline", BucketTestMalformed, func(s string) string {
+		{"control-03", "string-mutable-binding-latent", BucketLatent, func(s string) string {
 			return rep(s, `pub fn echo(s: String) -> String {
     return s
 }`, `pub fn echo(s: String) -> String {

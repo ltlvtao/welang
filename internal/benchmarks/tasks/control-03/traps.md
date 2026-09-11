@@ -13,9 +13,12 @@ Scoring face (not shown to the model). Each entry names the detection path.
   the comparison at the test stage (test exit 70 — the test-malformed
   bucket).
 - Holding the value in a mutable String binding (`var r: String = s`) to
-  branch on it: outside the emission set — T4 carries the immutable
-  binding and the String value form, not the two-word mutable slot — so
-  the run declines at the test stage (test exit 70, the test-malformed
-  bucket). This is the calibration that goes latent when the mutable
-  binding lands.
+  branch on it: ratified by T9-4 of codegen-mono — the two-word storage
+  face emits, so the wrong branch reaches the reference test instead of
+  stopping at a boundary (latent, test exit 1). Between T4 and T9-4 this
+  was the task's test-malformed carrier (test exit 70), which is the
+  calibration this entry predicted it would stop being. control-03 now
+  carries no test-malformed shape: the bucket's carrier in the black-box
+  battery is the generic-fn boundary (a chapter 10 declaration the test
+  stage declines until B1b monomorphization), not a control-03 mutation.
 - Wrong literal: reference test catches (test exit 1, latent).

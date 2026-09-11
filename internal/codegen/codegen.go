@@ -264,15 +264,25 @@ type strConst struct {
 	data string
 }
 
-// strBinding is one String value face: either a literal still holding
-// its decoded bytes (a use interns them lazily — an unused let emits
-// nothing, the M8 discipline), or an operand pair a fn parameter or an
-// aggregate return produced ("%s0"/"%s1" — already live registers).
+// strBinding is one String value face: a literal still holding its
+// decoded bytes (a use interns them lazily — an unused let emits nothing,
+// the M8 discipline), an operand pair a fn parameter or an aggregate
+// return produced ("%s0"/"%s1" — already live registers), or the two
+// words a name the body writes owns (T9-4's storage face: a String is a
+// (ptr, len) pair, so its addressable form is two slots where a scalar's
+// is one). The three are exclusive and rank storage first, then the
+// operand pair, then the bytes.
 type strBinding struct {
 	data   string
 	length int
 	dataOp string // non-empty: the operand form wins over data/length
 	lenOp  string
+	// slot and lenSlot are the addressable face's two words (design D8's
+	// String storage, one word down from the module-level binding's pair
+	// of globals). A name holding them has no operand pair: every read
+	// loads the current contents.
+	slot    string
+	lenSlot string
 }
 
 type gcBinding struct {
@@ -1360,6 +1370,13 @@ func (e *emitter) emitStmt(st ast.Stmt) *NotImplemented {
 			}
 			return e.emitFieldStore(g.reg, slot, s.Value)
 		}
+		if b, ok := e.strEnv[s.Name]; ok && b.slot != "" {
+			// A String name the body writes: the value's pair is computed
+			// first and then stored through the name's two words. A String
+			// binding with no words is one nothing assigned at its site —
+			// the two disagree, and the honest answer is the boundary.
+			return e.emitStrStore(b, s.Value)
+		}
 		slot, ok := e.scalars[s.Name]
 		if !ok || slot.alloca == "" {
 			return e.bnd()
@@ -1425,6 +1442,13 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 				return e.bnd()
 			}
 			if s.Name != "_" {
+				if e.assigned[s.Name] {
+					// The body writes the name, so the literal's pair goes
+					// into its own two words. Interning is a use, so the
+					// constant pool entry is minted here (the M8 discipline).
+					e.bindStringSlot(s.Name, e.intern(data), strconv.Itoa(len(data)))
+					return nil
+				}
 				e.strEnv[s.Name] = strBinding{data: data, length: len(data)}
 			}
 			return nil
@@ -1470,8 +1494,19 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			e.tupEnv[s.Name] = b
 			return nil
 		}
-		if b, ok := e.strEnv[init.Name]; ok {
-			e.strEnv[s.Name] = b
+		if _, ok := e.strEnv[init.Name]; ok {
+			if e.assigned[s.Name] {
+				// The alias is written, so it needs its own storage: read
+				// the source's pair and store it, rather than share the
+				// source's face.
+				p, l, ni := e.emitStringExpr(init)
+				if ni != nil {
+					return ni
+				}
+				e.bindStringSlot(s.Name, p, l)
+				return nil
+			}
+			e.strEnv[s.Name] = e.strEnv[init.Name]
 			return nil
 		}
 		if v, ok := e.scalars[init.Name]; ok {
@@ -1673,7 +1708,8 @@ func (e *emitter) bindNumericValue(name string, x ast.Expr) *NotImplemented {
 // bindStringValue binds one String-valued expression under name (the
 // concatenation, an interpolated literal, a call whose declared return is
 // a String). The emission happens here — the holes' expressions and the
-// call run at the binding — and the name holds the resulting operand pair.
+// call run at the binding — and the name holds the resulting operand pair,
+// or the two words that pair is stored into where the body writes the name.
 // The discard still emits: a hole may call, and calls have effects.
 func (e *emitter) bindStringValue(name string, x ast.Expr) *NotImplemented {
 	res, ni := e.emitHole(x)
@@ -1681,6 +1717,10 @@ func (e *emitter) bindStringValue(name string, x ast.Expr) *NotImplemented {
 		return ni
 	}
 	if name != "_" {
+		if e.assigned[name] {
+			e.bindStringSlot(name, res.strBind.dataOp, res.strBind.lenOp)
+			return nil
+		}
 		e.strEnv[name] = res.strBind
 	}
 	return nil
@@ -1753,6 +1793,10 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 		return nil
 	case ckStr:
 		if name != "_" {
+			if e.assigned[name] {
+				e.bindStringSlot(name, res.strBind.dataOp, res.strBind.lenOp)
+				return nil
+			}
 			e.strEnv[name] = res.strBind
 		}
 		return nil
@@ -2447,11 +2491,27 @@ func (e *emitter) emitLogic(b *ast.Binary) (string, bool, *NotImplemented) {
 // assignment stores into it. The narrow int widths ride the i64 domain
 // (sign-extended values; their arithmetic is outside the M9b set).
 func (e *emitter) emitVarBinding(s *ast.Binding) *NotImplemented {
-	isF := false
 	t, ok := s.Typ.(*ast.NamedType)
 	if !ok || t.Qual != "" || len(t.Args) != 0 {
 		return e.bnd()
 	}
+	if t.Name == "String" {
+		// A var String owns its two words from the binding on, exactly as
+		// a var scalar owns its one: the initializer's pair is stored into
+		// them rather than shared with whatever produced it. The discard
+		// still evaluates — a var's initializer may call.
+		if s.Name == "_" {
+			_, _, ni := e.emitStringExpr(s.Init)
+			return ni
+		}
+		p, l, ni := e.emitStringExpr(s.Init)
+		if ni != nil {
+			return ni
+		}
+		e.bindStringSlot(s.Name, p, l)
+		return nil
+	}
+	isF := false
 	switch t.Name {
 	case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool":
 	case "Float64":
@@ -6811,6 +6871,44 @@ func (e *emitter) bindScalarSlot(name, op string, isF bool, kind strKind) {
 	e.scalars[name] = scalarSlot{alloca: slot, isFloat: isF, kind: kind}
 }
 
+// bindStringSlot gives one String name the two words an assignment stores
+// through — the String face of bindScalarSlot, and the frame-local shape
+// of the pair of globals a module-level binding takes (T8-2). Both words
+// are reserved before either stores, so a name's storage is complete
+// whatever its initializer emitted.
+func (e *emitter) bindStringSlot(name, p, l string) {
+	ps := e.slot("ptr")
+	ls := e.slot("i64")
+	e.inst(fmt.Sprintf("store ptr %s, ptr %s", p, ps))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", l, ls))
+	e.strEnv[name] = strBinding{slot: ps, lenSlot: ls}
+}
+
+// strSlotLoad reads one addressable String name's pair. The loads are
+// fresh at every use — that is the whole point of the storage face, and
+// what makes an assignment observable to every read that follows it.
+func (e *emitter) strSlotLoad(b strBinding) strBinding {
+	p := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", p, b.slot))
+	l := e.value()
+	e.inst(fmt.Sprintf("%%%s = load i64, ptr %s", l, b.lenSlot))
+	return strBinding{dataOp: "%" + p, lenOp: "%" + l}
+}
+
+// emitStrStore writes one String value's pair through an addressable
+// name's two words. The value is computed first and both stores follow,
+// so a self-referential assignment (`s = s + "x"`) reads the old pair
+// before either word is replaced.
+func (e *emitter) emitStrStore(b strBinding, x ast.Expr) *NotImplemented {
+	p, l, ni := e.emitStringExpr(x)
+	if ni != nil {
+		return ni
+	}
+	e.inst(fmt.Sprintf("store ptr %s, ptr %s", p, b.slot))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", l, b.lenSlot))
+	return nil
+}
+
 // collectCaptures walks a task body for identifier reads that name
 // bindings of the enclosing scope: primitive handles (traced pointer
 // slots) and scalars (plain i64 slots). Strings, records, and sums stop
@@ -7440,6 +7538,10 @@ func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 			}
 			return "", "", e.bnd()
 		}
+		if b.slot != "" {
+			r := e.strSlotLoad(b)
+			return r.dataOp, r.lenOp, nil
+		}
 		if b.dataOp != "" {
 			return b.dataOp, b.lenOp, nil
 		}
@@ -7790,6 +7892,12 @@ func (e *emitter) emitLetPattern(s *ast.Binding) *NotImplemented {
 // exclusive.
 func (e *emitter) bindingFace(name string) (callResult, *NotImplemented) {
 	if b, ok := e.strEnv[name]; ok {
+		if b.slot != "" {
+			// A name the body writes holds its pair in two words; the
+			// caller gets the loaded pair, exactly as the scalar arm below
+			// hands back from its slot rather than the slot itself.
+			b = e.strSlotLoad(b)
+		}
 		return callResult{kind: ckStr, strBind: b}, nil
 	}
 	if b, ok := e.gcEnv[name]; ok {
@@ -10053,7 +10161,14 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 		case abiStr:
 			ps = append(ps, "ptr %"+p.Name+"0", "i64 %"+p.Name+"1")
 			if p.Name != "_" {
-				e.strEnv[p.Name] = strBinding{dataOp: "%" + p.Name + "0", lenOp: "%" + p.Name + "1"}
+				if e.assigned[p.Name] {
+					// The body writes the parameter, so its two incoming
+					// words are copied into a pair of slots the writes land
+					// in — the IR words themselves are read-only.
+					e.bindStringSlot(p.Name, "%"+p.Name+"0", "%"+p.Name+"1")
+				} else {
+					e.strEnv[p.Name] = strBinding{dataOp: "%" + p.Name + "0", lenOp: "%" + p.Name + "1"}
+				}
 			}
 		case abiGc:
 			ps = append(ps, "ptr %"+p.Name)
@@ -10572,7 +10687,16 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 		switch v := value.(type) {
 		case *ast.Ident:
 			b, ok := e.strEnv[v.Name]
-			if !ok || b.dataOp == "" {
+			if !ok {
+				return "", bndFn()
+			}
+			if b.slot != "" {
+				// A name the body writes holds its pair in two words: the
+				// return reads them, the same fresh loads every other use
+				// of the name takes.
+				b = e.strSlotLoad(b)
+			}
+			if b.dataOp == "" {
 				return "", bndFn()
 			}
 			return strPair(b.dataOp, b.lenOp), nil

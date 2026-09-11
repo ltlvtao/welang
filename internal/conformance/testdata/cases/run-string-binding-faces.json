@@ -1,0 +1,16 @@
+{
+  "name": "run-string-binding-faces",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nnewtype Name(String)\n\nfn echo(s: String) -> String {\n    return s\n}\n\nfn label(n: Name) -> String {\n    n = n\n    return n.value\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = \"x${1}y\"\n    a = \"A\"\n    io.println(a)\n\n    let b = \"l\" + \"r\"\n    b = \"B\"\n    io.println(b)\n\n    let c = echo(\"hi\")\n    c = \"C\"\n    io.println(c)\n\n    io.println(label(Name(\"t\")))\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "A\nB\nC\nt\n",
+  "stderr": ""
+}
