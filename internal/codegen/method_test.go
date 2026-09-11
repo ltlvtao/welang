@@ -104,7 +104,7 @@ func TestMutSelfFieldWrite(t *testing.T) {
 }
 
 // TestMutSelfCounterIsInPlace: two calls on one gc record share the
-// object — the receiver is the pointer, never a copy, so the counter形
+// object — the receiver is the pointer, never a copy, so the counter
 // counts (chapter 8's gc category: the binding shares).
 func TestMutSelfCounterIsInPlace(t *testing.T) {
 	ir := assertClean(t, recModule(

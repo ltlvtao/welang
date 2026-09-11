@@ -113,7 +113,8 @@ func TestTopLetListOwnsAHandleGlobalAndRegisters(t *testing.T) {
 	wantIR(t, ir, "load ptr, ptr @main.ns", "the walk's source is the global's load")
 }
 
-// The two pins below are 补钉 from T8-2B's mutation battery: three
+// The two pins below were added later, from T8-2B's mutation battery:
+// three
 // mutations survived it, and all three turn out to be the same untested
 // shape — a module-level gc binding COPIED into a local by a plain `let`.
 // `bindTopRead` has exactly one caller (the `let` statement's top-level

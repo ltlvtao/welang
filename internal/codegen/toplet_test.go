@@ -14,8 +14,9 @@ import (
 // one module. The emission face is:
 //
 //   - a scalar binding owns one LLVM global, `@<key>.<name>`, and its
-//     initializer stores straight into it (D7's 全局直存): the read face is
-//     one load, so a fn body, a later initializer of the same module and a
+//     initializer stores straight into it (D7's direct store): the read
+//     face is one load, so a fn body, a later initializer of the same
+//     module and a
 //     reading module all resolve a top-level name the same way, and no copy
 //     or slot stands between the binding and its storage;
 //   - a module with at least one binding gets `@<key>.init`, whose body is

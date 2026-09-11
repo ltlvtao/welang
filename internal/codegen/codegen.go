@@ -4552,8 +4552,8 @@ func (e *emitter) storeValue(x ast.Expr, vf *valueForm) *NotImplemented {
 // its runtime path may run many times — a loop body, an arm of an if that
 // runs on some passes and not others — so the pushes counted here are one
 // path's, and the discharge belongs on the path, not at the function's
-// exit. That is the accounting design D7's root protocol states ("根推送按
-// body 记账，每个 body 出口弹"), and a block's end is its exit.
+// exit. That is the accounting design D7's root protocol states: booked
+// per body and popped at every body exit. A block's end is its exit.
 //
 // A block that ended in its own terminator (a return, a break, a continue)
 // owes nothing here: that edge carried its own discharge (emitReturn pops
@@ -8648,8 +8648,8 @@ func (e *emitter) emitTupleOperand(x ast.Expr) (string, []tupleElem, *NotImpleme
 }
 
 // emitLetPattern binds one destructuring `let`: chapter 8's tuple pattern
-// binds each name from the element it stands for (design D4's 模式解构)
-// — a load per element, never a call.
+// binds each name from the element it stands for (design D4's
+// destructuring) — a load per element, never a call.
 func (e *emitter) emitLetPattern(s *ast.Binding) *NotImplemented {
 	if s.Kw != "let" {
 		return e.bnd()
@@ -10074,7 +10074,7 @@ const (
 	abiSum // { i64, i64, i64 }
 	// abiTuple crosses a boundary as its elements' bare words — one IR
 	// parameter (or one returned field) per word, never a pointer (design
-	// D4's 传参逐字段展开). In the body it is a stack aggregate, which is
+	// D4's per-field spread). In the body it is a stack aggregate, which is
 	// what the value IS: a tuple never leaves the stack.
 	abiTuple
 	// abiFn is a function value at a parameter position (chapter 12's
@@ -10965,9 +10965,10 @@ func (e *emitter) narrowForeign(op string, k foreignKind) (string, *NotImplement
 // blocks in inversion, and the body's own gc window's pops — and returns
 // the body text with the return line's operand. Every body that answers a
 // return protocol shares it: the program fn, the method, the mock and
-// test defines, and (chapter 12's 闭包体即函数体) every closure thunk. A
-// body that diverged reports it through diverged instead: its terminator
-// stands as the define's own, with no return, defers, or pops.
+// test defines, and every closure thunk — chapter 12's rule that a
+// closure body is a function body. A body that diverged reports it
+// through diverged instead: its terminator stands as the define's own,
+// with no return, defers, or pops.
 func (e *emitter) emitBodyCore(items []ast.Stmt, abi fnAbi, implicitTail bool) (string, string, bool, *NotImplemented) {
 	var tail *ast.Return
 	if len(items) > 0 {
@@ -10977,8 +10978,8 @@ func (e *emitter) emitBodyCore(items []ast.Stmt, abi fnAbi, implicitTail bool) (
 			items = items[:len(items)-1]
 		case *ast.ExprStmt:
 			// Chapter 6: it is a declared return type that makes the
-			// body value the function's implicit return ("声明了返回
-			// 类型时，体块值是函数的隐式返回值：末项表达式返回它").
+			// body value the function's implicit return — with one declared, the
+			// final expression returns the body's value.
 			// Without one the trailing item is governed by chapter 8's
 			// value-discard rule instead — a plain statement whose
 			// value no one takes, unit needing no ceremony — so it
@@ -11194,7 +11195,7 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 				e.gcEnv[p.Name] = gcBinding{rec: pa.key, reg: "%" + p.Name}
 			}
 		case abiTuple:
-			// The words arrive flat (design D4's 传参逐字段展开) and the
+			// The words arrive flat (design D4's per-field spread) and the
 			// body sees the aggregate they rebuild: a tuple value is a
 			// stack aggregate wherever it is used.
 			agg := e.slot(aggTyp(pa.elems))

@@ -102,9 +102,9 @@ func TestNewtypeOverStringIsIdentity(t *testing.T) {
 
 // TestTupleConstructionAggregates: a tuple value lives in a stack
 // aggregate of its elements' IR words, each stored at its offset. The
-// elements are read back through the pattern — chapter 8's 元组模式与解构
-// is the language's element reader (a member name is an identifier;
-// `p.0` is E0105).
+// elements are read back through the pattern — chapter 8's tuple
+// pattern and destructuring is the language's element reader (a member
+// name is an identifier; `p.0` is E0105).
 func TestTupleConstructionAggregates(t *testing.T) {
 	ir := assertClean(t, recModule(
 		[]ast.Item{},
@@ -170,7 +170,7 @@ func TestTupleReturnIsAValueAggregate(t *testing.T) {
 }
 
 // TestTupleParameterExpands: a tuple parameter crosses as one IR
-// parameter per element (design D4's "传参逐字段展开") — the callee's
+// parameter per element (design D4's per-field spread) — the callee's
 // define takes the fields, never a tuple pointer.
 func TestTupleParameterExpands(t *testing.T) {
 	sum := &ast.FnDecl{

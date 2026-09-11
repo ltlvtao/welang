@@ -255,11 +255,11 @@ func TestTestDeepReturn(t *testing.T) {
 
 // TestVoidBodyTrailingExpressionIsAStatement: a fn that declares no return
 // type has no implicit return — chapter 6 sends its trailing item to
-// chapter 8's value-discard rule instead ("未声明返回类型时，体末项由第 8
-// 章值丢弃规则治理：类型非 unit 的末项表达式 MUST 以 `let _ =` 显式丢弃，
-// unit 类型无需仪式"), and chapter 6's implicit return is granted to the
-// declared-return-type case alone ("声明了返回类型时，体块值是函数的隐式
-// 返回值"). So a void body's last expression statement is a statement like
+// chapter 8's value-discard rule instead (a non-unit trailing
+// expression MUST be discarded explicitly with `let _ =`; unit needs no
+// ceremony), and chapter 6's implicit return is granted to the
+// declared-return-type case alone. So a void body's last expression
+// statement is a statement like
 // any other: it emits and its value is dropped, and the define closes with
 // a plain ret void. Reading it as a value tail would hand the void family
 // a value it has nowhere to put — the boundary — which is exactly the

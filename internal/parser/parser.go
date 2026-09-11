@@ -976,7 +976,7 @@ func (p *parser) parseHole(region string, r lex.HoleRegion) ast.Expr {
 	}
 	if len(toks) == 1 {
 		p.fail(r.Line, r.Col, "E0105",
-			"invalid interpolation hole — the ${} region is empty; a hole holds one expression")
+			"unexpected token — the ${} region is empty; a hole holds one expression")
 	}
 	// A child parser shares the file name and the enclosing context the
 	// expression's own diagnostics need (the value-site word, the nesting

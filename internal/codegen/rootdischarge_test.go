@@ -9,8 +9,9 @@ import (
 )
 
 // T8-2a root discharge per body (design D7's root protocol; the design's
-// own wording is "根推送按 body 记账（e.pushes 在每个 body 出口弹）" — the
-// accounting is per body and every body's exit pops).
+// own wording is that pushes are booked per body — e.pushes pops at
+// every body exit — so the accounting is per body and every body's exit
+// pops).
 //
 // A body is chapter 2's block, not just a function's: an if's arm, a
 // match's arm, a loop's body and a bare block are all bodies, and each is

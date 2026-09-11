@@ -12,8 +12,9 @@ import (
 // resources to a block; every exit of that block runs exactly one release
 // per binding, in reverse declaration order, and an exit that pierces the
 // block — a return, a break, a continue — is a block exit like any other
-// (chapter 13: "被 return、break 或 continue 穿透的出口是块出口，同样释放").
-// The release is a method call through the T5 table: the head type's own
+// (chapter 13: an exit pierced by return, break or continue is a block
+// exit all the same). The release is a method call through the T5
+// table: the head type's own
 // `release`, which is what `impl Releasable for Head` contributes. The
 // head expression's record pointer is the receiver, so a resource binding
 // is a record binding with a release obligation attached.
@@ -77,8 +78,9 @@ func releaseOps(ir string) []string {
 }
 
 // TestScopeResourceReleasesInReverseOrder: the block's normal exit runs
-// one release per binding, in reverse declaration order (chapter 13: "块
-// 出口处编译器保证每绑定恰一次 release 调用，按声明逆序"). Each head
+// one release per binding, in reverse declaration order (chapter 13:
+// at a block exit the compiler guarantees exactly one release call per
+// binding, in declaration order's reverse). Each head
 // expression allocates its record, so the allocation order names the
 // bindings and the release order has to be its mirror.
 func TestScopeResourceReleasesInReverseOrder(t *testing.T) {
@@ -91,9 +93,9 @@ func TestScopeResourceReleasesInReverseOrder(t *testing.T) {
 			resBind("a", construct("Handle", init1("fd", intLit("1")))),
 			resBind("b", construct("Handle", init1("fd", intLit("2")))),
 		},
-			// The binding is the block's (chapter 13: "每个名字为该块绑定"):
-			// reading a field through it is the ordinary record read, and the
-			// name is out of reach past the block.
+			// The binding belongs to the block (chapter 13: each name is bound
+			// for that block): reading a field through it is the ordinary record
+			// read, and the name is out of reach past the block.
 			&ast.Binding{Kw: "let", Name: "n", Init: memberOf(ident("b"), "fd")},
 			ioCall("io", "println", interpLit([]string{"", ""}, ident("n")))),
 		okReturn(),
@@ -223,9 +225,9 @@ func TestScopeResourceReleaseDispatchesToTheImplBody(t *testing.T) {
 }
 
 // TestScopeResourceReleasesBeforeFunctionDefers: chapter 13's ordering —
-// "块出口释放先于外围函数自己的 defer 运行，内块先出". A return inside
-// the block is both exits at once: the releases run first, the fn's
-// deferred blocks after them.
+// a block exit's releases run before the enclosing function's own
+// defers, inner blocks first. A return inside the block is both exits
+// at once: the releases run first, the fn's
 func TestScopeResourceReleasesBeforeFunctionDefers(t *testing.T) {
 	use := &ast.FnDecl{
 		Name: "use", Ret: named("Int64"),
@@ -340,8 +342,8 @@ func TestScopeResourceOpaqueHeadReleasesThroughTheNativeClose(t *testing.T) {
 // TestScopeResourceNestedInScopeExprDischargesInnermostFirst: the two
 // stacks hold the same nesting, and one exit crosses both. A return
 // inside a resource block inside a loop inside a `scope` expression
-// leaves three frames at once, and chapter 13's "内块先出" orders them by
-// how they actually nest: the resource releases first, the scope object
+// leaves three frames at once, and chapter 13's innermost-first rule
+// orders them by how they nest: the resource releases first, the scope
 // cancels and leaves after. Depth is the one number that compares across
 // the two stacks — a scope object's index and a resource block's index
 // are not the same scale — which is what the body's shared nesting
