@@ -43,7 +43,15 @@ type NotImplemented struct {
 // leaves no boundary between a reportable Err and any other construction.
 // T10 retires the assertEqual-domain row: the comparand domain now closes
 // over the composites that declare Eq, and what is left of it is the
-// residual row the check stage's own gate stops at.
+// residual row the check stage's own gate stops at. T13 keeps the five:
+// its grep was to end at one word, on design D0's prediction that the
+// widened tower would leave only bndGenericFns standing, and the
+// implementation refuted that prediction — the three body words still
+// anchor honest stop faces the tower does not reach (a `?` over a user
+// method, List-of-String elements, and primitives in return position among
+// them), so their retirement rides the B1b landing rather than this
+// reconciliation. The per-case accounting is in the change's T13
+// completion record.
 const (
 	bndMainBody = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	bndTopLets  = "top-level value bindings in code generation"
