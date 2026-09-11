@@ -322,10 +322,17 @@ func TestNarrowDomainPrefersTheSideThatHasAWidth(t *testing.T) {
 // operand carries a literal, so the sum is checked only if both bindings
 // took the annotation's width.
 //
-// The source pipeline stops a value form bound to a `let` at the M9b
-// boundary today (the bound let is not in the statement set's value
-// forms), so this pins the emitter's contract rather than a program the
-// corpus can spell — see the completion record's disclosure.
+// A value form bound to a `let` is reachable from source and runs: the
+// shape this test mirrors — `let n: Int8 = if a > 0 {2i8} else {1i8}`
+// twice, then their sum — is a program the corpus can spell, and it
+// compiles and answers. What is out of reach is reading such a binding, or
+// anything derived from it, into a `String` position: the string chain
+// asks valueKind, which carries no If/Match/BlockExpr arm and answers
+// skNone, so the hole stops there. The reachable shape has a probe behind
+// it and no fixture yet — a golden for it is registered as a T13
+// reconciliation item (docs/benchmarks.md, "Run-face anchoring", states
+// the boundary). An earlier revision of this comment claimed the pipeline
+// stopped the binding itself, which T12's probes disproved.
 func TestNarrowValueFormTakesTheAnnotation(t *testing.T) {
 	form := func(lit string) ast.Expr {
 		return &ast.If{
