@@ -1,0 +1,16 @@
+{
+  "name": "run-narrow-shift-overflow-panic",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    var a: UInt32 = 2147483648u32\n    var k: UInt32 = 33u32\n    let b: UInt32 = a << k\n    io.println(\"unreachable\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: UInt32 shift overflow\n"
+}

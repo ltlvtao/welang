@@ -1,0 +1,16 @@
+{
+  "name": "run-narrow-uint32-mul-overflow-panic",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let m: UInt32 = 4294967295u32\n    var k: UInt32 = 2u32\n    let s: UInt32 = m * k\n    io.println(\"unreachable\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: UInt32 mul overflow\n"
+}

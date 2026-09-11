@@ -1,0 +1,16 @@
+{
+  "name": "run-narrow-capture-panic",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\npub type AppError = Failed(String)\npub fn main() effect io -> Result<(), AppError> {\n    let a: Int8 = 127i8\n    scope {\n        let t = task effect io { a + a }\n        let _ = t.await()\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:7:19: warning[W1912]: function may block on a wait — TaskHandle.await may block\nerror: Panicked: Int8 add overflow\n"
+}

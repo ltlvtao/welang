@@ -324,6 +324,7 @@ type listBinding struct {
 // one-word face and stops at the body boundary.
 type listElem struct {
 	kind strKind
+	num  string // a narrow integer element keeps the width its type named
 	rec  string
 	gc   bool
 }
@@ -739,7 +740,8 @@ func (fd *fnDef) sym() string {
 type captureSet struct {
 	names []string
 	prim  []bool
-	ptr   string // the env block operand ("%v12"); empty outside a task
+	nums  []string // per name, the narrow integer width the copied binding held
+	ptr   string   // the env block operand ("%v12"); empty outside a task
 }
 
 func (c *captureSet) slot(name string) (int, bool) {
@@ -770,6 +772,7 @@ type capSlot struct {
 	prim  bool    // the traced word is a primitive handle, not a fn carrier
 	key   string  // a gc record capture names the record it points at
 	kind  strKind // a scalar capture keeps its interpolation domain
+	num   string  // and its narrow integer width, where the copied binding had one
 	abi   fnAbi   // a fn capture keeps the signature its carrier was built with
 	typed bool    // the capture above carries a signature at all
 }
@@ -830,6 +833,13 @@ type scalarSlot struct {
 	// skNone means the slot's provenance is not statically decidable:
 	// rendering an interpolation hole of it stops at the boundary.
 	kind strKind
+	// num is the narrow integer width the binding's site fixed, "" where
+	// it fixed none — Int64, UInt64, or a site whose provenance is as
+	// unknown as kind's. kind deliberately erases the width (every signed
+	// width is one i64 domain and renders alike); num keeps it, because
+	// chapter 7's checked arithmetic is checked against the declared
+	// width and the slot is where a value's width outlives its site.
+	num string
 }
 
 // sumSlot is one Option/Result value: the three-word {tag, pay0, pay1}
@@ -1513,12 +1523,13 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			if kind == skNone {
 				kind = literalStrKind(init)
 			}
+			num := annNarrow(s.Typ, init)
 			if s.Name != "_" {
 				if e.assigned[s.Name] {
-					e.bindScalarSlot(s.Name, op, isF, kind)
+					e.bindScalarSlot(s.Name, op, isF, kind, num)
 					return nil
 				}
-				e.scalars[s.Name] = scalarSlot{operand: op, isFloat: isF, kind: kind}
+				e.scalars[s.Name] = scalarSlot{operand: op, isFloat: isF, kind: kind, num: num}
 			}
 			return nil
 		default:
@@ -1566,7 +1577,7 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 				if v.alloca != "" {
 					op = e.loadNum(v.alloca, v.isFloat)
 				}
-				e.bindScalarSlot(s.Name, op, v.isFloat, v.kind)
+				e.bindScalarSlot(s.Name, op, v.isFloat, v.kind, v.num)
 				return nil
 			}
 			e.scalars[s.Name] = v
@@ -1671,7 +1682,7 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 		// The operator family and the value-position control forms bind
 		// through one path: the operand carries its domain into the slot
 		// (or the SSA face) exactly as a literal's does.
-		return e.bindNumericValue(s.Name, s.Init)
+		return e.bindNumericValue(s.Name, s.Typ, s.Init)
 	case *ast.Prop:
 		res, ni := e.emitQuestion(init)
 		if ni != nil {
@@ -1716,7 +1727,7 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 // domain — a float binding stays a float through its SSA operand as much
 // as through its slot (design D10-1: a dropped domain left every later
 // consumer spelling i64 over a double register).
-func (e *emitter) bindNumericValue(name string, x ast.Expr) *NotImplemented {
+func (e *emitter) bindNumericValue(name string, typ ast.TypeRef, x ast.Expr) *NotImplemented {
 	if e.valueKind(x) == skStr {
 		// A String value expression — the concatenation, a String-returning
 		// call, an interpolated literal — binds its pair, not a number.
@@ -1744,13 +1755,24 @@ func (e *emitter) bindNumericValue(name string, x ast.Expr) *NotImplemented {
 	// The classification is the value's own (the same one an
 	// interpolation hole reads), so a name bound from an expression
 	// carries its domain onward: `let n = x + 1` renders as the integer
-	// `x` was.
+	// `x` was. The width rides the same way and comes from the emission
+	// rather than a second classification: an expression's width IS what
+	// its operands' widths made the emitter check, and a name bound from
+	// one carries it into whatever reads the name next.
+	//
+	// Where the emission has no width to report, the annotation is the
+	// declaration's own answer — the annotation-first rule a literal
+	// binding already follows (annNarrow) — so `let n: Int8 = <form>` is
+	// guarded as an Int8 whatever the form's arms were.
+	if res.num == "" {
+		res.num = annNarrow(typ, x)
+	}
 	kind := e.valueKind(x)
 	if e.assigned[name] {
-		e.bindScalarSlot(name, res.i64, res.isFloat, kind)
+		e.bindScalarSlot(name, res.i64, res.isFloat, kind, res.num)
 		return nil
 	}
-	e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat, kind: kind}
+	e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat, kind: kind, num: res.num}
 	return nil
 }
 
@@ -1783,11 +1805,11 @@ func (e *emitter) emitNumericValue(x ast.Expr) (callResult, *NotImplemented) {
 	case *ast.If, *ast.Match, *ast.BlockExpr:
 		return e.emitValueForm(x)
 	}
-	op, isF, ni := e.emitNumExpr(x)
+	op, isF, num, ni := e.emitNumOperand(x)
 	if ni != nil {
 		return callResult{}, ni
 	}
-	return callResult{kind: ckI64, i64: op, isFloat: isF}, nil
+	return callResult{kind: ckI64, i64: op, isFloat: isF, num: num}, nil
 }
 
 // bindResult stores one call-shaped value under the binding's name (the
@@ -1821,13 +1843,14 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 		if name != "_" {
 			// The callee's declaration fixed the type where it named one
 			// (a program fn's return, a String member's result): the
-			// binding carries it for the interpolation domain.
+			// binding carries it for the interpolation domain, and its
+			// width for the arithmetic that reads the name.
 			kind := baseStrKind(res.typeName)
 			if e.assigned[name] {
-				e.bindScalarSlot(name, res.i64, res.isFloat, kind)
+				e.bindScalarSlot(name, res.i64, res.isFloat, kind, res.num)
 				return nil
 			}
-			e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat, kind: kind}
+			e.scalars[name] = scalarSlot{operand: res.i64, isFloat: res.isFloat, kind: kind, num: res.num}
 		}
 		return nil
 	case ckPrim:
@@ -1964,6 +1987,11 @@ type callResult struct {
 	// declaration fixed it (design D3's interpolation domain); empty when
 	// the call's face does not carry one.
 	typeName string
+	// num is the narrow integer width that same declaration fixed, where
+	// it named one of chapter 7's six: the faces that carry a base-type
+	// name carry its width too, and the arithmetic that consumes the
+	// operand checks the width it declares.
+	num string
 	// ntype is the newtype this result is a value of, where the site that
 	// produced it knows (a construction). The value is the underlying's —
 	// that is the erasure — so the tag exists only so a binding can
@@ -2036,41 +2064,52 @@ func (e *emitter) numImmediate(l *ast.Literal) (string, bool, bool) {
 	return imm, false, ok
 }
 
-// emitNumExpr emits one numeric operand (i64 domain or double), returning
-// the operand and its domain. Arithmetic carries the E0502 trap: the
-// intrinsic reports overflow, a failing branch runs the task-panic tail,
-// and only the checked value flows on (design D8).
-func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
+// emitNumOperand emits one numeric operand (i64 domain or double) and
+// reports the three facts its consumers need: the operand, whether it is
+// a double, and the narrow integer width its type declared where the
+// source spelled one. Arithmetic carries the E0502 trap: the intrinsic
+// reports overflow, a failing branch runs the task-panic tail, and only
+// the checked value flows on (design D8).
+//
+// The width is the third fact rather than a fourth kind of classification
+// because it is a fact of the same emission — the literal's own suffix,
+// the binding the name found, the callee's declared return — and because
+// the arithmetic that must check it is the code that reads the operands.
+// The value forms answer "" (their join is a slot the site did not type),
+// and so does every site whose provenance carries no declared width; a
+// width the emitter cannot name is a check it does not make, and the
+// narrow path is exactly where that is visible.
+func (e *emitter) emitNumOperand(x ast.Expr) (string, bool, string, *NotImplemented) {
 	switch v := x.(type) {
 	case *ast.Literal:
 		op, isF, ok := e.numImmediate(v)
 		if !ok {
-			return "", false, e.bnd()
+			return "", false, "", e.bnd()
 		}
-		return op, isF, nil
+		return op, isF, litNarrow(v), nil
 	case *ast.Ident:
 		if s, ok := e.scalars[v.Name]; ok {
 			if s.alloca != "" {
-				return e.loadNum(s.alloca, s.isFloat), s.isFloat, nil
+				return e.loadNum(s.alloca, s.isFloat), s.isFloat, s.num, nil
 			}
-			return s.operand, s.isFloat, nil
+			return s.operand, s.isFloat, s.num, nil
 		}
 		if _, ok := e.caps.slot(v.Name); ok {
 			// A task body reads an enclosing scalar through its env slot.
 			op, isF, ni := e.loadCapture(v.Name)
-			return op, isF, ni
+			return op, isF, e.capNum(v.Name), ni
 		}
 		if ts, ok := e.topName(v.Name); ok {
 			// A module-level binding (T8-1): one load of its global. A
 			// String binding's global is a pair, not a word — it is no
 			// numeric operand, and the boundary is the honest answer.
 			if ts.str {
-				return "", false, e.bnd()
+				return "", false, "", e.bnd()
 			}
 			res := e.topRead(ts)
-			return res.i64, res.isFloat, nil
+			return res.i64, res.isFloat, res.num, nil
 		}
-		return "", false, e.bnd()
+		return "", false, "", e.bnd()
 	case *ast.Unary:
 		return e.emitUnary(v)
 	case *ast.Binary:
@@ -2080,51 +2119,67 @@ func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
 		case "/", "%":
 			return e.emitDivMod(v)
 		case "<", "<=", ">", ">=", "==", "!=":
-			return e.emitCompare(v)
+			// A comparison's value is a Bool in the i64 domain: no width
+			// for the arithmetic that consumes it to check.
+			op, isF, ni := e.emitCompare(v)
+			return op, isF, "", ni
 		case "&&", "||":
-			return e.emitLogic(v)
+			op, isF, ni := e.emitLogic(v)
+			return op, isF, "", ni
 		case "&", "|", "^", "<<", ">>":
 			return e.emitBitwise(v)
 		}
-		return "", false, e.bnd()
+		return "", false, "", e.bnd()
 	case *ast.Call:
 		// The operand-position call (design D2): a user fn's i64-domain
 		// result feeds whatever operator surrounds the call, at any
 		// nesting depth.
 		res, ni := e.emitCall(v, nil)
 		if ni != nil {
-			return "", false, ni
+			return "", false, "", ni
 		}
 		if res.kind != ckI64 {
-			return "", false, e.bnd()
+			return "", false, "", e.bnd()
 		}
-		return res.i64, res.isFloat, nil
+		return res.i64, res.isFloat, res.num, nil
 	case *ast.If, *ast.Match, *ast.BlockExpr:
 		// The value-position control forms (design D2): their arms join
 		// through a result slot, and the loaded value is an operand like
-		// any other.
+		// any other. The join's width is the one fact the slot does not
+		// carry — every arm was checked at its own site, but which width
+		// the join holds is the site's annotation's to say, and this face
+		// has none.
 		res, ni := e.emitValueForm(v)
 		if ni != nil {
-			return "", false, ni
+			return "", false, "", ni
 		}
 		if res.kind != ckI64 {
-			return "", false, e.bnd()
+			return "", false, "", e.bnd()
 		}
-		return res.i64, res.isFloat, nil
+		return res.i64, res.isFloat, "", nil
 	case *ast.Member:
 		// A scalar or double field read (design D4's unified member read):
 		// one getelementptr at the field's offset plus the load.
 		res, ni := e.emitMemberValue(v)
 		if ni != nil {
-			return "", false, ni
+			return "", false, "", ni
 		}
 		if res.kind != ckI64 {
-			return "", false, e.bnd()
+			return "", false, "", e.bnd()
 		}
-		return res.i64, res.isFloat, nil
+		return res.i64, res.isFloat, res.num, nil
 	default:
-		return "", false, e.bnd()
+		return "", false, "", e.bnd()
 	}
+}
+
+// emitNumExpr is emitNumOperand's value-and-domain face: the callers that
+// place the operand and ask nothing about its declared width — the
+// binding forms, the string chain, the assertion walk — keep the three
+// answers they have always taken.
+func (e *emitter) emitNumExpr(x ast.Expr) (string, bool, *NotImplemented) {
+	op, isF, _, ni := e.emitNumOperand(x)
+	return op, isF, ni
 }
 
 // spelledInt reports the value of an integer literal the source spells —
@@ -2151,37 +2206,56 @@ func spelledInt(x ast.Expr) (int64, bool) {
 // the checked subtraction from zero, because negating the minimum value
 // overflows — chapter 7's integer arithmetic is checked, and floats ride
 // IEEE (fneg, no trap).
-func (e *emitter) emitUnary(u *ast.Unary) (string, bool, *NotImplemented) {
-	op, isF, ni := e.emitNumExpr(u.X)
+func (e *emitter) emitUnary(u *ast.Unary) (string, bool, string, *NotImplemented) {
+	op, isF, num, ni := e.emitNumOperand(u.X)
 	if ni != nil {
-		return "", false, ni
+		return "", false, "", ni
 	}
 	switch u.Op {
 	case "!":
 		if isF {
-			return "", false, e.bnd()
+			return "", false, "", e.bnd()
 		}
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, 0", v, op))
 		z := e.value()
 		e.inst(fmt.Sprintf("%%%s = zext i1 %%%s to i64", z, v))
-		return "%" + z, false, nil
+		return "%" + z, false, "", nil
 	case "-":
 		if isF {
 			v := e.value()
 			e.inst(fmt.Sprintf("%%%s = fneg double %s", v, op))
-			return "%" + v, true, nil
+			return "%" + v, true, "", nil
 		}
-		return e.emitCheckedIntr("llvm.ssub.with.overflow.i64", "Int64 neg overflow", "0", op), false, nil
+		if dom := num; dom != "" {
+			// A narrow negation: the operand is inside its width, so the
+			// i64 subtraction from zero is exact and the only value that
+			// can leave the width is the width's own minimum — which is
+			// exactly what the range test reads.
+			v := e.value()
+			e.inst(fmt.Sprintf("%%%s = sub i64 0, %s", v, op))
+			e.narrowGuard("%"+v, dom, "neg")
+			return "%" + v, false, dom, nil
+		}
+		return e.emitCheckedIntr("llvm.ssub.with.overflow.i64", "Int64 neg overflow", "0", op), false, "", nil
 	case "~":
 		if isF {
-			return "", false, e.bnd()
+			return "", false, "", e.bnd()
+		}
+		// The complement is the width's, not the register's: for a signed
+		// width -1 is the mask (see narrowMask), and for a zero-extended
+		// one it is the width's own all-ones value. The result is inside
+		// the width either way, so the width rides on unchanged and no
+		// guard is owed — `~` cannot overflow.
+		mask := "-1"
+		if m := narrowMask(num); m != "" {
+			mask = m
 		}
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = xor i64 %s, -1", v, op))
-		return "%" + v, false, nil
+		e.inst(fmt.Sprintf("%%%s = xor i64 %s, %s", v, op, mask))
+		return "%" + v, false, num, nil
 	}
-	return "", false, e.bnd()
+	return "", false, "", e.bnd()
 }
 
 // emitDivMod emits `/` and `%` (design D2). LLVM leaves both the zero
@@ -2196,18 +2270,27 @@ func (e *emitter) emitUnary(u *ast.Unary) (string, bool, *NotImplemented) {
 // (chapter 7's constant fold, E0502) and takes the bare division: the
 // benchmark tasks' `n % 2` body is one srem. Floats follow chapter 7's
 // IEEE rule — fdiv and frem, no trap face.
-func (e *emitter) emitDivMod(b *ast.Binary) (string, bool, *NotImplemented) {
-	a, af, ni := e.emitNumExpr(b.L)
+func (e *emitter) emitDivMod(b *ast.Binary) (string, bool, string, *NotImplemented) {
+	a, af, an, ni := e.emitNumOperand(b.L)
 	if ni != nil {
-		return "", false, ni
+		return "", false, "", ni
 	}
-	c, cf, ni := e.emitNumExpr(b.R)
+	c, cf, cn, ni := e.emitNumOperand(b.R)
 	if ni != nil {
-		return "", false, ni
+		return "", false, "", ni
 	}
 	if af != cf {
-		return "", false, e.bnd()
+		return "", false, "", e.bnd()
 	}
+	// A quotient is the one arithmetic result that leaves its operands'
+	// width without leaving the register: a narrow minimum by -1 is half
+	// its own magnitude past the maximum, an ordinary i64 value. It is
+	// therefore checked like the sum is — the range test, on the result —
+	// while the guards above it answer the machine's questions instead
+	// (the divisor is not zero, the register's own minimum is not negated
+	// in place), and a remainder needs neither: `|r| < |divisor|` holds
+	// wherever the division is defined at all.
+	dom := narrowDomain(an, cn)
 	flop, iop := "fdiv", "sdiv"
 	if b.Op == "%" {
 		flop, iop = "frem", "srem"
@@ -2215,12 +2298,15 @@ func (e *emitter) emitDivMod(b *ast.Binary) (string, bool, *NotImplemented) {
 	if af {
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = %s double %s, %s", v, flop, a, c))
-		return "%" + v, true, nil
+		return "%" + v, true, "", nil
 	}
 	if n, ok := spelledInt(b.R); ok && n != 0 && n != -1 {
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, iop, a, c))
-		return "%" + v, false, nil
+		if b.Op == "/" && dom != "" {
+			e.narrowGuard("%"+v, dom, "div")
+		}
+		return "%" + v, false, dom, nil
 	}
 	bl := e.blocks
 	e.blocks++
@@ -2243,7 +2329,7 @@ func (e *emitter) emitDivMod(b *ast.Binary) (string, bool, *NotImplemented) {
 		e.inst(fmt.Sprintf("%%%s = select i1 %%%s, i64 1, i64 %s", safe, m1, c))
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = %s i64 %s, %%%s", v, iop, a, safe))
-		return "%" + v, false, nil
+		return "%" + v, false, dom, nil
 	}
 	// The minimum value by -1: LLVM's other undefined division pair, and
 	// an overflow chapter 7's checked arithmetic reports like any other.
@@ -2263,7 +2349,10 @@ func (e *emitter) emitDivMod(b *ast.Binary) (string, bool, *NotImplemented) {
 	e.label(dofk)
 	v := e.value()
 	e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, iop, a, c))
-	return "%" + v, false, nil
+	if dom != "" {
+		e.narrowGuard("%"+v, dom, "div")
+	}
+	return "%" + v, false, dom, nil
 }
 
 // emitBitwise emits the binary bit family — chapter 2's shift level and
@@ -2275,27 +2364,42 @@ func (e *emitter) emitDivMod(b *ast.Binary) (string, bool, *NotImplemented) {
 // reading of a signed operand — and loses only the low bits, which is
 // what a right shift means; the round-trip check is a left shift's
 // alone. Floats have no domain here and stop at the boundary.
-func (e *emitter) emitBitwise(b *ast.Binary) (string, bool, *NotImplemented) {
-	a, af, ni := e.emitNumExpr(b.L)
+func (e *emitter) emitBitwise(b *ast.Binary) (string, bool, string, *NotImplemented) {
+	a, af, an, ni := e.emitNumOperand(b.L)
 	if ni != nil {
-		return "", false, ni
+		return "", false, "", ni
 	}
-	c, cf, ni := e.emitNumExpr(b.R)
+	c, cf, cn, ni := e.emitNumOperand(b.R)
 	if ni != nil {
-		return "", false, ni
+		return "", false, "", ni
 	}
 	if af || cf {
-		return "", false, e.bnd()
+		return "", false, "", e.bnd()
 	}
+	dom := narrowDomain(an, cn)
 	if b.Op != "<<" && b.Op != ">>" {
+		// The three logicals are total in the width as well: two values
+		// inside it have no bit above it to set, so `& | ^` answer inside
+		// it — as does `~`, whose own mask is the width's (narrowMask),
+		// and a right shift, which drops low bits and moves the top one
+		// down. `<<` is the one that grows the value, and it is the one
+		// width-checked below.
 		op := map[string]string{"&": "and", "|": "or", "^": "xor"}[b.Op]
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, op, a, c))
-		return "%" + v, false, nil
+		return "%" + v, false, dom, nil
 	}
 	op := "shl"
 	if b.Op == ">>" {
 		op = "ashr"
+	}
+	// Both register checks report the width the shift was written in: a
+	// narrow operand's magnitude is below 2^32, so bits leaving the i64
+	// register leave the declared width first, and the report says which
+	// width the source named rather than the register's.
+	ovMsg := "Int64 shift overflow"
+	if dom != "" {
+		ovMsg = dom + " shift overflow"
 	}
 	bl := e.blocks
 	e.blocks += 2
@@ -2305,12 +2409,12 @@ func (e *emitter) emitBitwise(b *ast.Binary) (string, bool, *NotImplemented) {
 	e.inst(fmt.Sprintf("%%%s = icmp ult i64 %s, 64", in, c))
 	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", in, shk, sho))
 	e.label(sho)
-	e.trap("Int64 shift overflow")
+	e.trap(ovMsg)
 	e.label(shk)
 	v := e.value()
 	e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, op, a, c))
 	if b.Op == ">>" {
-		return "%" + v, false, nil
+		return "%" + v, false, dom, nil
 	}
 	bk := e.value()
 	e.inst(fmt.Sprintf("%%%s = ashr i64 %%%s, %s", bk, v, c))
@@ -2320,9 +2424,50 @@ func (e *emitter) emitBitwise(b *ast.Binary) (string, bool, *NotImplemented) {
 	svf := fmt.Sprintf("svf%d", bl+1)
 	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", same, svk, svf))
 	e.label(svf)
-	e.trap("Int64 shift overflow")
+	e.trap(ovMsg)
 	e.label(svk)
-	return "%" + v, false, nil
+	if dom != "" {
+		// A narrow left shift keeps all three checks, because here the
+		// register's round trip is still a live one: a shift is a product
+		// by a power of two, and 2^31 by 2^33 is past the register's own
+		// width before any declared width is consulted. The round trip
+		// catches the bits that left the register; the range test catches
+		// the ones that left the declared width on the way (a shift by
+		// eight of an Int8, say, which the register holds with room to
+		// spare).
+		e.narrowGuard("%"+v, dom, "shift")
+	}
+	return "%" + v, false, dom, nil
+}
+
+// narrowGuard emits chapter 7's width check: v is tested against the
+// declared width's range — one signed comparison pair, whose lower bound
+// is the unsigned widths' zero and whose operands are the i64 domain's
+// reading of the value — and the failing edge runs the task-panic tail.
+// v is returned unchanged, so a caller splices the guard into its own
+// expression and goes on with the value the checked edge carries.
+//
+// `op` is the report's operator word, chapter 14's naming rule applied to
+// a width: the trap says `Int8 add overflow` exactly as the i64 domain's
+// says `Int64 add overflow`.
+func (e *emitter) narrowGuard(v, typ, op string) {
+	lo, hi, ok := narrowBounds(typ)
+	if !ok {
+		return
+	}
+	below := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp slt i64 %s, %s", below, v, lo))
+	above := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp sgt i64 %s, %s", above, v, hi))
+	bad := e.value()
+	e.inst(fmt.Sprintf("%%%s = or i1 %%%s, %%%s", bad, below, above))
+	bl := e.blocks
+	e.blocks++
+	nof := fmt.Sprintf("nof%d", bl)
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%nok%d", bad, nof, bl))
+	e.label(nof)
+	e.trap(typ + " " + op + " overflow")
+	e.label(fmt.Sprintf("nok%d", bl))
 }
 
 // trap emits chapter 14's termination tail: the runtime prints msg and
@@ -2349,30 +2494,53 @@ func (e *emitter) loadNum(slot string, isFloat bool) string {
 // emitOverflowArith emits a checked + - * (the intrinsic + domain
 // re-check + panic block of design D8); floats ride plain IEEE
 // arithmetic — overflow there is an Inf, chapter 5's domain.
-func (e *emitter) emitOverflowArith(b *ast.Binary) (string, bool, *NotImplemented) {
-	a, af, ni := e.emitNumExpr(b.L)
+//
+// The two integer domains are two checks, not one check applied twice.
+// The i64 registers are the whole of Int64 and UInt64, so their overflow
+// is the intrinsic's to report; a narrow width's is not — its operands
+// are values the register holds with room to spare, so a narrow sum the
+// width cannot hold is an ordinary i64 value the intrinsic never flags
+// (`127i8 + 1i8` is 128, and 128 is a fine i64). A narrow operation
+// therefore rides plain arithmetic, exact in the i64 domain for every
+// pair of operands the width admits — including UInt32's widest product,
+// which is under 2^64 and so survives the register whole — and the range
+// test is what asks the width's question. Emitting the intrinsic beside
+// it would be a criterion whose part never decides, and for UInt32's
+// product a part that decides the wrong way: the register's reading of a
+// true product past 2^63 is negative, and the sign flag would report a
+// "signed" overflow of two unsigned operands before the width test ever
+// ran.
+func (e *emitter) emitOverflowArith(b *ast.Binary) (string, bool, string, *NotImplemented) {
+	a, af, an, ni := e.emitNumOperand(b.L)
 	if ni != nil {
-		return "", false, ni
+		return "", false, "", ni
 	}
-	c, cf, ni := e.emitNumExpr(b.R)
+	c, cf, cn, ni := e.emitNumOperand(b.R)
 	if ni != nil {
-		return "", false, ni
+		return "", false, "", ni
 	}
 	if af != cf {
-		return "", false, e.bnd()
+		return "", false, "", e.bnd()
 	}
 	if af {
 		op := map[string]string{"+": "fadd", "-": "fsub", "*": "fmul"}[b.Op]
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = %s double %s, %s", v, op, a, c))
-		return "%" + v, true, nil
+		return "%" + v, true, "", nil
+	}
+	if dom := narrowDomain(an, cn); dom != "" {
+		op := map[string]string{"+": "add", "-": "sub", "*": "mul"}[b.Op]
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = %s i64 %s, %s", v, op, a, c))
+		e.narrowGuard("%"+v, dom, opName[b.Op])
+		return "%" + v, false, dom, nil
 	}
 	intr := map[string]string{
 		"+": "llvm.sadd.with.overflow.i64",
 		"-": "llvm.ssub.with.overflow.i64",
 		"*": "llvm.smul.with.overflow.i64",
 	}[b.Op]
-	return e.emitCheckedIntr(intr, "Int64 "+opName[b.Op]+" overflow", a, c), false, nil
+	return e.emitCheckedIntr(intr, "Int64 "+opName[b.Op]+" overflow", a, c), false, "", nil
 }
 
 // emitCheckedIntr emits `a <intr> c` in chapter 7's checked form: the
@@ -2538,7 +2706,8 @@ func (e *emitter) emitLogic(b *ast.Binary) (string, bool, *NotImplemented) {
 
 // emitVarBinding emits a numeric var: the alloca is the name's storage,
 // assignment stores into it. The narrow int widths ride the i64 domain
-// (sign-extended values; their arithmetic is outside the M9b set).
+// (sign-extended values) and the annotation is the width their arithmetic
+// is checked against (T11-3).
 func (e *emitter) emitVarBinding(s *ast.Binding) *NotImplemented {
 	t, ok := s.Typ.(*ast.NamedType)
 	if !ok || t.Qual != "" || len(t.Args) != 0 {
@@ -2586,7 +2755,7 @@ func (e *emitter) emitVarBinding(s *ast.Binding) *NotImplemented {
 		e.inst(fmt.Sprintf("store i64 %s, ptr %s", op, slot))
 	}
 	if s.Name != "_" {
-		e.scalars[s.Name] = scalarSlot{alloca: slot, isFloat: isF, kind: baseStrKind(t.Name)}
+		e.scalars[s.Name] = scalarSlot{alloca: slot, isFloat: isF, kind: baseStrKind(t.Name), num: narrowName(t.Name)}
 	}
 	return nil
 }
@@ -2944,7 +3113,7 @@ func (e *emitter) emitStdEntryCall(name string, ent stdEntry, args []ast.Expr) (
 		e.inst(fmt.Sprintf("%%%s = call i64 %%%s()", v, fp))
 		// The restated entry table carries the base type (both ret entries
 		// are Int64: the clock, chapter 20).
-		return callResult{kind: ckI64, i64: "%" + v, typeName: ent.typ}, nil
+		return callResult{kind: ckI64, i64: "%" + v, typeName: ent.typ, num: narrowName(ent.typ)}, nil
 	}
 	if len(args) != 1 {
 		return callResult{}, e.bnd()
@@ -3525,7 +3694,7 @@ func collectBoundNames(items []ast.Stmt, into map[string]bool) {
 // read of it stops at the body boundary on its own.
 func (e *emitter) captureOf(name string) (capSlot, bool) {
 	if sl, ok := e.scalars[name]; ok && sl.alloca == "" {
-		return capSlot{name: name, n: 1, kind: sl.kind}, true
+		return capSlot{name: name, n: 1, kind: sl.kind, num: sl.num}, true
 	}
 	if _, ok := e.prims[name]; ok {
 		return capSlot{name: name, n: 1, trace: [2]bool{true}, prim: true}, true
@@ -3699,7 +3868,7 @@ func (e *emitter) materializeCaptures(slots []capSlot, env string) {
 		case s.trace[0]:
 			e.fnEnv[s.name] = fnValue{carrier: e.wordPtr(word(0)), abi: s.abi, typed: s.typed}
 		default:
-			e.scalars[s.name] = scalarSlot{operand: word(0), kind: s.kind}
+			e.scalars[s.name] = scalarSlot{operand: word(0), kind: s.kind, num: s.num}
 		}
 	}
 }
@@ -3836,7 +4005,7 @@ func (e *emitter) valueKindIn(params []ast.Param, x ast.Expr) strKind {
 				}
 			}
 		default:
-			e.scalars[p.Name] = scalarSlot{kind: k}
+			e.scalars[p.Name] = scalarSlot{kind: k, num: narrowName(name)}
 		}
 	}
 	k := e.valueKind(x)
@@ -4844,11 +5013,11 @@ func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
 // itself lives in a slot reserved for the whole body and is not nameable
 // from source, so nothing the body does can disturb the sequence.
 func (e *emitter) emitForRange(s *ast.ForStmt, rng *ast.Binary) *NotImplemented {
-	lo, lof, ni := e.emitNumExpr(rng.L)
+	lo, lof, lon, ni := e.emitNumOperand(rng.L)
 	if ni != nil {
 		return ni
 	}
-	hi, hif, ni := e.emitNumExpr(rng.R)
+	hi, hif, hin, ni := e.emitNumOperand(rng.R)
 	if ni != nil {
 		return ni
 	}
@@ -4879,7 +5048,10 @@ func (e *emitter) emitForRange(s *ast.ForStmt, rng *ast.Binary) *NotImplemented 
 	// counter's.
 	e.pushEnv()
 	defer e.popEnv()
-	if ni := e.bindForPattern(s.Pat, cur, skI64); ni != nil {
+	// The loop variable is the Range's parameter — the two bounds' own
+	// integer type — and its value never leaves [lo, hi), so the width the
+	// binding carries is the element's type and the counter is inside it.
+	if ni := e.bindForPattern(s.Pat, cur, skI64, narrowDomain(lon, hin)); ni != nil {
 		return ni
 	}
 	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: step, depth: e.nest}); ni != nil {
@@ -4940,7 +5112,7 @@ func (e *emitter) emitForString(s *ast.ForStmt) *NotImplemented {
 	e.inst(fmt.Sprintf("%%%s = call i64 @__we_str_charat(ptr %s, i64 %s, i64 %s)", ch, p, l, cur))
 	e.pushEnv()
 	defer e.popEnv()
-	if ni := e.bindForPattern(s.Pat, "%"+ch, skRune); ni != nil {
+	if ni := e.bindForPattern(s.Pat, "%"+ch, skRune, ""); ni != nil {
 		return ni
 	}
 	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: step, depth: e.nest}); ni != nil {
@@ -5120,10 +5292,10 @@ func (e *emitter) bindForListElem(pat ast.Pattern, word string, face listElem) *
 			op, isF = "%"+v, true
 		}
 		if e.assigned[p.Name] {
-			e.bindScalarSlot(p.Name, op, isF, face.kind)
+			e.bindScalarSlot(p.Name, op, isF, face.kind, face.num)
 			return nil
 		}
-		e.scalars[p.Name] = scalarSlot{operand: op, isFloat: isF, kind: face.kind}
+		e.scalars[p.Name] = scalarSlot{operand: op, isFloat: isF, kind: face.kind, num: face.num}
 		return nil
 	default:
 		return e.bnd()
@@ -5137,7 +5309,7 @@ func (e *emitter) bindForListElem(pat ast.Pattern, word string, face listElem) *
 // Int64 counts, a String yields Runes (T4-3) — which the binding carries
 // for the interpolation domain. Other head shapes (the tuple head of T2-c,
 // the scope resource) are not this build's.
-func (e *emitter) bindForPattern(pat ast.Pattern, op string, kind strKind) *NotImplemented {
+func (e *emitter) bindForPattern(pat ast.Pattern, op string, kind strKind, num string) *NotImplemented {
 	switch p := pat.(type) {
 	case *ast.PatWildcard:
 		return nil
@@ -5146,10 +5318,10 @@ func (e *emitter) bindForPattern(pat ast.Pattern, op string, kind strKind) *NotI
 			return nil
 		}
 		if e.assigned[p.Name] {
-			e.bindScalarSlot(p.Name, op, false, kind)
+			e.bindScalarSlot(p.Name, op, false, kind, num)
 			return nil
 		}
-		e.scalars[p.Name] = scalarSlot{operand: op, kind: kind}
+		e.scalars[p.Name] = scalarSlot{operand: op, kind: kind, num: num}
 		return nil
 	default:
 		return e.bnd()
@@ -5277,7 +5449,7 @@ func (e *emitter) elemFaceOfType(t ast.TypeRef) (listElem, bool) {
 		if k == skNone {
 			return listElem{}, false
 		}
-		return listElem{kind: k}, true
+		return listElem{kind: k, num: narrowName(baseTypeName(t))}, true
 	case abiDouble:
 		return listElem{kind: skF64}, true
 	case abiGc:
@@ -5814,6 +5986,7 @@ type topLetRef struct {
 type topSlot struct {
 	sym     string
 	kind    strKind
+	num     string
 	isFloat bool
 	str     bool
 	gc      bool
@@ -5862,6 +6035,7 @@ func (e *emitter) collectTopLet(key string, d *ast.TopLet) *NotImplemented {
 	e.topSlots[sym] = topSlot{
 		sym:     sym,
 		kind:    kind,
+		num:     annNarrow(d.Binding.Typ, d.Binding.Init),
 		isFloat: kind == skF64,
 		str:     kind == skStr,
 	}
@@ -6013,7 +6187,14 @@ func (e *emitter) topRead(ts topSlot) callResult {
 	}
 	v := e.value()
 	e.inst(fmt.Sprintf("%%%s = load %s, ptr @%s", v, typ, ts.sym))
-	return callResult{kind: ckI64, i64: "%" + v, isFloat: ts.isFloat, typeName: strKindName(ts.kind)}
+	// The declared type name is the annotation's where it named a width
+	// the domain cannot spell back (strKindName answers Int64 for all
+	// three signed narrow widths), and the domain's own otherwise.
+	name := strKindName(ts.kind)
+	if ts.num != "" {
+		name = ts.num
+	}
+	return callResult{kind: ckI64, i64: "%" + v, isFloat: ts.isFloat, typeName: name, num: ts.num}
 }
 
 // bindTopRead binds one module-level binding's value under a new name: the
@@ -6515,15 +6696,15 @@ func (e *emitter) bindArmWord(slot sumSlot, w int, p fnParamAbi, pat ast.Pattern
 	case abiI64:
 		op := e.loadNum(at, false)
 		if e.assigned[b.Name] {
-			e.bindScalarSlot(b.Name, op, false, baseStrKind(p.typ))
+			e.bindScalarSlot(b.Name, op, false, baseStrKind(p.typ), narrowName(p.typ))
 		} else {
-			e.scalars[b.Name] = scalarSlot{operand: op, kind: baseStrKind(p.typ)}
+			e.scalars[b.Name] = scalarSlot{operand: op, kind: baseStrKind(p.typ), num: narrowName(p.typ)}
 		}
 	case abiDouble:
 		w := e.value()
 		e.inst(fmt.Sprintf("%%%s = bitcast i64 %s to double", w, e.loadNum(at, false)))
 		if e.assigned[b.Name] {
-			e.bindScalarSlot(b.Name, "%"+w, true, baseStrKind(p.typ))
+			e.bindScalarSlot(b.Name, "%"+w, true, baseStrKind(p.typ), "")
 		} else {
 			e.scalars[b.Name] = scalarSlot{operand: "%" + w, isFloat: true, kind: baseStrKind(p.typ)}
 		}
@@ -7461,7 +7642,7 @@ func collectAssigned(items []ast.Stmt, set map[string]bool) {
 // the name must live at an address. The width is the value's, decided
 // here because a slot carries its type — the SSA face can afford to drop
 // the flag (design D10-1's open defect), a slot cannot.
-func (e *emitter) bindScalarSlot(name, op string, isF bool, kind strKind) {
+func (e *emitter) bindScalarSlot(name, op string, isF bool, kind strKind, num string) {
 	typ := "i64"
 	if isF {
 		typ = "double"
@@ -7472,7 +7653,7 @@ func (e *emitter) bindScalarSlot(name, op string, isF bool, kind strKind) {
 	} else {
 		e.inst(fmt.Sprintf("store i64 %s, ptr %s", op, slot))
 	}
-	e.scalars[name] = scalarSlot{alloca: slot, isFloat: isF, kind: kind}
+	e.scalars[name] = scalarSlot{alloca: slot, isFloat: isF, kind: kind, num: num}
 }
 
 // bindStringSlot gives one String name the two words an assignment stores
@@ -7530,10 +7711,15 @@ func (e *emitter) collectCaptures(items []ast.Stmt) *captureSet {
 			seen[name] = true
 			caps.names = append(caps.names, name)
 			caps.prim = append(caps.prim, true)
-		} else if _, ok := e.scalars[name]; ok {
+			caps.nums = append(caps.nums, "")
+		} else if sl, ok := e.scalars[name]; ok {
 			seen[name] = true
 			caps.names = append(caps.names, name)
 			caps.prim = append(caps.prim, false)
+			// The copied word keeps the width the enclosing binding
+			// declared: a task body's arithmetic is checked like any
+			// other body's.
+			caps.nums = append(caps.nums, sl.num)
 		}
 	}
 	walkExpr = func(x ast.Expr) {
@@ -7626,6 +7812,17 @@ func (e *emitter) loadCapture(name string) (string, bool, *NotImplemented) {
 	r := e.value()
 	e.inst(fmt.Sprintf("%%%s = load i64, ptr %%%s", r, v))
 	return "%" + r, false, nil
+}
+
+// capNum is the narrow integer width the capture's copied word holds, ""
+// where the enclosing binding declared none or the capture is a primitive
+// handle rather than a scalar.
+func (e *emitter) capNum(name string) string {
+	i, ok := e.caps.slot(name)
+	if !ok || i >= len(e.caps.nums) {
+		return ""
+	}
+	return e.caps.nums[i]
 }
 
 // emitTask emits one task block: the thunk define (the body under the
@@ -8053,7 +8250,7 @@ func (e *emitter) emitSelect(s *ast.SelectExpr) (callResult, *NotImplemented) {
 				// The select arm's value is the runtime's i64 register;
 				// its source type is not the binding site's to name.
 				if e.assigned[c.Name] {
-					e.bindScalarSlot(c.Name, "%"+vv, false, skNone)
+					e.bindScalarSlot(c.Name, "%"+vv, false, skNone, "")
 				} else {
 					e.scalars[c.Name] = scalarSlot{operand: "%" + vv}
 				}
@@ -8262,6 +8459,7 @@ func (e *emitter) emitNewtypeCtor(key string, arg ast.Expr) (callResult, *NotImp
 		return callResult{}, e.bnd()
 	}
 	res := callResult{ntype: key, typeName: baseTypeName(e.derefNewtype(under))}
+	res.num = narrowName(res.typeName)
 	switch k {
 	case abiI64:
 		op, isF, ni := e.emitNumExpr(arg)
@@ -8512,7 +8710,7 @@ func (e *emitter) bindingFace(name string) (callResult, *NotImplemented) {
 		if sl.alloca != "" {
 			op = e.loadNum(sl.alloca, sl.isFloat)
 		}
-		return callResult{kind: ckI64, i64: op, isFloat: sl.isFloat}, nil
+		return callResult{kind: ckI64, i64: op, isFloat: sl.isFloat, num: sl.num}, nil
 	}
 	return callResult{}, e.bnd()
 }
@@ -8522,7 +8720,8 @@ func (e *emitter) bindingFace(name string) (callResult, *NotImplemented) {
 func (e *emitter) loadTupleElem(agg string, el tupleElem) (callResult, *NotImplemented) {
 	switch el.kind {
 	case abiI64:
-		return callResult{kind: ckI64, i64: e.gepLoadI64(agg, el.off), typeName: el.typ}, nil
+		return callResult{kind: ckI64, i64: e.gepLoadI64(agg, el.off), typeName: el.typ,
+			num: narrowName(el.typ)}, nil
 	case abiDouble:
 		return callResult{kind: ckI64, i64: e.gepLoadDouble(agg, el.off), isFloat: true, typeName: el.typ}, nil
 	case abiStr:
@@ -8555,8 +8754,11 @@ func (e *emitter) emitMemberValue(m *ast.Member) (callResult, *NotImplemented) {
 			}
 			if res.kind == ckI64 && res.typeName == "" {
 				// The unwrapped value's domain is the underlying's, which
-				// the wrapper's declaration names exactly.
+				// the wrapper's declaration names exactly — its width
+				// included, so `Small(x).value + 1i8` is checked against
+				// the width the wrapper was declared over.
 				res.typeName = baseTypeName(e.derefNewtype(e.newtypes[e.ntEnv[id.Name]]))
+				res.num = narrowName(res.typeName)
 			}
 			return res, nil
 		}
@@ -8581,7 +8783,7 @@ func (e *emitter) emitMemberValue(m *ast.Member) (callResult, *NotImplemented) {
 		}}, nil
 	case fkScalar:
 		return callResult{kind: ckI64, i64: e.gepLoadI64(base, slot.off),
-			typeName: slot.typ}, nil
+			typeName: slot.typ, num: narrowName(slot.typ)}, nil
 	case fkF64:
 		return callResult{kind: ckI64, i64: e.gepLoadDouble(base, slot.off), isFloat: true,
 			typeName: slot.typ}, nil
@@ -8722,6 +8924,123 @@ func litStrKind(kind string) strKind {
 	return skNone
 }
 
+// narrowName returns the narrow integer width a base-type name spells —
+// the six widths whose values chapter 7 checks against a bound the i64
+// domain does not have. Int64 and UInt64 are the two the domain IS, so
+// their arithmetic needs no second check and they answer "" here; every
+// other name, and the empty one, answers "" as well.
+func narrowName(name string) string {
+	switch name {
+	case "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32":
+		return name
+	}
+	return ""
+}
+
+// narrowBounds is each narrow width's inclusive value range, written as
+// the i64-domain immediates the range test compares against. The upper
+// bound is the largest value the width holds; the lower is its minimum
+// for the signed widths and zero for the unsigned ones, which is what
+// makes one signed comparison pair check both families: a value the
+// unsigned width cannot hold is either negative or above its maximum, and
+// the i64 reading of a zero-extended operand is its true magnitude
+// (UInt32's widest product is the one case where that reading is negative,
+// and it is exactly the case the lower bound catches).
+func narrowBounds(name string) (string, string, bool) {
+	switch name {
+	case "Int8":
+		return "-128", "127", true
+	case "Int16":
+		return "-32768", "32767", true
+	case "Int32":
+		return "-2147483648", "2147483647", true
+	case "UInt8":
+		return "0", "255", true
+	case "UInt16":
+		return "0", "65535", true
+	case "UInt32":
+		return "0", "4294967295", true
+	}
+	return "", "", false
+}
+
+// narrowMask returns the width's all-ones mask where the width is one of
+// the three zero-extended ones, "" for the signed widths and the two full
+// ones. The distinction is what `~` needs: the i64 complement of a
+// sign-extended value IS the width's complement (bit 7 flips and every bit
+// above it flips from one to zero, so the sign extension comes back), while
+// the complement of a zero-extended value is a negative number no unsigned
+// width holds — the bitwise-not of the width is that width's mask, not -1.
+func narrowMask(name string) string {
+	switch name {
+	case "UInt8":
+		return "255"
+	case "UInt16":
+		return "65535"
+	case "UInt32":
+		return "4294967295"
+	}
+	return ""
+}
+
+// narrowSuffix returns the width one integer literal suffix spells; the
+// two full widths and the suffixless form (both Int64 by chapter 3's
+// default) answer "".
+func narrowSuffix(suf string) string {
+	switch suf {
+	case "i8":
+		return "Int8"
+	case "i16":
+		return "Int16"
+	case "i32":
+		return "Int32"
+	case "u8":
+		return "UInt8"
+	case "u16":
+		return "UInt16"
+	case "u32":
+		return "UInt32"
+	}
+	return ""
+}
+
+// litNarrow returns the width a literal expression's own text spells:
+// an integer literal's suffix, and nothing for every other form. A
+// literal without one is Int64 (chapter 3), which is no narrow width.
+func litNarrow(x ast.Expr) string {
+	l, ok := x.(*ast.Literal)
+	if !ok || l.Kind != "int" {
+		return ""
+	}
+	_, suf := splitIntSuffix(l.Text)
+	return narrowSuffix(suf)
+}
+
+// annNarrow returns the width a binding site fixed: the annotation's base
+// type where it names one — chapter 7 inserts no coercion, so an
+// annotated binding's initializer is that type and the annotation is the
+// strongest fact the site has — and the initializer literal's own suffix
+// otherwise.
+func annNarrow(typ ast.TypeRef, init ast.Expr) string {
+	if n := narrowName(baseTypeName(typ)); n != "" {
+		return n
+	}
+	return litNarrow(init)
+}
+
+// narrowDomain picks the width one binary operation is checked against
+// from its two operands' faces. Chapter 7 inserts no coercion, so a
+// well-typed operation's operands are the same base type and the two
+// answers agree; the left is asked first because it is the one the
+// source's own spelling leads with, and an operand that carries no
+// declared width at all leaves the other's to answer.
+func narrowDomain(l, r string) string {
+	if l != "" {
+		return l
+	}
+	return r
+}
+
 // valueKind classifies x in the interpolation domain where the answer is
 // static: a literal's own kind, a binding whose site fixed its type
 // (scalarSlot.kind), a String binding or field chain, a callee's declared
@@ -8761,6 +9080,16 @@ func (e *emitter) valueKind(x ast.Expr) strKind {
 			if k == skF64 {
 				return skF64
 			}
+			if k == skI64 || k == skU64 {
+				return k
+			}
+			return skNone
+		case "~":
+			// The complement keeps its operand's domain — a signed
+			// integer's bits are still that integer's, an unsigned one's
+			// are the masked width's (so `~200u8` is 55 and renders 55,
+			// not the register's -201) — and a float has no complement.
+			k := e.valueKind(v.X)
 			if k == skI64 || k == skU64 {
 				return k
 			}
@@ -10753,16 +11082,16 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 				// binding carries it (design D3's interpolation domain:
 				// `"${n}"` renders the parameter as its own type).
 				if e.assigned[p.Name] {
-					e.bindScalarSlot(p.Name, "%"+p.Name, false, baseStrKind(pa.typ))
+					e.bindScalarSlot(p.Name, "%"+p.Name, false, baseStrKind(pa.typ), narrowName(pa.typ))
 				} else {
-					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, kind: baseStrKind(pa.typ)}
+					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, kind: baseStrKind(pa.typ), num: narrowName(pa.typ)}
 				}
 			}
 		case abiDouble:
 			ps = append(ps, "double %"+p.Name)
 			if p.Name != "_" {
 				if e.assigned[p.Name] {
-					e.bindScalarSlot(p.Name, "%"+p.Name, true, baseStrKind(pa.typ))
+					e.bindScalarSlot(p.Name, "%"+p.Name, true, baseStrKind(pa.typ), "")
 				} else {
 					e.scalars[p.Name] = scalarSlot{operand: "%" + p.Name, isFloat: true, kind: baseStrKind(pa.typ)}
 				}
@@ -11762,7 +12091,7 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 	case abiI64:
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = call i64 %s(%s)", v, callee, join))
-		return callResult{kind: ckI64, i64: "%" + v, typeName: abi.retName}, nil
+		return callResult{kind: ckI64, i64: "%" + v, typeName: abi.retName, num: narrowName(abi.retName)}, nil
 	case abiDouble:
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = call double %s(%s)", v, callee, join))

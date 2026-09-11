@@ -1,0 +1,16 @@
+{
+  "name": "run-narrow-values",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn sum(a: Int16, b: Int16) -> Int16 {\n    return a + b\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    var a: Int8 = 100i8\n    let b: Int8 = a + 20i8\n    var lo: Int8 = -128i8\n    let hi: Int8 = lo + 127i8\n    var u: UInt8 = 200u8\n    let c: UInt8 = ~u\n    var q: UInt16 = 60000u16\n    let d: UInt16 = q / 3u16\n    var r: Int8 = -128i8\n    let e: Int8 = r % -1i8\n    let f: Int16 = sum(300i16, 40i16)\n    var big: UInt32 = 4294967295u32\n    let g: UInt32 = big * 1u32\n    io.println(\"${b} ${hi} ${c} ${d} ${e} ${f} ${g}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "120 -1 55 20000 0 340 4294967295\n",
+  "stderr": ""
+}
