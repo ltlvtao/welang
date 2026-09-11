@@ -408,8 +408,8 @@ func m10cRunBoth(t *testing.T, mainSrc, want, wantErr string) {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
-		"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
-		"conc.c": ConcSource, "test.c": TestSource, "main.c": mainSrc,
+		"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "str.h": StrHeader,
+		"conc.c": ConcSource, "test.c": TestSource, "str.c": StrSource, "main.c": mainSrc,
 	}
 	for name, src := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
@@ -417,7 +417,7 @@ func m10cRunBoth(t *testing.T, mainSrc, want, wantErr string) {
 		}
 	}
 	args := []string{"-o", filepath.Join(dir, "harness")}
-	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"} {
+	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"} {
 		args = append(args, filepath.Join(dir, in))
 	}
 	if out, err := exec.Command(pinnedClang(t), args...).CombinedOutput(); err != nil {
@@ -834,8 +834,8 @@ func TestM10cIoSuppressed(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
-		"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
-		"conc.c": ConcSource, "test.c": TestSource, "io.c": IOSource,
+		"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "str.h": StrHeader,
+		"conc.c": ConcSource, "test.c": TestSource, "str.c": StrSource, "io.c": IOSource,
 		"main.c": ioSuppressHarness,
 	}
 	for name, src := range files {
@@ -844,7 +844,7 @@ func TestM10cIoSuppressed(t *testing.T) {
 		}
 	}
 	args := []string{"-o", filepath.Join(dir, "harness")}
-	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "io.c", "main.c"} {
+	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "io.c", "main.c"} {
 		args = append(args, filepath.Join(dir, in))
 	}
 	if out, err := exec.Command(pinnedClang(t), args...).CombinedOutput(); err != nil {

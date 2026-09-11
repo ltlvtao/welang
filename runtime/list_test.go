@@ -241,21 +241,21 @@ func TestListHarness(t *testing.T) {
 	// family's harness takes the same shape.
 	compileAndRun(t,
 		map[string]string{
-			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
-			"conc.c": ConcSource, "test.c": TestSource, "list.h": ListHeader,
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "str.h": StrHeader,
+			"conc.c": ConcSource, "test.c": TestSource, "str.c": StrSource, "list.h": ListHeader,
 			"list.c": ListSource, "main.c": listHarnessMain,
 		},
-		[]string{"gc.c", "sched.c", "conc.c", "test.c", "list.c", "main.c"},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "list.c", "main.c"},
 		"list harness: all checks passed\n")
 }
 
 func TestListPanicHarness(t *testing.T) {
 	compileAndRun(t,
 		map[string]string{
-			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
-			"conc.c": ConcSource, "test.c": TestSource, "list.h": ListHeader,
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "str.h": StrHeader,
+			"conc.c": ConcSource, "test.c": TestSource, "str.c": StrSource, "list.h": ListHeader,
 			"list.c": ListSource, "main.c": listPanicHarness,
 		},
-		[]string{"gc.c", "sched.c", "conc.c", "test.c", "list.c", "main.c"},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "list.c", "main.c"},
 		"past tag=1 msg=List element read out of range\nbelow tag=1 msg=List element read out of range\n")
 }

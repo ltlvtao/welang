@@ -205,43 +205,60 @@ int main(void) { __we_sched_boot(we_main); return 0; }
 
 func TestM9bSchedFIFO(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "test.c": TestSource, "main.c": schedFifoHarness},
-		[]string{"gc.c", "sched.c", "test.c", "main.c"},
+		map[string]string{
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
+			"str.h": StrHeader, "test.c": TestSource, "str.c": StrSource,
+			"main.c": schedFifoHarness,
+		},
+		[]string{"gc.c", "sched.c", "test.c", "str.c", "main.c"},
 		"a-start\nb-start\na-end\nb-end\njoined-a=0,0,42\n")
 }
 
 func TestM9bSchedTaskPanic(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "test.c": TestSource, "main.c": schedPanicHarness},
-		[]string{"gc.c", "sched.c", "test.c", "main.c"},
+		map[string]string{
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
+			"str.h": StrHeader, "test.c": TestSource, "str.c": StrSource,
+			"main.c": schedPanicHarness,
+		},
+		[]string{"gc.c", "sched.c", "test.c", "str.c", "main.c"},
 		"tag=1 msg=kapow\n")
 }
 
 func TestM9bSchedTimeout(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": schedTimeoutHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
+		map[string]string{
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
+			"str.h": StrHeader, "conc.c": ConcSource, "test.c": TestSource,
+			"str.c": StrSource, "main.c": schedTimeoutHarness,
+		},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"},
 		"sleeper-woke=0\nleave=1 dt>20=1\n")
 }
 
 func TestM9bSchedGcParkSurvival(t *testing.T) {
 	compileAndRun(t,
-		map[string]string{"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": schedGcParkHarness},
-		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"},
+		map[string]string{
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
+			"str.h": StrHeader, "conc.c": ConcSource, "test.c": TestSource,
+			"str.c": StrSource, "main.c": schedGcParkHarness,
+		},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"},
 		"swept=0\nsurvived=7777\n")
 }
 
 func TestM9bSchedDeadlock(t *testing.T) {
 	dir := t.TempDir()
 	for name, src := range map[string]string{
-		"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "conc.c": ConcSource, "test.c": TestSource, "main.c": schedDeadlockHarness,
+		"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "str.h": StrHeader,
+		"conc.c": ConcSource, "test.c": TestSource, "str.c": StrSource, "main.c": schedDeadlockHarness,
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
 			t.Fatalf("writing %s: %v", name, err)
 		}
 	}
 	args := []string{"-o", filepath.Join(dir, "harness")}
-	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"} {
+	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"} {
 		args = append(args, filepath.Join(dir, in))
 	}
 	if out, err := exec.Command(pinnedClang(t), args...).CombinedOutput(); err != nil {

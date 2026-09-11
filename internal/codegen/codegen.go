@@ -41,6 +41,9 @@ type NotImplemented struct {
 // bndOtherFns and bndTestModule with the multi-function widening and adds
 // the two rows below; T9 retires bndErrPayload, whose generalization
 // leaves no boundary between a reportable Err and any other construction.
+// T10 retires the assertEqual-domain row: the comparand domain now closes
+// over the composites that declare Eq, and what is left of it is the
+// residual row the check stage's own gate stops at.
 const (
 	bndMainBody = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	bndTopLets  = "top-level value bindings in code generation"
@@ -48,15 +51,12 @@ const (
 	// M10b design D8, verbatim.
 	bndGenericFns = "generic functions in code generation (monomorphization is the B-track codegen-full widening)"
 	bndFnBody     = "function bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
-	// M10b design D7: assertEqual's comparand domain — the Eq-generic
-	// face is the standard library's own widening, not this build's.
-	bndAssertEqDomain = "assertEqual beyond the scalar, Bool, and String domains (the Eq-generic face is the standard library's own widening)"
 )
 
-func bndMain() *NotImplemented     { return &NotImplemented{What: bndMainBody} }
-func bndTask() *NotImplemented     { return &NotImplemented{What: bndTaskBody} }
-func bndFn() *NotImplemented       { return &NotImplemented{What: bndFnBody} }
-func bndEqDomain() *NotImplemented { return &NotImplemented{What: bndAssertEqDomain} }
+func bndMain() *NotImplemented    { return &NotImplemented{What: bndMainBody} }
+func bndTask() *NotImplemented    { return &NotImplemented{What: bndTaskBody} }
+func bndFn() *NotImplemented      { return &NotImplemented{What: bndFnBody} }
+func bndGeneric() *NotImplemented { return &NotImplemented{What: bndGenericFns} }
 
 // The runtime symbols emission can reference, in the declare section's
 // fixed order (alloc, the root pair, the io pair, the fail tail). M9b
@@ -134,6 +134,14 @@ var declareLines = []struct{ sym, line string }{
 	// failure reason arrives as a C string the await's Err payload holds.
 	{"__we_assert_eq_i64", "declare void @__we_assert_eq_i64(i64, i64)"},
 	{"__we_assert_eq_str", "declare void @__we_assert_eq_str(ptr, i64, ptr, i64)"},
+	// T10 (design D9): the same two rows and the two families the ruling
+	// aligns, each carrying the position the comparison reached — a null
+	// pointer at the top level, which is the spelling that omits the
+	// suffix and leaves those two rows' modules unchanged.
+	{"__we_assert_eq_i64_at", "declare void @__we_assert_eq_i64_at(ptr, i64, i64)"},
+	{"__we_assert_eq_u64_at", "declare void @__we_assert_eq_u64_at(ptr, i64, i64)"},
+	{"__we_assert_eq_bool_at", "declare void @__we_assert_eq_bool_at(ptr, i64, i64)"},
+	{"__we_assert_eq_str_at", "declare void @__we_assert_eq_str_at(ptr, ptr, i64, ptr, i64)"},
 	{"__we_advance", "declare void @__we_advance(i64)"},
 	{"__we_test_begin", "declare void @__we_test_begin()"},
 	{"__we_test_end", "declare void @__we_test_end()"},
@@ -558,7 +566,7 @@ type emitter struct {
 // the pairing collectDefaults instantiates from.
 func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
 	if len(d.TypeParams) != 0 {
-		return &NotImplemented{What: bndGenericFns}
+		return bndGeneric()
 	}
 	head, ok := d.Head.(*ast.NamedType)
 	if !ok || head.Qual != "" || len(head.Args) != 0 {
@@ -567,7 +575,7 @@ func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
 	headKey := modKey + "." + head.Name
 	for _, md := range d.Methods {
 		if len(md.TypeParams) != 0 {
-			return &NotImplemented{What: bndGenericFns}
+			return bndGeneric()
 		}
 		key := headKey + "." + md.Name
 		if _, seen := e.methods[key]; seen {
@@ -892,6 +900,21 @@ func (e *emitter) beginBody() {
 func (e *emitter) value() string  { v := "v" + strconv.Itoa(e.fresh); e.fresh++; return v }
 func (e *emitter) use(sym string) { e.declUsed[sym] = true }
 
+// cstr interns one C string: a private constant of the bytes plus one
+// terminator, at the pool's next index under the given name prefix, and
+// returns its symbol. The panics pool is the whole of it — the 'p'
+// messages (a panic, an assert, a report line) and the 'q' `?` tail's
+// static lines — and the index is what orders the pool. The terminator
+// is a parameter because the pool spells two of them: a NUL for a string
+// a C parameter reads, a newline for the fail tail's line. Nothing else
+// interns here: the pool's constants carry a terminator and the @.sN
+// String pool's do not, so a value may not move between the two.
+func (e *emitter) cstr(prefix, data, term string) string {
+	cn := fmt.Sprintf("@.%s%d", prefix, len(e.panics))
+	e.panics = append(e.panics, fmt.Sprintf("%s = private unnamed_addr constant [%d x i8] c\"%s%s\"", cn, len(data)+1, irEscape(data), term))
+	return cn
+}
+
 // slot reserves one stack slot of typ for the body being emitted and
 // returns its pointer operand. The request takes its value number here —
 // the body's numbering is the emission order and does not move — while
@@ -1048,7 +1071,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				e.sumsOrd[key] = names
 			case *ast.FnDecl:
 				if len(d.TypeParams) != 0 {
-					return "", &NotImplemented{What: bndGenericFns}
+					return "", bndGeneric()
 				}
 				if d.Name == "main" && m.Key == root.Key && mode == ModeBuild && entry == nil {
 					entry = d
@@ -1073,7 +1096,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				// the wrapper erases to. The generic form is B1b's, like
 				// every other generic declaration's.
 				if len(d.TypeParams) != 0 {
-					return "", &NotImplemented{What: bndGenericFns}
+					return "", bndGeneric()
 				}
 				e.newtypes[m.Key+"."+d.Name] = d.Underlying
 			case *ast.InterfaceDecl:
@@ -6521,8 +6544,7 @@ func (e *emitter) emitPanic(x ast.Expr) (callResult, *NotImplemented) {
 		return callResult{}, e.bnd()
 	}
 	e.use("__we_task_fail")
-	cn := fmt.Sprintf("@.p%d", len(e.panics))
-	e.panics = append(e.panics, fmt.Sprintf("%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"", cn, len(data)+1, irEscape(data)))
+	cn := e.cstr("p", data, "\\00")
 	e.inst(fmt.Sprintf("call void @__we_task_fail(ptr %s)", cn))
 	e.inst("unreachable")
 	n := e.blocks
@@ -6556,118 +6578,394 @@ func (e *emitter) emitAssert(cond, msg ast.Expr) (callResult, *NotImplemented) {
 	e.inst(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", c, pass, fail))
 	e.label(fail)
 	e.use("__we_task_fail")
-	cn := fmt.Sprintf("@.p%d", len(e.panics))
-	e.panics = append(e.panics, fmt.Sprintf("%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"", cn, len(data)+1, irEscape(data)))
+	cn := e.cstr("p", data, "\\00")
 	e.inst(fmt.Sprintf("call void @__we_task_fail(ptr %s)", cn))
 	e.inst("unreachable")
 	e.label(pass)
 	return callResult{kind: ckVoid}, nil
 }
 
-// emitAssertEqual routes the two comparanda to the equality pair (design
-// D7): the integer widths and Bool ride the i64 domain, String pairs the
-// four-word face. The family is decided by shape before any emission —
-// a trial emission could leave a call twice in the stream. The domain
-// itself is the check stage's face (bndAssertEqDomain); a shape outside
-// both families here is defensive only.
+// --- the T10 structural comparison (design D9) -------------------------------
+//
+// The comparand domain was the leaf set alone (M10a design D8). T10 closes
+// it over the composites that declare Eq, and chapter 10 is why that is the
+// whole of the widening: composite equality is the generated .equals(),
+// never the operator, so a composite carrying the clause has an equality
+// the language fixes, and its components have theirs by the rule the clause
+// was already checked under. What the domain does not reach is the *leaf*
+// the clause would accept: every base type carries Eq, Float64 included,
+// while the assertion fixes no rendering for a double — so a derives-Eq
+// record with a Float64 field is legal, its .equals() works, and the
+// comparison still stops there. That asymmetry is the ruling, not an
+// oversight, and the two stages' accept sets are pinned equal by a mirror
+// table so neither can widen alone.
+
+// eqPathMaxSegments bounds how deep a position may read before the walk
+// gives up. The comparison's report is the path, so a declaration nested
+// past this would spend the report on the path rather than on the leaf —
+// and a chain long enough to reach it is not a shape the domain is for.
+// The check stage's own recursion over the same declarations is what a
+// program would meet first. A record field's record is looked up in the
+// same module only, so a chain is the one shape that grows a path without
+// bound; every recursive descent asks this before taking a step.
+const eqPathMaxSegments = 32
+
+// eqTooDeep reports whether a position has run past the walk's bound.
+func eqTooDeep(path string) bool {
+	return strings.Count(path, ".") >= eqPathMaxSegments
+}
+
+// eqWalk is one comparison's recursion state: the composite keys on the
+// path from the root. A composite that contains itself has no terminating
+// comparison — the check stage rejects such a declaration, so this guard
+// keeps the emitter off an edge no program can write, exactly as
+// derefNewtype guards its own.
+type eqWalk struct {
+	seen map[string]bool
+}
+
+// eqFace is one comparand's face in the structural comparison: the family
+// its value crosses boundaries as, and the operands the walk reads it
+// through. Operators, not storage — a record arrives as one handle and a
+// scalar as one live value — so nothing here spills to a slot before the
+// walk can read it and the whole comparison is loads and calls, with no
+// store and no slot reserved.
+type eqFace struct {
+	kind fnAbiKind
+	// abiI64: the operand and the leaf domain it renders in.
+	leaf strKind
+	op   string
+	// abiStr: the two-word pair.
+	strP, strL string
+	// abiGc: the record's handle and its module-qualified key.
+	reg string
+	key string
+}
+
+// eqLeafDomain is the domain one scalar comparand renders in, and whether
+// the leaf set admits it. The set is the check stage's, so the two
+// families the pre-T10 numeric route printed wrongly get rows of their own
+// — Bool's word, UInt64's magnitude — and the two it printed at all, Rune
+// and Float64, stop. A domain the site never fixed (skNone: a std call's
+// result, a value form's join) rides the numeric route as it always did:
+// not knowing a comparand's domain is not a stop it never was.
+func eqLeafDomain(k strKind) (strKind, bool) {
+	switch k {
+	case skU64, skBool:
+		return k, true
+	case skF64, skRune:
+		return skNone, false
+	}
+	return skI64, true
+}
+
+// eqTypeName is one composite's name as a report spells it: the last
+// segment of its module-qualified key, which is the name its declaration
+// was given.
+func eqTypeName(key string) string {
+	if i := strings.LastIndex(key, "."); i >= 0 {
+		return key[i+1:]
+	}
+	return key
+}
+
+// eqPathJoin appends one segment to a position. A comparison's root has no
+// position yet, so its first segment stands alone — a tuple's root element
+// reports at a bare index, and a record's at the type name alone.
+func eqPathJoin(path, seg string) string {
+	if path == "" {
+		return seg
+	}
+	return path + "." + seg
+}
+
+// derivesEq reports whether a declaration carries the Eq clause — the
+// capability chapter 10 generates a composite's equality from, and the one
+// the comparand domain closes over.
+func derivesEq(d *ast.DerivesClause) bool {
+	if d == nil {
+		return false
+	}
+	for _, t := range d.Targets {
+		if t == "Eq" {
+			return true
+		}
+	}
+	return false
+}
+
+// eqPathArg is one position as the C string a leaf hands its report. The
+// empty position is the null pointer, the one spelling that says "no
+// suffix at all" — which is what keeps a top-level report byte for byte
+// the line it was before the comparison could walk. The constant goes
+// through the panics pool and not the String pool: the report is a C
+// string, and only that pool's constants carry a terminator.
+func (e *emitter) eqPathArg(path string) string {
+	if path == "" {
+		return "null"
+	}
+	return e.cstr("p", path, "\\00")
+}
+
+// emitAssertEqual compares two comparands structurally (design D9). The
+// check stage's domain gate admits the leaf set and the composites that
+// declare Eq, so what arrives here is a leaf or a record (the commits that
+// widen the face add the tuple and the sum). Both faces resolve before
+// anything emits — a trial emission could leave a call twice in the
+// stream — and the walk is straight-line calls in declaration order, which
+// is the whole of the comparison's short circuit: the failure tail those
+// helpers ride is noreturn, so the first leaf that differs is the last one
+// whose call runs.
 func (e *emitter) emitAssertEqual(args []ast.Expr) (callResult, *NotImplemented) {
 	if len(args) != 2 {
 		return callResult{}, e.bnd()
 	}
-	strFace := func(x ast.Expr) bool {
-		if e.valueKind(x) == skStr {
-			return true
-		}
-		// A member is the field-chain face whether or not the chain
-		// resolves here: a chain that does not is its own stop.
-		_, ok := x.(*ast.Member)
-		return ok
+	a, ni := e.eqFaceOf(args[0])
+	if ni != nil {
+		return callResult{}, ni
 	}
-	// Records and sums sit beyond the comparand domain: their equality
-	// is the Eq-generic face, the standard library's own widening.
-	domainFace := func(x ast.Expr) bool {
-		switch v := x.(type) {
-		case *ast.Ident:
-			_, g := e.gcEnv[v.Name]
-			_, s := e.sums2[v.Name]
-			return g || s
-		case *ast.Construct:
-			return true
-		}
-		return false
+	b, ni := e.eqFaceOf(args[1])
+	if ni != nil {
+		return callResult{}, ni
 	}
-	if domainFace(args[0]) || domainFace(args[1]) {
-		return callResult{}, bndEqDomain()
+	// The root of a composite comparison is named; a leaf's is not, and
+	// neither is a tuple's, whose elements report at bare indices.
+	path := ""
+	if a.kind == abiGc || a.kind == abiSum {
+		path = eqTypeName(a.key)
 	}
-	// A call comparand contributes its own result's face: an
-	// Int64-returning call rides the numeric route, a String-returning
-	// one the string route. The M9b expression emitters take no direct
-	// calls (a call enters through a let binding); the comparand
-	// position is the one widened face — the goldens pass calls straight
-	// in — so the resolution lives here, not in those sets.
-	var ops [2]string       // a numeric call's operand
-	var strs [2]*strBinding // a string call's operand pair
-	isCall, isStr := [2]bool{}, [2]bool{}
-	for i, x := range args {
-		c, ok := x.(*ast.Call)
-		if !ok {
-			isStr[i] = strFace(x)
-			continue
-		}
-		res, ni := e.emitCall(c, nil)
-		if ni != nil {
-			return callResult{}, ni
-		}
-		isCall[i] = true
-		switch res.kind {
-		case ckI64:
-			if res.isFloat {
-				return callResult{}, bndEqDomain()
-			}
-			ops[i] = res.i64
-		case ckStr:
-			b := res.strBind
-			strs[i] = &b
-			isStr[i] = true
-		default:
-			return callResult{}, bndEqDomain()
-		}
+	if ni := e.emitEqCompare(a, b, path, eqWalk{seen: make(map[string]bool)}); ni != nil {
+		return callResult{}, ni
 	}
-	if isStr[0] || isStr[1] {
-		var sp, sl [2]string
-		for i, x := range args {
-			if isCall[i] {
-				sp[i], sl[i] = strs[i].dataOp, strs[i].lenOp
-				continue
-			}
-			p, l, ni := e.emitStringExpr(x)
-			if ni != nil {
-				return callResult{}, ni
-			}
-			sp[i], sl[i] = p, l
-		}
-		e.use("__we_assert_eq_str")
-		e.inst(fmt.Sprintf("call void @__we_assert_eq_str(ptr %s, i64 %s, ptr %s, i64 %s)", sp[0], sl[0], sp[1], sl[1]))
-		return callResult{kind: ckVoid}, nil
-	}
-	var np [2]string
-	for i, x := range args {
-		if isCall[i] {
-			np[i] = ops[i]
-			continue
-		}
-		op, isF, ni := e.emitNumExpr(x)
-		if ni != nil {
-			return callResult{}, ni
-		}
-		if isF {
-			return callResult{}, bndEqDomain()
-		}
-		np[i] = op
-	}
-	e.use("__we_assert_eq_i64")
-	e.inst(fmt.Sprintf("call void @__we_assert_eq_i64(i64 %s, i64 %s)", np[0], np[1]))
 	return callResult{kind: ckVoid}, nil
+}
+
+// eqFaceOf resolves one comparand to its equality face. The emit-free
+// facts go first — an environment lookup, a chain probe — so a shape the
+// walk cannot read never emits; and every stop an expression emitter
+// reports passes through unchanged, because a comparand outside the M9b
+// statement set is the body's stop and not the domain's.
+func (e *emitter) eqFaceOf(x ast.Expr) (eqFace, *NotImplemented) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		if g, ok := e.gcEnv[v.Name]; ok {
+			return eqFace{kind: abiGc, reg: g.reg, key: g.rec}, nil
+		}
+		if _, ok := e.tupEnv[v.Name]; ok {
+			return eqFace{}, bndGeneric() // T10-2c widens tuples
+		}
+		if _, ok := e.sums2[v.Name]; ok {
+			return eqFace{}, bndGeneric() // T10-3 widens sums
+		}
+		// A module-level binding is not a local: chapter 6 gives an inner
+		// binding the name, and one the body does not hold is the global's.
+		if !e.isLocalName(v.Name) {
+			if ts, ok := e.topName(v.Name); ok {
+				return e.faceOfResult(e.topRead(ts))
+			}
+		}
+	case *ast.Member:
+		if ts, ok := e.topMember(v); ok {
+			return e.faceOfResult(e.topRead(ts))
+		}
+		// The chain probe is emit-free, so a chain ending on a record
+		// resolves before anything is emitted; every other chain end is a
+		// leaf and takes the leaf route below with the rest.
+		if slot, ok := e.chainField(v); ok && (slot.kind == fkRef || slot.kind == fkVal) {
+			res, ni := e.emitMemberValue(v)
+			if ni != nil {
+				return eqFace{}, ni
+			}
+			if res.kind != ckGc {
+				return eqFace{}, bndGeneric()
+			}
+			return eqFace{kind: abiGc, reg: res.gcReg, key: res.recKey}, nil
+		}
+	case *ast.Construct:
+		reg, key, ni := e.emitRecordValue(v)
+		if ni != nil {
+			return eqFace{}, ni
+		}
+		return eqFace{kind: abiGc, reg: reg, key: key}, nil
+	case *ast.Tuple:
+		return eqFace{}, bndGeneric() // T10-2c widens tuples
+	case *ast.Call:
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return eqFace{}, ni
+		}
+		return e.faceOfResult(res)
+	}
+	// The leaves: a String rides the pair route every String emitter
+	// produces, and everything else the numeric one.
+	if e.valueKind(x) == skStr {
+		p, l, ni := e.emitStringExpr(x)
+		if ni != nil {
+			return eqFace{}, ni
+		}
+		return eqFace{kind: abiStr, strP: p, strL: l}, nil
+	}
+	op, isF, ni := e.emitNumExpr(x)
+	if ni != nil {
+		return eqFace{}, ni
+	}
+	k, ok := eqLeafDomain(e.valueKind(x))
+	if !ok || isF {
+		return eqFace{}, bndGeneric()
+	}
+	return eqFace{kind: abiI64, leaf: k, op: op}, nil
+}
+
+// faceOfResult is the call-result half of eqFaceOf: the same families read
+// out of what a call returned rather than out of an environment.
+func (e *emitter) faceOfResult(res callResult) (eqFace, *NotImplemented) {
+	switch res.kind {
+	case ckGc:
+		return eqFace{kind: abiGc, reg: res.gcReg, key: res.recKey}, nil
+	case ckStr:
+		return eqFace{kind: abiStr, strP: res.strBind.dataOp, strL: res.strBind.lenOp}, nil
+	case ckI64:
+		k, ok := eqLeafDomain(baseStrKind(res.typeName))
+		if !ok || res.isFloat {
+			return eqFace{}, bndGeneric()
+		}
+		return eqFace{kind: abiI64, leaf: k, op: res.i64}, nil
+	}
+	return eqFace{}, bndGeneric()
+}
+
+// emitEqCompare emits one comparison — two faces at one position — and
+// returns the stop it met. The families have to agree: which one a
+// comparand lands in is a static fact of its type, so a disagreement means
+// the emitter did not see the shape the check stage saw, and the honest
+// answer there is the residual row rather than a comparison of unrelated
+// words. Leaves compare where they are; a record descends.
+func (e *emitter) emitEqCompare(a, b eqFace, path string, w eqWalk) *NotImplemented {
+	if a.kind != b.kind {
+		return bndGeneric()
+	}
+	switch a.kind {
+	case abiI64:
+		if a.leaf != b.leaf {
+			return bndGeneric()
+		}
+		return e.emitEqScalarLeaf(path, a.leaf, a.op, b.op)
+	case abiStr:
+		return e.emitEqStrLeaf(path, a.strP, a.strL, b.strP, b.strL)
+	case abiGc:
+		return e.emitEqRecord(a, b, path, w)
+	}
+	return bndGeneric()
+}
+
+// emitEqScalarLeaf emits one scalar leaf's call. The top-level Int64 leaf
+// keeps the pre-T10 symbol: that call is one of the two byte-pinned
+// goldens' only emitters, and keeping the row distinct makes the modules
+// those programs produce unchanged by construction rather than by
+// inspection. Every other leaf — a nested one at any depth, and the two
+// families the ruling renders differently — takes the row that carries the
+// position.
+func (e *emitter) emitEqScalarLeaf(path string, k strKind, got, want string) *NotImplemented {
+	if k == skI64 && path == "" {
+		e.use("__we_assert_eq_i64")
+		e.inst(fmt.Sprintf("call void @__we_assert_eq_i64(i64 %s, i64 %s)", got, want))
+		return nil
+	}
+	var sym string
+	switch k {
+	case skI64:
+		sym = "__we_assert_eq_i64_at"
+	case skU64:
+		sym = "__we_assert_eq_u64_at"
+	case skBool:
+		sym = "__we_assert_eq_bool_at"
+	default:
+		return bndGeneric()
+	}
+	e.use(sym)
+	e.inst(fmt.Sprintf("call void @%s(ptr %s, i64 %s, i64 %s)", sym, e.eqPathArg(path), got, want))
+	return nil
+}
+
+// emitEqStrLeaf emits one String leaf's call: the same pair the pre-T10
+// row holds, with the position ahead of it where there is one.
+func (e *emitter) emitEqStrLeaf(path, gp, gl, wp, wl string) *NotImplemented {
+	if path == "" {
+		e.use("__we_assert_eq_str")
+		e.inst(fmt.Sprintf("call void @__we_assert_eq_str(ptr %s, i64 %s, ptr %s, i64 %s)", gp, gl, wp, wl))
+		return nil
+	}
+	e.use("__we_assert_eq_str_at")
+	e.inst(fmt.Sprintf("call void @__we_assert_eq_str_at(ptr %s, ptr %s, i64 %s, ptr %s, i64 %s)",
+		e.eqPathArg(path), gp, gl, wp, wl))
+	return nil
+}
+
+// emitEqRecord walks one record pair field by field in declaration order.
+// The layout answers what each field is; a field outside the family the
+// walk can read stops the whole comparison, because two faces have to be
+// the same shape to be compared at all.
+//
+// A nested record contributes its field names and not its own type name:
+// the segment that reached it already says which field it is, so the path
+// reads as the walk that produced it — Point.inner.x names one field chain,
+// not two type names.
+func (e *emitter) emitEqRecord(a, b eqFace, path string, w eqWalk) *NotImplemented {
+	if eqTooDeep(path) {
+		return bndGeneric()
+	}
+	rec, ok := e.records[a.key]
+	if !ok || a.key != b.key {
+		return bndGeneric()
+	}
+	// Chapter 10 makes the clause the whole of composite equality, so the
+	// walk re-checks it rather than trusting the gate: the two stages'
+	// accept sets are pinned equal, and a record without Eq has nothing
+	// here to compare.
+	if !derivesEq(rec.Derives) {
+		return bndGeneric()
+	}
+	if w.seen[a.key] {
+		return bndGeneric()
+	}
+	w.seen[a.key] = true
+	defer delete(w.seen, a.key)
+	slots, _, ok := e.layout(recModKey(a.key), rec)
+	if !ok {
+		return bndGeneric()
+	}
+	for i, fd := range rec.Fields {
+		fp := eqPathJoin(path, fd.Name)
+		s := slots[i]
+		switch s.kind {
+		case fkStr:
+			if ni := e.emitEqStrLeaf(fp,
+				e.gepLoadPtr(a.reg, s.off), e.gepLoadI64(a.reg, s.off+8),
+				e.gepLoadPtr(b.reg, s.off), e.gepLoadI64(b.reg, s.off+8)); ni != nil {
+				return ni
+			}
+		case fkScalar:
+			k, ok := eqLeafDomain(baseStrKind(s.typ))
+			if !ok {
+				return bndGeneric()
+			}
+			if ni := e.emitEqScalarLeaf(fp, k,
+				e.gepLoadI64(a.reg, s.off), e.gepLoadI64(b.reg, s.off)); ni != nil {
+				return ni
+			}
+		case fkRef, fkVal:
+			sa := eqFace{kind: abiGc, key: s.typ, reg: e.gepLoadPtr(a.reg, s.off)}
+			sb := eqFace{kind: abiGc, key: s.typ, reg: e.gepLoadPtr(b.reg, s.off)}
+			if ni := e.emitEqRecord(sa, sb, fp, w); ni != nil {
+				return ni
+			}
+		default:
+			// fkF64 — the leaf the clause accepts and the assertion does
+			// not. The layout has no other kind.
+			return bndGeneric()
+		}
+	}
+	return nil
 }
 
 // emitQuestion emits `expr?`: the sum's Err branch runs the error tail —
@@ -6707,8 +7005,7 @@ func (e *emitter) emitQuestion(p *ast.Prop) (callResult, *NotImplemented) {
 			return callResult{}, e.bnd()
 		}
 		e.use("__we_fail")
-		cn := fmt.Sprintf("@.q%d", len(e.panics))
-		e.panics = append(e.panics, fmt.Sprintf("%s = private unnamed_addr constant [%d x i8] c\"%s\\0A\"", cn, len(line)+1, irEscape(line)))
+		cn := e.cstr("q", line, "\\0A")
 		e.inst(fmt.Sprintf("call void @__we_fail(ptr %s, i64 %d)", cn, len(line)+1))
 	}
 	e.inst("unreachable")

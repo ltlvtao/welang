@@ -1,0 +1,16 @@
+{
+  "name": "test-asserteq-bool-fail",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\ntest \"bool\" {\n    st.assertEqual(true, false)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: bool (0ms)\n  assertion failed: got true, want false\ntotal 1, passed 0, failed 1 (0ms)\n",
+  "stderr": ""
+}

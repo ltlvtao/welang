@@ -278,6 +278,10 @@ void __we_assert_true(long long cond);
 void __we_assert_false(long long cond);
 void __we_assert_eq_i64(long long got, long long want);
 void __we_assert_eq_str(const char *gp, long long gl, const char *wp, long long wl);
+void __we_assert_eq_i64_at(const char *path, long long got, long long want);
+void __we_assert_eq_u64_at(const char *path, unsigned long long got, unsigned long long want);
+void __we_assert_eq_bool_at(const char *path, long long got, long long want);
+void __we_assert_eq_str_at(const char *path, const char *gp, long long gl, const char *wp, long long wl);
 
 static long long f_true(void *env) { __we_assert_true(0); return 0; }
 static long long f_false(void *env) { __we_assert_false(1); return 0; }
@@ -288,6 +292,26 @@ static long long f_pass(void *env) {
     __we_assert_false(0);
     __we_assert_eq_i64(4, 4);
     __we_assert_eq_str("abc", 3, "abc", 3);
+    return 0;
+}
+
+// T10 (design D9): the positioned rows a composite comparison reports
+// through. A null path is a top-level leaf, whose line is the pre-T10 one;
+// a path prefixes the position, and nothing follows it but the leaf's own
+// wording.
+static long long f_eq64_at(void *env) { __we_assert_eq_i64_at("Point.x", 3, 4); return 0; }
+static long long f_eq64_top(void *env) { __we_assert_eq_i64_at(0, 3, 4); return 0; }
+static long long f_eq_u64(void *env) { __we_assert_eq_u64_at(0, 18446744073709551615ULL, 6); return 0; }
+static long long f_eq_bool(void *env) { __we_assert_eq_bool_at("P.flag", 1, 0); return 0; }
+static long long f_eq_str_at(void *env) {
+    __we_assert_eq_str_at("P.name", "ab", 2, "cd", 2);
+    return 0;
+}
+static long long f_pass2(void *env) {
+    __we_assert_eq_i64_at("P.x", 4, 4);
+    __we_assert_eq_u64_at("P.n", 7, 7);
+    __we_assert_eq_bool_at("P.b", 0, 0);
+    __we_assert_eq_str_at("P.s", "ab", 2, "ab", 2);
     return 0;
 }
 
@@ -303,6 +327,12 @@ int we_main(void) {
     report("eq64:", f_eq_i64);
     report("eqstr:", f_eq_str);
     report("pass:", f_pass);
+    report("eq64at:", f_eq64_at);
+    report("eq64top:", f_eq64_top);
+    report("equ64:", f_eq_u64);
+    report("eqbool:", f_eq_bool);
+    report("eqstrat:", f_eq_str_at);
+    report("pass2:", f_pass2);
     return 0;
 }
 
@@ -395,10 +425,10 @@ int main(int argc, char **argv) {
 // link resolves without it).
 func m10bSources(mainSrc string) (map[string]string, []string) {
 	return map[string]string{
-			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
-			"conc.c": ConcSource, "test.c": TestSource, "main.c": mainSrc,
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "str.h": StrHeader,
+			"conc.c": ConcSource, "test.c": TestSource, "str.c": StrSource, "main.c": mainSrc,
 		},
-		[]string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"}
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"}
 }
 
 // runReport builds the report harness once and runs one scene: the
@@ -499,7 +529,16 @@ func TestM10bAssertHelpers(t *testing.T) {
 			"false: tag=1 msg=assertion failed: expected false\n"+
 			"eq64: tag=1 msg=assertion failed: got 3, want 4\n"+
 			"eqstr: tag=1 msg=assertion failed: got \"abc\", want \"abd\"\n"+
-			"pass: tag=0 msg=-\n")
+			"pass: tag=0 msg=-\n"+
+			// T10: the same two shapes carrying a position, the two
+			// families it renders afresh, and the null path that leaves
+			// the line above byte for byte what it was.
+			"eq64at: tag=1 msg=assertion failed: at Point.x: got 3, want 4\n"+
+			"eq64top: tag=1 msg=assertion failed: got 3, want 4\n"+
+			"equ64: tag=1 msg=assertion failed: got 18446744073709551615, want 6\n"+
+			"eqbool: tag=1 msg=assertion failed: at P.flag: got true, want false\n"+
+			"eqstrat: tag=1 msg=assertion failed: at P.name: got \"ab\", want \"cd\"\n"+
+			"pass2: tag=0 msg=-\n")
 }
 
 func TestM10bClockDeadlock(t *testing.T) {
@@ -511,7 +550,7 @@ func TestM10bClockDeadlock(t *testing.T) {
 		}
 	}
 	args := []string{"-o", filepath.Join(dir, "harness")}
-	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "main.c"} {
+	for _, in := range []string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"} {
 		args = append(args, filepath.Join(dir, in))
 	}
 	if out, err := exec.Command(pinnedClang(t), args...).CombinedOutput(); err != nil {

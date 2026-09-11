@@ -1,0 +1,16 @@
+{
+  "name": "test-asserteq-record-str-fail",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\nrecord Point { name: String, x: Int64 } derives Eq\n\ntest \"rec str\" {\n    let a = Point { name: \"ab\", x: 1 }\n    let b = Point { name: \"cd\", x: 1 }\n    st.assertEqual(a, b)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: rec str (0ms)\n  assertion failed: at Point.name: got \"ab\", want \"cd\"\ntotal 1, passed 0, failed 1 (0ms)\n",
+  "stderr": ""
+}

@@ -193,9 +193,9 @@ func TestIOHarness(t *testing.T) {
 	// behavior under test is unchanged.
 	compileAndRun(t,
 		map[string]string{
-			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
-			"test.c": TestSource, "io.c": IOSource, "main.c": ioHarnessMain,
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader, "str.h": StrHeader,
+			"test.c": TestSource, "str.c": StrSource, "io.c": IOSource, "main.c": ioHarnessMain,
 		},
-		[]string{"gc.c", "sched.c", "test.c", "io.c", "main.c"},
+		[]string{"gc.c", "sched.c", "test.c", "str.c", "io.c", "main.c"},
 		"hi\nho")
 }

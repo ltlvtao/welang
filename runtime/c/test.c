@@ -22,12 +22,14 @@
 // code.
 #define _XOPEN_SOURCE 700
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #include "sched.h"
+#include "str.h"
 
 // The clock state. mode is real (0) until a test begins; vnow is the
 // virtual clock, milliseconds since the extent began; the task baseline is
@@ -869,5 +871,83 @@ void __we_assert_eq_str(const char *gp, long long gl, const char *wp, long long 
         snprintf(buf, sizeof buf, "assertion failed: got \"%.*s\", want \"%.*s\"",
                  (int)gl, gp, (int)wl, wp);
         __we_task_fail(buf);
+    }
+}
+
+// T10 (design D9): a composite comparison reports the position it reached
+// ahead of the leaf's own wording. The two rows above stay as they are —
+// they are the pre-T10 spellings two byte-pinned goldens hold, and a
+// top-level leaf still routes to them — so what follows is the same two
+// shapes carrying a position, plus the two families whose rendering the
+// comparison fixes.
+//
+// The position is the one input a program sizes: a declaration nested
+// thirty-two deep is thirty-two identifiers, and a String leaf's value is
+// as long as the program made it. So the message is built at its exact
+// length rather than in a fixed buffer — a silently truncated report would
+// name a position the program never had. The allocation is retained rather
+// than freed: the tail below never returns, which is at once why the free
+// is unreachable and why the comparison needs no short-circuit of its own
+// — the first leaf that differs is the last call that runs.
+static void eq_fail(const char *path, const char *fmt, ...) {
+    static const char head[] = "assertion failed: ";
+    va_list ap;
+    int n;
+
+    va_start(ap, fmt);
+    n = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        __we_task_fail("assertion failed");
+    }
+    // "at " and ": " bracket the position when there is one; a null path
+    // is a top-level comparison, whose report is the line it always was.
+    size_t pn = path ? strlen(path) + 5 : 0;
+    char *msg = malloc(sizeof head - 1 + pn + (size_t)n + 1);
+    if (!msg) {
+        abort();
+    }
+    memcpy(msg, head, sizeof head - 1);
+    size_t at = sizeof head - 1;
+    if (path) {
+        size_t plen = strlen(path);
+        memcpy(msg + at, "at ", 3);
+        memcpy(msg + at + 3, path, plen);
+        at += 3 + plen;
+        msg[at++] = ':';
+        msg[at++] = ' ';
+    }
+    va_start(ap, fmt);
+    vsnprintf(msg + at, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    __we_task_fail(msg);
+}
+
+void __we_assert_eq_i64_at(const char *path, long long got, long long want) {
+    if (got != want) {
+        eq_fail(path, "got %lld, want %lld", got, want);
+    }
+}
+
+// The UInt64 row renders the magnitude, never the bit pattern's signed
+// reading — the same rule __we_str_of_u64 holds.
+void __we_assert_eq_u64_at(const char *path, unsigned long long got, unsigned long long want) {
+    if (got != want) {
+        eq_fail(path, "got %llu, want %llu", got, want);
+    }
+}
+
+// The Bool row renders true/false where the pre-T10 numeric route printed
+// the word's own 1/0.
+void __we_assert_eq_bool_at(const char *path, long long got, long long want) {
+    if (got != want) {
+        eq_fail(path, "got %s, want %s", __we_str_of_bool(got).p, __we_str_of_bool(want).p);
+    }
+}
+
+void __we_assert_eq_str_at(const char *path, const char *gp, long long gl,
+                           const char *wp, long long wl) {
+    if (gl != wl || memcmp(gp, wp, (size_t)gl) != 0) {
+        eq_fail(path, "got \"%.*s\", want \"%.*s\"", (int)gl, gp, (int)wl, wp);
     }
 }
