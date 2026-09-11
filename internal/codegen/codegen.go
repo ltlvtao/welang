@@ -801,16 +801,25 @@ type scalarSlot struct {
 	kind strKind
 }
 
-// sumSlot is one Option/Result value: the two-word {tag, payload} of
-// design D8, as two i64 stack slots the emitter addresses by name. The
-// variant table maps the runtime's return value to the source-level name
-// the match arms carry (receive yields None=0/Some=1, the try trio their
-// three-state codes, await and scope Ok=0/Err=1); the error faces carry
-// what `?` reports — a panic-message C string on await, the fixed
-// TimedOut line on a timeout scope.
+// sumSlot is one Option/Result value: the three-word {tag, pay0, pay1}
+// of design D8, as three i64 stack slots the emitter addresses by name.
+// The layout moved from two words to three in T9 because a String payload
+// is a (ptr, len) pair and will not fold into one word. The variant table
+// maps the runtime's return value to the source-level name the match arms
+// carry (receive yields None=0/Some=1, the try trio their three-state
+// codes, await and scope Ok=0/Err=1); the error faces carry what `?`
+// reports — a panic-message C string on await, the fixed TimedOut line on
+// a timeout scope.
+//
+// pay1 is the second payload word, and today no runtime face produces a
+// value in it: every sum the runtime hands back carries a zero- or
+// one-word payload, so its producers store a literal zero there. The slot
+// exists so that a two-word payload has somewhere to live, and T9-2 is
+// where construction starts putting real values in it.
 type sumSlot struct {
 	tag      string   // i64 alloca holding the discriminant
-	pay      string   // i64 alloca holding the payload word
+	pay      string   // i64 alloca holding the payload's first word
+	pay1     string   // i64 alloca holding the payload's second word
 	variants []string // return value → variant name, index-addressed
 	errPanic bool     // the Err payload is a panic-message C-string pointer
 	errMsg   string   // a static Err report line (the `?` main tail writes it)
@@ -1810,7 +1819,7 @@ const (
 	ckVoid                  // emitted, no value
 	ckI64                   // a scalar value in the i64 domain (or a double)
 	ckPrim                  // a primitive pointer (gc-rooted at construction)
-	ckSum                   // an Option/Result two-slot value
+	ckSum                   // an Option/Result three-slot value
 	ckStr                   // a String double word (M10b fn returns)
 	ckGc                    // a record pointer (M10b fn returns and ctors)
 	ckTuple                 // a tuple value (its stack aggregate)
@@ -2810,8 +2819,8 @@ func (e *emitter) slotFor(name, target string) string {
 }
 
 // emitSumCall3 is trySend's value-argument shape: the discriminant is
-// the return, the payload word is the fixed zero (the three states carry
-// no payload).
+// the return, the payload words are the fixed zeros (the three states
+// carry no payload).
 func (e *emitter) emitSumCall3(sym, ptr, val string, variants []string) (callResult, *NotImplemented) {
 	e.use(sym)
 	tag := e.value()
@@ -2820,13 +2829,19 @@ func (e *emitter) emitSumCall3(sym, ptr, val string, variants []string) (callRes
 	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", tag, tagSlot))
 	paySlot := e.slot("i64")
 	e.inst(fmt.Sprintf("store i64 0, ptr %s", paySlot))
-	return callResult{kind: ckSum, sum: sumSlot{tag: tagSlot, pay: paySlot, variants: variants}}, nil
+	pay1Slot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay1Slot))
+	return callResult{kind: ckSum, sum: sumSlot{tag: tagSlot, pay: paySlot, pay1: pay1Slot, variants: variants}}, nil
 }
 
 // emitSumCall is the receive/await/tryReceive shape: the out slot takes
-// the payload word, the return value is the discriminant, and the two
-// alloca slots become the binding's {tag, payload} pair. variants maps
-// the return value to the variant names the match arms carry.
+// the payload word, the return value is the discriminant, and the three
+// alloca slots become the binding's {tag, pay0, pay1} triple. variants
+// maps the return value to the variant names the match arms carry.
+//
+// The runtime hands back one payload word, so pay1 is the zero literal:
+// none of the faces behind this shape (receive, await, the try trio) can
+// produce a two-word payload today.
 func (e *emitter) emitSumCall(sym, ptr string, variants []string) (callResult, *NotImplemented) {
 	e.use(sym)
 	out := e.slot("i64")
@@ -2838,7 +2853,9 @@ func (e *emitter) emitSumCall(sym, ptr string, variants []string) (callResult, *
 	pay := e.value()
 	e.inst(fmt.Sprintf("%%%s = load i64, ptr %s", pay, out))
 	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", pay, paySlot))
-	return callResult{kind: ckSum, sum: sumSlot{tag: tagSlot, pay: paySlot, variants: variants}}, nil
+	pay1Slot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay1Slot))
+	return callResult{kind: ckSum, sum: sumSlot{tag: tagSlot, pay: paySlot, pay1: pay1Slot, variants: variants}}, nil
 }
 
 // emitPrimCall is the method dispatch over the six families plus the
@@ -3736,7 +3753,7 @@ func abiWordTypes(p fnParamAbi) []string {
 	case abiStr:
 		return []string{"ptr", "i64"}
 	case abiSum:
-		return []string{"i64", "i64"}
+		return []string{"i64", "i64", "i64"}
 	case abiGc, abiFn:
 		return []string{"ptr"}
 	case abiTuple:
@@ -5255,7 +5272,7 @@ func abiTypOf(k fnAbiKind) string {
 	case abiGc:
 		return "ptr"
 	case abiSum:
-		return "{ i64, i64 }"
+		return "{ i64, i64, i64 }"
 	}
 	return "i64"
 }
@@ -5364,8 +5381,10 @@ func (e *emitter) emitReduce(src string, face listElem, arg ast.Expr) (callResul
 	}
 	tag := e.slot("i64")
 	pay := e.slot("i64")
+	pay1 := e.slot("i64")
 	e.inst(fmt.Sprintf("store i64 0, ptr %s", tag))
 	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay))
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay1))
 	fv, ni := e.emitFnArg(arg, new(acuteCallback("reduce", face, 0)))
 	if ni != nil {
 		return callResult{}, ni
@@ -5395,7 +5414,7 @@ func (e *emitter) emitReduce(src string, face listElem, arg ast.Expr) (callResul
 	e.inst(fmt.Sprintf("%%%s = call i64 %s(ptr %s, i64 %s, %s)", r, parts.fnptr, parts.env, cur, elem))
 	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", r, pay))
 	e.closeListWalk(w)
-	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, variants: []string{"None", "Some"}}}, nil
+	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, pay1: pay1, variants: []string{"None", "Some"}}}, nil
 }
 
 // emitQuantify is `any(f)` and `all(f)`: the predicate decides, and the
@@ -5447,8 +5466,10 @@ func (e *emitter) emitFind(src string, face listElem, arg ast.Expr) (callResult,
 	}
 	tag := e.slot("i64")
 	pay := e.slot("i64")
+	pay1 := e.slot("i64")
 	e.inst(fmt.Sprintf("store i64 0, ptr %s", tag))
 	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay))
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay1))
 	fv, ni := e.emitFnArg(arg, new(acuteCallback("find", face, 0)))
 	if ni != nil {
 		return callResult{}, ni
@@ -5476,7 +5497,7 @@ func (e *emitter) emitFind(src string, face listElem, arg ast.Expr) (callResult,
 	e.inst(fmt.Sprintf("br label %%%s", w.exit))
 	e.label(cont)
 	e.closeListWalk(w)
-	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, variants: []string{"None", "Some"}}}, nil
+	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, pay1: pay1, variants: []string{"None", "Some"}}}, nil
 }
 
 // emitStep advances the loop counter by one. The add is unchecked because
@@ -6827,8 +6848,10 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", to, tagSlot))
 	paySlot := e.slot("i64")
 	e.inst(fmt.Sprintf("store i64 %s, ptr %s", bodyVal, paySlot))
+	pay1Slot := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay1Slot))
 	return callResult{kind: ckSum, sum: sumSlot{
-		tag: tagSlot, pay: paySlot,
+		tag: tagSlot, pay: paySlot, pay1: pay1Slot,
 		variants: []string{"Ok", "Err"}, errMsg: "error: TimedOut",
 	}}, nil
 }
@@ -7311,7 +7334,7 @@ func (e *emitter) emitTupleElemValue(x ast.Expr) (tupleElemVal, *NotImplemented)
 		case ckGc:
 			return tupleElemVal{el: tupleElem{kind: abiGc, key: res.recKey, words: []string{"ptr"}}, op: res.gcReg}, nil
 		case ckSum:
-			return tupleElemVal{el: tupleElem{kind: abiSum, words: []string{"i64", "i64"}}, sum: res.sum}, nil
+			return tupleElemVal{el: tupleElem{kind: abiSum, words: []string{"i64", "i64", "i64"}}, sum: res.sum}, nil
 		}
 		return tupleElemVal{}, e.bnd()
 	}
@@ -7347,7 +7370,7 @@ func (e *emitter) emitTupleElemValue(x ast.Expr) (tupleElemVal, *NotImplemented)
 	}
 	if id, ok := x.(*ast.Ident); ok {
 		if sl, ok := e.sums2[id.Name]; ok {
-			return tupleElemVal{el: tupleElem{kind: abiSum, words: []string{"i64", "i64"}}, sum: sl}, nil
+			return tupleElemVal{el: tupleElem{kind: abiSum, words: []string{"i64", "i64", "i64"}}, sum: sl}, nil
 		}
 	}
 	return tupleElemVal{}, e.bnd()
@@ -7369,6 +7392,7 @@ func (e *emitter) storeTupleElem(agg string, v tupleElemVal) {
 	case abiSum:
 		e.gepStore(agg, v.el.off, "i64 "+e.loadNum(v.sum.tag, false))
 		e.gepStore(agg, v.el.off+8, "i64 "+e.loadNum(v.sum.pay, false))
+		e.gepStore(agg, v.el.off+16, "i64 "+e.loadNum(v.sum.pay1, false))
 	}
 }
 
@@ -8501,7 +8525,7 @@ const (
 	abiDouble
 	abiStr // { ptr, i64 }
 	abiGc  // ptr
-	abiSum // { i64, i64 }
+	abiSum // { i64, i64, i64 }
 	// abiTuple crosses a boundary as its elements' bare words — one IR
 	// parameter (or one returned field) per word, never a pointer (design
 	// D4's 传参逐字段展开). In the body it is a stack aggregate, which is
@@ -8640,7 +8664,7 @@ func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
 		case abiGc:
 			abi.retTyp = "ptr"
 		case abiSum:
-			abi.retTyp = "{ i64, i64 }"
+			abi.retTyp = "{ i64, i64, i64 }"
 			if key == "Result" {
 				abi.variants = []string{"Ok", "Err"}
 			} else {
@@ -8723,7 +8747,7 @@ func (e *emitter) tupleShapeOf(t *ast.TupleType) ([]tupleElem, bool) {
 		case abiStr:
 			el.words = []string{"ptr", "i64"}
 		case abiSum:
-			el.words = []string{"i64", "i64"}
+			el.words = []string{"i64", "i64", "i64"}
 		default:
 			return nil, false
 		}
@@ -8795,7 +8819,7 @@ func (e *emitter) emitFxGate(fd *fnDef, abi fnAbi) {
 		case abiStr:
 			ps = append(ps, "ptr "+n+"0", "i64 "+n+"1")
 		case abiSum:
-			ps = append(ps, "i64 "+n+"0", "i64 "+n+"1")
+			ps = append(ps, "i64 "+n+"0", "i64 "+n+"1", "i64 "+n+"2")
 		case abiGc:
 			ps = append(ps, "ptr "+n)
 		default: // abiI64
@@ -9363,13 +9387,15 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 				e.tupEnv[p.Name] = tupBinding{ptr: agg, elems: pa.elems}
 			}
 		case abiSum:
-			ps = append(ps, "i64 %"+p.Name+"0", "i64 %"+p.Name+"1")
+			ps = append(ps, "i64 %"+p.Name+"0", "i64 %"+p.Name+"1", "i64 %"+p.Name+"2")
 			if p.Name != "_" {
 				ts := e.slot("i64")
 				e.inst(fmt.Sprintf("store i64 %%%s0, ptr %s", p.Name, ts))
 				pp := e.slot("i64")
 				e.inst(fmt.Sprintf("store i64 %%%s1, ptr %s", p.Name, pp))
-				e.sums2[p.Name] = sumSlot{tag: ts, pay: pp, variants: e.sumsOrd[pa.key]}
+				p1 := e.slot("i64")
+				e.inst(fmt.Sprintf("store i64 %%%s2, ptr %s", p.Name, p1))
+				e.sums2[p.Name] = sumSlot{tag: ts, pay: pp, pay1: p1, variants: e.sumsOrd[pa.key]}
 			}
 		case abiFn:
 			ps = append(ps, "ptr %"+p.Name)
@@ -9910,14 +9936,14 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 			if _, ok := c.Args[0].(*ast.Unit); !ok {
 				return "", bndFn()
 			}
-			return "{ i64, i64 } { i64 0, i64 0 }", nil
+			return "{ i64, i64, i64 } { i64 0, i64 0, i64 0 }", nil
 		}
 		if len(c.Args) != 0 {
 			return "", bndFn()
 		}
 		for i, n := range abi.variants {
 			if n == id.Name {
-				return fmt.Sprintf("{ i64, i64 } { i64 %d, i64 0 }", i), nil
+				return fmt.Sprintf("{ i64, i64, i64 } { i64 %d, i64 0, i64 0 }", i), nil
 			}
 		}
 		return "", bndFn()
@@ -10134,7 +10160,8 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 			if !ok {
 				return callResult{}, e.bnd()
 			}
-			ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false))
+			ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false),
+				"i64 "+e.loadNum(s.pay1, false))
 		case abiFn:
 			// The argument crosses as its carrier. A closure literal is
 			// emitted here (its captures frozen at this call site), a
@@ -10194,16 +10221,16 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 		return callResult{kind: ckGc, gcReg: reg, recKey: abi.retKey}, nil
 	case abiSum:
 		v := e.value()
-		e.inst(fmt.Sprintf("%%%s = call { i64, i64 } %s(%s)", v, callee, join))
-		t := e.value()
-		e.inst(fmt.Sprintf("%%%s = extractvalue { i64, i64 } %%%s, 0", t, v))
-		p := e.value()
-		e.inst(fmt.Sprintf("%%%s = extractvalue { i64, i64 } %%%s, 1", p, v))
+		e.inst(fmt.Sprintf("%%%s = call %s %s(%s)", v, abi.retTyp, callee, join))
 		ts := e.slot("i64")
-		e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", t, ts))
 		pp := e.slot("i64")
-		e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", p, pp))
-		return callResult{kind: ckSum, sum: sumSlot{tag: ts, pay: pp, variants: abi.variants}}, nil
+		p1 := e.slot("i64")
+		for i, w := range []string{ts, pp, p1} {
+			ev := e.value()
+			e.inst(fmt.Sprintf("%%%s = extractvalue %s %%%s, %d", ev, abi.retTyp, v, i))
+			e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", ev, w))
+		}
+		return callResult{kind: ckSum, sum: sumSlot{tag: ts, pay: pp, pay1: p1, variants: abi.variants}}, nil
 	}
 	return callResult{}, e.bnd()
 }

@@ -246,7 +246,7 @@ func TestM10bFnAbiMatrix(t *testing.T) {
 		mod: ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
 			&ast.SumDecl{Name: "Opt", Variants: []ast.Variant{{Name: "A"}, {Name: "B"}}},
 			pubFn("pick", []ast.Param{i64Param("i")}, named("Opt"),
-				retValue(&ast.Call{Fn: ident("A")})),
+				retValue(&ast.Call{Fn: ident("B")})),
 			pubFn("use", []ast.Param{{Name: "r", Type: named("Opt")}}, named("Int64"),
 				retValue(intLit("3"))),
 			appError(),
@@ -257,10 +257,57 @@ func TestM10bFnAbiMatrix(t *testing.T) {
 			),
 		}}},
 		defines: []string{
-			"define { i64, i64 } @main.pick(i64 %i)",
-			"define i64 @main.use(i64 %r0, i64 %r1)",
+			// A valueless variant return widens with the family, and the
+			// variant's own index is the tag — the whole define is pinned,
+			// so a two-word regression anywhere in it shows.
+			"define { i64, i64, i64 } @main.pick(i64 %i) {\nentry:\n  ret { i64, i64, i64 } { i64 1, i64 0, i64 0 }\n}",
+			"define i64 @main.use(i64 %r0, i64 %r1, i64 %r2)",
 		},
-		calls: []string{"call { i64, i64 } %"},
+		calls: []string{
+			"call { i64, i64, i64 } %",
+			// All three words cross back out of the aggregate, through the
+			// binding's slots, and into the callee's three parameters. The
+			// loads are pinned by their slot so a consumer reading the wrong
+			// word — both hold zero here — cannot pass unnoticed.
+			"%v5 = extractvalue { i64, i64, i64 } %v1, 0",
+			"%v7 = extractvalue { i64, i64, i64 } %v1, 2",
+			"%v9 = load i64, ptr %v2\n  %v10 = load i64, ptr %v3\n  %v11 = load i64, ptr %v4",
+			"%v12 = call i64 %v8(i64 %v9, i64 %v10, i64 %v11)",
+		},
+	}, {
+		// The prelude Result's own return face: `Ok(())` is the fused tag
+		// space's zero, and it is the other half of fnRetOperand's sum
+		// arm — a declared fn, not a tail, is where it is reachable.
+		name: "result ok unit",
+		mod: ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
+			appError(),
+			pubFn("go", nil, &ast.NamedType{Name: "Result", Args: []ast.TypeRef{
+				named("Int64"), named("AppError")}}, okReturn()),
+			mainDecl(okReturn()),
+		}}},
+		defines: []string{
+			"define { i64, i64, i64 } @main.go() {\nentry:\n  ret { i64, i64, i64 } { i64 0, i64 0, i64 0 }\n}",
+		},
+	}, {
+		// The same sum-parameter signature, reached through a fn value:
+		// the adapter's word-per-parameter expansion reads the family's
+		// own word list (abiWordTypes), which the direct call above never
+		// touches.
+		name: "sum fn value",
+		mod: ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
+			&ast.SumDecl{Name: "Opt", Variants: []ast.Variant{{Name: "A"}, {Name: "B"}}},
+			pubFn("use", []ast.Param{{Name: "r", Type: named("Opt")}}, named("Int64"),
+				retValue(intLit("3"))),
+			appError(),
+			mainDecl(
+				letBind("f", ident("use")),
+				okReturn(),
+			),
+		}}},
+		defines: []string{
+			"define internal i64 @.cb0(ptr %env, i64 %a0, i64 %a1, i64 %a2)",
+			"%r = call i64 @main.use(i64 %a0, i64 %a1, i64 %a2)",
+		},
 	}, {
 		name: "valueless",
 		mod: ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
