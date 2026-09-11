@@ -1,0 +1,16 @@
+{
+  "name": "run-closure-gc-capture-crossing",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\n\npub fn main() effect io -> Result<(), AppError> {\n    let s = \"payload\"\n    let m = conc.Mutex(0)\n    let f: fn(Int64) -> Int64 = |v| v + s.byteLength()\n    var acc: Int64 = 0\n    var i: Int64 = 0\n    while i < 60000 {\n        let c = Cell { n: i }\n        acc = acc + c.n\n        i = i + 1\n    }\n    var n: Int64 = 0\n    n = m.update(f)\n    io.println(\"${s}:${n}:${acc}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "payload:7:1799970000\n",
+  "stderr": ""
+}

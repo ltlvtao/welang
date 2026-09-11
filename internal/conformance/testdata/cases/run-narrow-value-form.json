@@ -1,0 +1,16 @@
+{
+  "name": "run-narrow-value-form",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = 1\n    let n: Int8 = if a > 0 { 3i8 } else { 1i8 }\n    let m: Int8 = if a > 0 { 2i8 } else { 1i8 }\n    let y: Int8 = n + m\n    if y == 5i8 {\n        io.println(\"five\")\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "five\n",
+  "stderr": ""
+}

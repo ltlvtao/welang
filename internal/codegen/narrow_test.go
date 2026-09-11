@@ -325,8 +325,9 @@ func TestNarrowDomainPrefersTheSideThatHasAWidth(t *testing.T) {
 // A value form bound to a `let` is reachable from source and runs: the
 // shape this test mirrors — `let n: Int8 = if a > 0 {2i8} else {1i8}`
 // twice, then their sum — is a program the corpus can spell, and it
-// compiles and answers. An earlier revision of this comment claimed the
-// pipeline stopped the binding itself, which T12's probes disproved.
+// compiles and answers (golden run-narrow-value-form). An earlier revision
+// of this comment claimed the pipeline stopped the binding itself, which
+// T12's probes disproved.
 //
 // Reading such a binding into a `String` position was out of reach when
 // this test was written: the string chain asks valueKind, which carried no

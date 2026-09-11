@@ -1,0 +1,16 @@
+{
+  "name": "build-bnd-value-form-shadowed-binding",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let b = true\n    let k = {\n        let b: Int64 = 5\n        b\n    }\n    io.println(\"${k}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n"
+}
