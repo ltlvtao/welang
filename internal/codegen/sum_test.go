@@ -346,3 +346,87 @@ func TestSumCtorFnReturnsFusedError(t *testing.T) {
 	// table, so its tag leaves as the constant 1 with both payload words.
 	wantIR(t, ir, "ret { i64, i64, i64 } { i64 1, i64 1, i64 2 }", "the Err(Failed(1, 2)) return")
 }
+
+// T9-3 (design D8): the parameter position. A sum crosses the call as its
+// three words and the callee's arms resolve their table out of the
+// DECLARED type — the same authority a binding's annotation carries, and
+// the only one the callee has, since the argument it was handed says
+// nothing about which variants exist.
+
+// errParam is `Result<(), AppError>` as a declared parameter type.
+func errParam(name string) ast.Param {
+	return ast.Param{Name: name, Type: &ast.NamedType{Name: "Result",
+		Args: []ast.TypeRef{&ast.UnitType{}, named("AppError")}}}
+}
+
+// The three arms read the fused table an annotation-position match reads:
+// Ok is tag 0, and the error variants sit above it in declaration order,
+// so Failed tests 1 and Nope tests 2. The Failed payload binds both words
+// by what the variant declared — the second word is the one the caller's
+// construction put there, which an arm that read the first word twice
+// could not reach.
+func TestSumParameterCarriesItsVariantTable(t *testing.T) {
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", File: &ast.File{Items: []ast.Item{
+		bigErr(),
+		pubFn("name", []ast.Param{errParam("r")}, named("Int64"),
+			&ast.ExprStmt{Expr: &ast.Match{
+				Scrutinee: ident("r"),
+				Arms: []ast.MatchArm{
+					{Pat: okPat(), Body: blockOf(ioCall("io", "println", intLit("0")))},
+					{Pat: &ast.PatVariant{Name: "Err", Args: []ast.Pattern{
+						&ast.PatVariant{Name: "Failed", Args: []ast.Pattern{&ast.PatBinding{Name: "a"}, &ast.PatBinding{Name: "b"}}}}},
+						Body: blockOf(ioCall("io", "println", ident("b")))},
+					{Pat: &ast.PatVariant{Name: "Err", Args: []ast.Pattern{&ast.PatVariant{Name: "Nope"}}},
+						Body: blockOf(ioCall("io", "println", intLit("9")))},
+				},
+			}},
+			retValue(intLit("0")),
+		),
+		mainDecl(letDiscard(call(ident("name"), call(ident("Ok"), &ast.Unit{}))), okReturn()),
+	}}}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	// The parameter face is the three-word slot spelled as three scalars,
+	// in the order every construction writes them.
+	wantIR(t, ir, "define i64 @main.name(i64 %r0, i64 %r1, i64 %r2) {", "the sum parameter's face")
+	// The arms' tag tests are the declaration's indices in the fused
+	// table, read off the tag word the declaration named.
+	wantIR(t, ir, "  %v12 = icmp eq i64 %v11, 0", "the Ok arm")
+	wantIR(t, ir, "  %v13 = icmp eq i64 %v11, 1", "the Failed arm")
+	wantIR(t, ir, "  %v16 = icmp eq i64 %v11, 2", "the Nope arm")
+	// Both payload words, each from its own slot, by declaration.
+	wantIR(t, ir, "  %v14 = load i64, ptr %v9\n  %v15 = load i64, ptr %v10\n  call void @__we_println_i64(i64 %v15)",
+		"the two-word payload binding")
+}
+
+// A construction written at an argument position is a call, so it arrives
+// through the call arm rather than the binding-name arm — and there it is
+// the PARAMETER's declared type that names the sum, because the argument
+// itself says nothing. Both spellings ride that one expectation: `Some(1)`
+// with its parentheses, and the bare `None`, which had no parentheses to
+// arrive through and so reached the arm as a plain name.
+func TestSumConstructionAtAnArgumentPosition(t *testing.T) {
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", File: &ast.File{Items: []ast.Item{
+		pubFn("show", []ast.Param{{Name: "o", Type: optionOf(named("Int64"))}}, named("Int64"),
+			retValue(intLit("0"))),
+		mainDecl(
+			letDiscard(call(ident("show"), call(ident("Some"), intLit("1i64")))),
+			letDiscard(call(ident("show"), ident("None"))),
+			okReturn()),
+	}}}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	// Some is index 1 with the argument in the first payload word and the
+	// second one zeroed — the construction happens at the call site and
+	// the three words cross as the callee's parameters.
+	wantIR(t, ir, "  store i64 1, ptr %v1\n  store i64 1, ptr %v2\n  store i64 0, ptr %v3\n"+
+		"  %v4 = load i64, ptr %v1\n  %v5 = load i64, ptr %v2\n  %v6 = load i64, ptr %v3\n"+
+		"  %v7 = call i64 %v0(i64 %v4, i64 %v5, i64 %v6)", "the Some(1) argument")
+	// None is index 0 and carries nothing, so all three words are the zero
+	// literal — a nullary variant is a tag and no payload.
+	wantIR(t, ir, "  store i64 0, ptr %v9\n  store i64 0, ptr %v10\n  store i64 0, ptr %v11\n"+
+		"  %v12 = load i64, ptr %v9\n  %v13 = load i64, ptr %v10\n  %v14 = load i64, ptr %v11\n"+
+		"  %v15 = call i64 %v8(i64 %v12, i64 %v13, i64 %v14)", "the bare None argument")
+}

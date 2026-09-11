@@ -315,11 +315,6 @@ func TestContinueDischargesThePassesRoots(t *testing.T) {
 // side is still inside the function; a return has no far side, and
 // discharging only to the arm's own depth would strand the enclosing
 // body's roots in the window for the caller's collections to mark.
-//
-// The body here is an if arm rather than a loop body because at this point
-// in the milestone the M9b statement set admits one tail return per body —
-// a return inside a loop is still a boundary, so an arm is the only body a
-// return can leave early from.
 func TestReturnDischargesTheWholeLiveSet(t *testing.T) {
 	ir := assertClean(t, listModule([]ast.Item{
 		pubFn("f", nil, named("Int64"),
@@ -336,6 +331,41 @@ func TestReturnDischargesTheWholeLiveSet(t *testing.T) {
 	))
 	// The enclosing literal's two plus the arm's two.
 	popsBefore(t, ir, "ret i64 7", 4)
+}
+
+// TestReturnFromALoopBodyDischargesTheWholeLiveSet: the same fact reached
+// through the body T8-2B-0 recorded as out of reach. That record's premise
+// — "the M9b statement set admits one tail return per body, so a return
+// inside a loop is still a boundary" — does not hold: `for` and `while`
+// bodies take a return today, in main and in a fn both (probed on the real
+// toolchain at f303bb4 and at 69dbf78), and emitReturn has been at any depth
+// since T2's deep returns. The loop frame is what break and continue stop
+// at; a return leaves the function, so its discharge is the whole live set
+// and not the frame's base.
+//
+// The count is the reason the arm exists. Seven roots are live at the
+// return: the enclosing body's literal (the carrier, then the identity its
+// push leaves behind), the walk's source literal (the same pair — it is
+// written at the loop's position, so it materializes inside the body), the
+// walk's own snapshot, and the loop body's literal. A discharge that
+// stopped at the loop frame would pop the body's two and hand the
+// collector the other five.
+func TestReturnFromALoopBodyDischargesTheWholeLiveSet(t *testing.T) {
+	ir := assertClean(t, listModule([]ast.Item{
+		pubFn("f", nil, named("Int64"),
+			letBind("keep", &ast.ListLit{Elems: []ast.Expr{intLit("9")}}),
+			walk("x", &ast.ListLit{Elems: []ast.Expr{intLit("1")}},
+				letBind("xs", &ast.ListLit{Elems: []ast.Expr{intLit("2")}}),
+				retValue(intLit("7")),
+			),
+			retValue(intLit("0")),
+		),
+	},
+		letBind("n", &ast.Call{Fn: ident("f")}),
+	))
+	// The enclosing literal's two, the source literal's two, the
+	// snapshot's one, the body's two.
+	popsBefore(t, ir, "ret i64 7", 7)
 }
 
 // TestBodiesWithoutRootsEmitNoDischarge: the repair must not touch a body

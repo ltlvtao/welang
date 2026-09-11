@@ -1,0 +1,16 @@
+{
+ "name": "run-prim-param",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nfn bump(m: conc.Mutex<Int64>) -> Int64 {\n    let _ = m.set(m.get() + 1i64)\n    return m.get()\n}\n\nfn peek(m: conc.Mutex<Int64>) -> Int64 {\n    return m.get()\n}\n\nfn read(m: conc.Mutex<Int64>) -> Int64 {\n    let v = m.get()\n    return v\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let c = conc.Mutex(0)\n    let _ = c.set(41i64)\n    io.println(\"a ${bump(c)}\")\n    io.println(\"b ${bump(c)}\")\n    io.println(\"peek ${peek(c)}\")\n    io.println(\"read ${read(c)}\")\n    io.println(\"inline ${peek(conc.Mutex(9i64))}\")\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "a 42\nb 43\npeek 43\nread 43\ninline 9\n",
+ "stderr": ""
+}

@@ -2498,6 +2498,19 @@ var primCtors = map[string]primCtorSpec{
 	"channel":   {"__we_prim_new_chan", 2},
 }
 
+// primTypeNames is chapter 18's shared-state type set — the names a
+// qualified type annotation may carry to be a primitive at an ABI
+// position. It is the codegen's copy of the checker's
+// typecheck.concurrentTypes, which is the authority for which names the
+// std.concurrent module declares; the two tables move together, and the
+// constructor table above is a different face (it keys the call
+// spellings, whose capitalisation need not match a type's).
+var primTypeNames = map[string]bool{
+	"Mutex": true, "RwLock": true, "Atomic": true, "AtomicRef": true,
+	"Cond": true, "Semaphore": true, "Channel": true, "SendOnly": true,
+	"ReceiveOnly": true, "TaskHandle": true, "CancelSignal": true,
+}
+
 // emitPrimCtor emits one constructor call. Every primitive object is a
 // gc block, so the binding roots it like a record (the M8 push/pop
 // protocol rides unchanged). A channel's element domain rides the
@@ -3914,7 +3927,7 @@ func abiWordTypes(p fnParamAbi) []string {
 		return []string{"ptr", "i64"}
 	case abiSum:
 		return []string{"i64", "i64", "i64"}
-	case abiGc, abiFn:
+	case abiGc, abiFn, abiPrim:
 		return []string{"ptr"}
 	case abiTuple:
 		var ws []string
@@ -8948,12 +8961,22 @@ const (
 	// carrying its own signature statically (fnParamAbi.sig) so the body
 	// may call through it.
 	abiFn
+	// abiPrim is one of chapter 18's shared-state primitives at a
+	// parameter position — Mutex, RwLock, Atomic, AtomicRef, Cond,
+	// Semaphore, Channel, SendOnly, ReceiveOnly, TaskHandle,
+	// CancelSignal. Every one is a gc-category value behind a single
+	// pointer, and the type argument never reaches the ABI: the
+	// discipline is in the type name, not in the layout. The parameter
+	// position is the whole face — a prim return has no word to come
+	// back in (see fitAbi).
+	abiPrim
 )
 
 type fnParamAbi struct {
 	kind  fnAbiKind
 	key   string      // the record/sum's module-qualified key (abiGc/abiSum)
 	typ   string      // the declared base type name, where the parameter names one
+	decl  ast.TypeRef // the declared type itself, where a position names one
 	elems []tupleElem // the element shapes (abiTuple)
 	sig   *fnAbi      // the parameter's own signature (abiFn)
 }
@@ -9037,7 +9060,19 @@ func (e *emitter) derefNewtype(t ast.TypeRef) ast.TypeRef {
 func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 	t = e.derefNewtype(t)
 	n, ok := t.(*ast.NamedType)
-	if !ok || n.Qual != "" {
+	if !ok {
+		return abiVoid, "", false
+	}
+	if n.Qual != "" {
+		// Chapter 18's shared-state types are the qualified names that
+		// reach the ABI. They arrive through the std.concurrent import,
+		// which is the only spelling the checker resolves — the bare
+		// names stay unresolved — and their type argument names the
+		// payload's domain, never the value's layout: each of them is
+		// one pointer, so the argument is not read here.
+		if e.concAlias[n.Qual] && primTypeNames[n.Name] {
+			return abiPrim, "", true
+		}
 		return abiVoid, "", false
 	}
 	if n.Name == "Result" && len(n.Args) == 2 {
@@ -9313,6 +9348,16 @@ func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
 			}
 			abi.retShapes = shapes
 			abi.variants = sumVariantNames(shapes)
+		case abiPrim:
+			// The parameter position is the face this build widened. A
+			// prim coming back has no spelling here — retTyp would go
+			// unset and the define would name no return type — so the
+			// signature is refused at classification, and a call site to
+			// such a fn refuses on the same answer rather than on a body
+			// it never sees. fnRetOperand's own switch has no abiPrim arm
+			// and refuses it as well; the two guards agree, and the T9-3
+			// battery records that either alone holds.
+			return abi, false
 		}
 	default:
 		return abi, false
@@ -9364,7 +9409,8 @@ func (e *emitter) bindTupleParams(abi *fnAbi, params []ast.Param) (fnAbi, bool) 
 		if !ok {
 			return *abi, false
 		}
-		abi.params = append(abi.params, fnParamAbi{kind: k, key: key, typ: baseTypeName(e.derefNewtype(p.Type))})
+		abi.params = append(abi.params, fnParamAbi{kind: k, key: key, decl: p.Type,
+			typ: baseTypeName(e.derefNewtype(p.Type))})
 	}
 	return *abi, true
 }
@@ -9464,6 +9510,8 @@ func (e *emitter) emitFxGate(fd *fnDef, abi fnAbi) {
 		case abiSum:
 			ps = append(ps, "i64 "+n+"0", "i64 "+n+"1", "i64 "+n+"2")
 		case abiGc:
+			ps = append(ps, "ptr "+n)
+		case abiPrim:
 			ps = append(ps, "ptr "+n)
 		default: // abiI64
 			ps = append(ps, "i64 "+n)
@@ -10038,12 +10086,32 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 				e.inst(fmt.Sprintf("store i64 %%%s1, ptr %s", p.Name, pp))
 				p1 := e.slot("i64")
 				e.inst(fmt.Sprintf("store i64 %%%s2, ptr %s", p.Name, p1))
-				e.sums2[p.Name] = sumSlot{tag: ts, pay: pp, pay1: p1, variants: e.sumsOrd[pa.key]}
+				// The declared type carries the variant table, not the key
+				// alone: a match over this parameter binds payloads by
+				// declaration exactly as a match over a constructed sum
+				// does, and the prelude's sums have no declaration in any
+				// module's table for the key to find. classType budgeted
+				// this parameter against the very shapes read here, so the
+				// two cannot disagree.
+				shapes, _ := e.variantShapes(pa.decl)
+				e.sums2[p.Name] = sumSlot{tag: ts, pay: pp, pay1: p1,
+					variants: sumVariantNames(shapes), shapes: shapes}
 			}
 		case abiFn:
 			ps = append(ps, "ptr %"+p.Name)
 			if p.Name != "_" {
 				e.fnEnv[p.Name] = fnValue{carrier: "%" + p.Name, abi: *pa.sig, typed: true}
+			}
+		case abiPrim:
+			// The parameter is the pointer itself; the name rides the
+			// prim environment, so a method call on it resolves exactly
+			// as it does on a primitive this frame constructed. The
+			// object stays rooted for the call's duration: the caller
+			// pushed its root when it made it, and that frame is live
+			// while the callee runs.
+			ps = append(ps, "ptr %"+p.Name)
+			if p.Name != "_" {
+				e.prims[p.Name] = "%" + p.Name
 			}
 		}
 	}
@@ -10804,8 +10872,19 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 		// directly (the M10b goldens nest fn results: double(double(n))).
 		// The M9b expression emitters stay call-free — the resolution is
 		// this argument position's, not those sets'.
+		//
+		// A parameter position is one of the places that names a sum
+		// (variantSite's list), so a prelude construction written at an
+		// argument reads its table out of the declared type exactly as
+		// one behind an annotation does. Every other family leaves the
+		// expectation unread — none of them accepts a variant — so it is
+		// passed only where the parameter is a sum.
 		if c, ok := a.(*ast.Call); ok {
-			res, ni := e.emitCall(c, nil)
+			var want ast.TypeRef
+			if abi.params[i].kind == abiSum {
+				want = abi.params[i].decl
+			}
+			res, ni := e.emitCall(c, want)
 			if ni != nil {
 				return callResult{}, ni
 			}
@@ -10834,6 +10913,23 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 					reg = e.emitRecCopy(reg, res.recKey)
 				}
 				ops = append(ops, "ptr "+reg)
+			case abiSum:
+				// A sum written at the argument position is a call too —
+				// `f(Some(1))` constructs where `f(x)` reads a slot — so it
+				// arrives here rather than in the arm below. The result's
+				// words are its three slots whether it was constructed or
+				// returned; both read the same way.
+				if res.kind != ckSum {
+					return callResult{}, e.bnd()
+				}
+				s := res.sum
+				ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false),
+					"i64 "+e.loadNum(s.pay1, false))
+			case abiPrim:
+				if res.kind != ckPrim {
+					return callResult{}, e.bnd()
+				}
+				ops = append(ops, "ptr "+res.i64)
 			default:
 				return callResult{}, e.bnd()
 			}
@@ -10874,16 +10970,31 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 			}
 			ops = append(ops, "ptr "+reg)
 		case abiSum:
+			// A bare name at a sum position is one of two things: a
+			// binding that holds a sum, or a variant with no payload —
+			// a construction that had no parentheses to arrive through
+			// the call arm above. The binding answers first, since a
+			// declaration shadows a variant name and that is the order
+			// variantSite keeps as well.
 			id, ok := a.(*ast.Ident)
 			if !ok {
 				return callResult{}, e.bnd()
 			}
-			s, ok := e.sums2[id.Name]
+			if s, is := e.sums2[id.Name]; is {
+				ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false),
+					"i64 "+e.loadNum(s.pay1, false))
+				break
+			}
+			idx, shapes, ok := e.variantSite(id.Name, abi.params[i].decl)
 			if !ok {
 				return callResult{}, e.bnd()
 			}
-			ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false),
-				"i64 "+e.loadNum(s.pay1, false))
+			res, ni := e.emitVariantCtor(shapes, idx, nil)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			ops = append(ops, "i64 "+e.loadNum(res.sum.tag, false), "i64 "+e.loadNum(res.sum.pay, false),
+				"i64 "+e.loadNum(res.sum.pay1, false))
 		case abiFn:
 			// The argument crosses as its carrier. A closure literal is
 			// emitted here (its captures frozen at this call site), a
@@ -10894,6 +11005,20 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 				return callResult{}, ni
 			}
 			ops = append(ops, "ptr "+fv.carrier)
+		case abiPrim:
+			// A chapter 18 object crosses as its own pointer. The
+			// expression set is the bound names: an object is made by a
+			// construction and held by a binding, never written inline —
+			// one written inline is a call, which the arm above took.
+			id, ok := a.(*ast.Ident)
+			if !ok {
+				return callResult{}, e.bnd()
+			}
+			ptr, ok := e.prims[id.Name]
+			if !ok {
+				return callResult{}, e.bnd()
+			}
+			ops = append(ops, "ptr "+ptr)
 		}
 	}
 	join := strings.Join(ops, ", ")

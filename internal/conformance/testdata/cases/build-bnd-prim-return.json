@@ -1,0 +1,16 @@
+{
+ "name": "build-bnd-prim-return",
+ "args": [
+  "build",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.concurrent as conc\n\npub type AppError = Failed(String)\n\nfn make() -> conc.Mutex<Int64> {\n    return conc.Mutex(0)\n}\n\npub fn main() -> Result<(), AppError> {\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 70,
+ "stdout": "",
+ "stderr": "we: function bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n"
+}
