@@ -351,6 +351,190 @@ test "nt rec" {
 	})
 }
 
+// A sum comparison reads the discriminants first. Two values that are not
+// the same variant share no payload: their words describe different
+// declarations, so the report names the two variants and the payload walk
+// is never reached; where the tags agree the walk dispatches on the tag
+// and each variant pays its own positions, named by the variant and then
+// by the declared index.
+func TestT10AssertEqualSumWalk(t *testing.T) {
+	ir, ni := t10Emit(t, `
+import std.test as st
+
+type Shape = Circle(Int64) | Rect(Int64, Int64) derives Eq
+
+test "sum" {
+    let a = Circle(1)
+    let b = Circle(2)
+    st.assertEqual(a, b)
+}
+`)
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	// One name constant per variant, interned once for the pair: both
+	// sides read the same table, so the report's two names are one pool
+	// entry per variant rather than one per side.
+	wantOrder(t, ir, `c"Circle\00"`, `c"Rect\00"`)
+	// A variant contributes its name before the index, so two variants
+	// with a first position each read as two positions — the root's own
+	// name is interned ahead of them, the dispatch following the report.
+	wantOrder(t, ir,
+		`c"Shape\00"`,
+		`c"Shape.Circle.0\00"`, `c"Shape.Rect.0\00"`, `c"Shape.Rect.1\00"`,
+	)
+	// The report for differing tags comes before the payload calls and
+	// ends its block: nothing a differing pair could have compared runs.
+	wantOrder(t, ir,
+		"call void @__we_assert_eq_variant_at(ptr ",
+		"call void @__we_assert_eq_i64_at(ptr ",
+	)
+	wantIR(t, ir, "unreachable", "the tag-differs block ends its block")
+}
+
+// The payload a variant declares is read through the slot's own words —
+// the same face a match arm binds, without the binding.
+func TestT10AssertEqualSumPayloadFaces(t *testing.T) {
+	cases := []struct {
+		name, decls, a, b string
+		want              []string
+	}{
+		{
+			"string payload",
+			"type Tag = Named(String) | Bare derives Eq\n",
+			"Named(\"ab\")", "Named(\"cd\")",
+			[]string{`c"Tag.Named.0\00"`, "call void @__we_assert_eq_str_at(ptr "},
+		},
+		{
+			"record payload",
+			"record P { x: Int64 } derives Eq\ntype Box = Hold(P) | Empty derives Eq\n",
+			"Hold(P { x: 1 })", "Hold(P { x: 2 })",
+			[]string{`c"Box.Hold.0.x\00"`, "call void @__we_assert_eq_i64_at(ptr "},
+		},
+		{
+			"payload position",
+			"type Pair = Both(Int64, Int64) | Neither derives Eq\n",
+			"Both(1, 2)", "Both(3, 4)",
+			[]string{`c"Pair.Both.0\00"`, `c"Pair.Both.1\00"`},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ir, ni := t10Emit(t, "import std.test as st\n\n"+c.decls+"\ntest \"p\" {\n    let a = "+c.a+
+				"\n    let b = "+c.b+"\n    st.assertEqual(a, b)\n}\n")
+			if ni != nil {
+				t.Fatalf("boundary: %s", ni.What)
+			}
+			for _, f := range c.want {
+				wantIR(t, ir, f, "the payload's face was not emitted")
+			}
+		})
+	}
+}
+
+// Positional payloads read their own words: the second Int64 of two is the
+// slot's other word, not a second read of the first. A walk that read one
+// word twice would still emit both positions and still name them — the
+// paths would be right and only the values wrong — so the check is on the
+// pointers the operands were loaded from, which is the reading bindArmWord
+// does and the one a second reader of the layout has to keep.
+func TestT10AssertEqualSumPositionReadsItsOwnWord(t *testing.T) {
+	ir, ni := t10Emit(t, `
+import std.test as st
+
+type Pair = Both(Int64, Int64) | Neither derives Eq
+
+test "pair" {
+    let a = Both(1, 2)
+    let b = Both(3, 4)
+    st.assertEqual(a, b)
+}
+`)
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	loaded := func(line string) (string, bool) {
+		const load = "load i64, ptr "
+		i := strings.Index(line, load)
+		if i < 0 {
+			return "", false
+		}
+		return strings.TrimRight(line[i+len(load):], " \t\r"), true
+	}
+	// A scalar leaf loads its two sides and then calls, in that order, so
+	// the two loads standing above a call are the words that call compares.
+	var from [][2]string
+	var last []string
+	for _, line := range strings.Split(ir, "\n") {
+		if p, ok := loaded(line); ok {
+			if last = append(last, p); len(last) > 2 {
+				last = last[1:]
+			}
+			continue
+		}
+		if !strings.Contains(line, "call void @__we_assert_eq_i64_at(ptr ") {
+			continue
+		}
+		if len(last) != 2 {
+			t.Fatalf("want two loads above %q, got %v", line, last)
+		}
+		from = append(from, [2]string{last[0], last[1]})
+		last = nil
+	}
+	if len(from) != 2 {
+		t.Fatalf("want the variant's two positions, got %d: %v", len(from), from)
+	}
+	if from[0] == from[1] {
+		t.Fatalf("both positions read the same words: %v", from[0])
+	}
+}
+
+// A sum that declares no clause has no generated equality to assert, and
+// a payload outside the leaf set stops the walk that would have read it.
+func TestT10AssertEqualSumBoundaries(t *testing.T) {
+	cases := []struct{ name, decls, a, b string }{
+		{"no clause", "type Shape = Circle(Int64) | Rect(Int64, Int64)\n", "Circle(1)", "Circle(2)"},
+		{"float payload", "type Box = Hold(Float64) | Drop(Float64) derives Eq\n", "Hold(1.5)", "Drop(2.5)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, ni := t10Emit(t, "import std.test as st\n\n"+c.decls+"\ntest \"s\" {\n    let a = "+c.a+
+				"\n    let b = "+c.b+"\n    st.assertEqual(a, b)\n}\n")
+			if ni == nil || ni.What != bndGenericFns {
+				t.Fatalf("want the residual row %q, got %v", bndGenericFns, ni)
+			}
+		})
+	}
+}
+
+// A sum reached as a call's result rather than as a construction is the
+// same face: the table rides the signature, and the slot carries it.
+func TestT10AssertEqualSumThroughAReturn(t *testing.T) {
+	ir, ni := t10Emit(t, `
+import std.test as st
+
+type Shape = Circle(Int64) | Dot derives Eq
+
+fn pick(n: Int64) -> Shape {
+    if n == 0 {
+        return Circle(1)
+    }
+    return Dot
+}
+
+test "sum ret" {
+    let a = pick(0)
+    let b = pick(1)
+    st.assertEqual(a, b)
+}
+`)
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantIR(t, ir, `c"Shape.Circle.0\00"`, "the return's table reached the walk")
+	wantIR(t, ir, "call void @__we_assert_eq_variant_at(ptr ", "the variants are reported")
+}
+
 // The mirror: the rows the check stage's own table enumerates, one for
 // one. The two stages decide the same domain — this is the test that says
 // so, and it is the one that would catch a widening on either side
@@ -386,6 +570,15 @@ func TestT10AssertEqualDomainMirror(t *testing.T) {
 		// tuple inside anything, so the domain stops where they do.
 		{"nested tuple", "", "((1, 2), 3)", "((1, 3), 3)", false},
 		{"newtype over a leaf", "newtype Id(Int64) derives Eq\n", "Id(1)", "Id(2)", true},
+		{"sum", "type S = C(Int64) | E(Int64) derives Eq\n", "C(1)", "C(2)", true},
+		{"sum variants differ", "type S = C(Int64) | E(Int64) derives Eq\n", "C(1)", "E(1)", true},
+		{"sum without a clause", "type S = C(Int64) | E(Int64)\n", "C(1)", "E(1)", false},
+		{"sum with a float payload", "type S = C(Float64) | E(Float64) derives Eq\n", "C(1.5)", "E(2.5)", false},
+		// A sum element stops at the aggregate's face rather than at the
+		// domain's: the aggregate stores a sum's three words and keeps no
+		// variant table to read them at. Like the nested tuple above, the
+		// row asks only whether the row is out.
+		{"sum in a tuple", "type S = C(Int64) | E(Int64) derives Eq\n", "(C(1), 1)", "(C(2), 1)", false},
 		{"list", "", "[1, 2]", "[1, 3]", false},
 	}
 	for _, c := range cases {
@@ -400,4 +593,74 @@ func TestT10AssertEqualDomainMirror(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A sum inside a tuple is the aggregate's boundary rather than the
+// domain's: the check stage admits it (the sum's leaves are in the set)
+// and the aggregate stores its three words, but the element face the walk
+// reads a tuple through carries the kind, the key, and the words — not
+// the variant table, which is what says what the tag's payload holds. So
+// the walk ends where the shape it needs ends, as it does at a nested
+// tuple, and the row is the residual one.
+func TestT10AssertEqualSumElementBoundary(t *testing.T) {
+	_, ni := t10Emit(t, `
+import std.test as st
+
+type Shape = Circle(Int64) | Rect(Int64, Int64) derives Eq
+
+test "sum el" {
+    let a = (Circle(1), 1)
+    let b = (Circle(2), 1)
+    st.assertEqual(a, b)
+}
+`)
+	if ni == nil || ni.What != bndGenericFns {
+		t.Fatalf("want the residual row %q, got %v", bndGenericFns, ni)
+	}
+}
+
+// A prelude sum declares nothing for a clause to sit on, so the walk
+// stops on it however the value got there — a parameter carries the
+// table its signature classified it against, and the table is all the
+// slot has. The two Option faces are the same answer chapter 10 gave the
+// hand-written impl (E0822).
+func TestT10AssertEqualPreludeSumsStayOut(t *testing.T) {
+	_, ni := t10Emit(t, `
+import std.test as st
+
+fn same(a: Option<Int64>, b: Option<Int64>) {
+    st.assertEqual(a, b)
+}
+
+test "prelude" {
+    same(Some(1), Some(2))
+}
+`)
+	if ni == nil || ni.What != bndGenericFns {
+		t.Fatalf("want the residual row %q, got %v", bndGenericFns, ni)
+	}
+}
+
+// The same parameter face on a sum that does declare the clause: the
+// table rides the signature and the slot, so a comparison inside the
+// callee walks exactly as one on a construction does.
+func TestT10AssertEqualSumParameter(t *testing.T) {
+	ir, ni := t10Emit(t, `
+import std.test as st
+
+type Shape = Circle(Int64) | Rect(Int64, Int64) derives Eq
+
+fn same(a: Shape, b: Shape) {
+    st.assertEqual(a, b)
+}
+
+test "param" {
+    same(Circle(1), Circle(2))
+}
+`)
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantIR(t, ir, `c"Shape.Circle.0\00"`, "the parameter's table reached the walk")
+	wantIR(t, ir, "call void @__we_assert_eq_variant_at(ptr ", "the variants are reported")
 }

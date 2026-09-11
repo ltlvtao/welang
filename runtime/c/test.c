@@ -951,3 +951,15 @@ void __we_assert_eq_str_at(const char *path, const char *gp, long long gl,
         eq_fail(path, "got \"%.*s\", want \"%.*s\"", (int)gl, gp, (int)wl, wp);
     }
 }
+
+// The sum row: two comparands of the same sum type whose discriminants
+// differ. It is called only where the comparison has already established
+// that they do — the caller reads the two tags, and this is the differing
+// edge — so it reports unconditionally, and the emitted call is declared
+// noreturn because the edge it sits on has nothing on its other side (the
+// payload words of two different variants are not one field read twice).
+// The variant names carry no quotes: they are names the compiler wrote,
+// not values the program holds.
+void __we_assert_eq_variant_at(const char *path, const char *got, const char *want) {
+    eq_fail(path, "got %s, want %s", got, want);
+}

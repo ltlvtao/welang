@@ -142,6 +142,13 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_assert_eq_u64_at", "declare void @__we_assert_eq_u64_at(ptr, i64, i64)"},
 	{"__we_assert_eq_bool_at", "declare void @__we_assert_eq_bool_at(ptr, i64, i64)"},
 	{"__we_assert_eq_str_at", "declare void @__we_assert_eq_str_at(ptr, ptr, i64, ptr, i64)"},
+	// The sum rows: two comparands whose discriminants differ have no
+	// payload in common, so what the comparison reports is the pair of
+	// variant names. The call is made only where the tags are known to
+	// differ, and it reports unconditionally — which is what the noreturn
+	// says, and why the differing edge's block ends at the call and the
+	// payload dispatch runs only on the agreeing edge.
+	{"__we_assert_eq_variant_at", "declare void @__we_assert_eq_variant_at(ptr, ptr, ptr) noreturn"},
 	{"__we_advance", "declare void @__we_advance(i64)"},
 	{"__we_test_begin", "declare void @__we_test_begin()"},
 	{"__we_test_end", "declare void @__we_test_end()"},
@@ -379,9 +386,15 @@ func aggTyp(elems []tupleElem) string {
 type emitter struct {
 	sums    map[string]map[string][]ast.TypeRef // keyed "<module>.<sum>"
 	sumsOrd map[string][]string                 // sum key -> variant names, decl order
-	records map[string]*ast.RecordDecl          // keyed "<module>.<record>"
-	order   []recRef
-	mainRet ast.TypeRef
+	// sumDecls is the declaration the two tables above are views of, kept
+	// whole for the one question a payload table cannot answer: whether
+	// the sum derives Eq. It is the sum-side twin of records — chapter 10
+	// makes the clause the whole of composite equality, so a comparison
+	// re-checks it at the declaration rather than trusting the gate.
+	sumDecls map[string]*ast.SumDecl
+	records  map[string]*ast.RecordDecl // keyed "<module>.<record>"
+	order    []recRef
+	mainRet  ast.TypeRef
 
 	strEnv map[string]strBinding
 	gcEnv  map[string]gcBinding
@@ -839,6 +852,17 @@ type sumSlot struct {
 	pay      string   // i64 alloca holding the payload's first word
 	pay1     string   // i64 alloca holding the payload's second word
 	variants []string // return value → variant name, index-addressed
+	// key is the module-qualified name of the sum the slot holds, where a
+	// declaration gave it one — "Option" and "Result" for the prelude,
+	// which every table can name, and "" for the runtime faces (receive,
+	// await, the timeout scope, the error sum a Result's Err aliases),
+	// which produced no source-level sum at all. The shapes below say
+	// what each variant carries; the key says which declaration those
+	// variants belong to, and that is a question the table alone cannot
+	// answer: chapter 10 makes composite equality the generated
+	// .equals(), so a comparison has to reach the declaration to see
+	// whether one was derived.
+	key string
 	// shapes is variants' other half: what each variant's payload IS, one
 	// entry per declared position. A match arm that binds a payload reads
 	// it through this — the slot alone cannot say whether the payload word
@@ -1012,6 +1036,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 	e := &emitter{
 		sums:        make(map[string]map[string][]ast.TypeRef),
 		sumsOrd:     make(map[string][]string),
+		sumDecls:    make(map[string]*ast.SumDecl),
 		records:     make(map[string]*ast.RecordDecl),
 		strEnv:      make(map[string]strBinding),
 		gcEnv:       make(map[string]gcBinding),
@@ -1069,6 +1094,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				key := m.Key + "." + d.Name
 				e.sums[key] = variants
 				e.sumsOrd[key] = names
+				e.sumDecls[key] = d
 			case *ast.FnDecl:
 				if len(d.TypeParams) != 0 {
 					return "", bndGeneric()
@@ -2783,8 +2809,8 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		// variant names its own sum — chapter 9 puts variants in the
 		// module's one name space, so a bare name picks out exactly one
 		// declaration and the tag and the payload shape both come from it.
-		if idx, shapes, ok := e.variantSite(id.Name, typ); ok {
-			return e.emitVariantCtor(shapes, idx, call.Args)
+		if key, idx, shapes, ok := e.variantSite(id.Name, typ); ok {
+			return e.emitVariantCtor(key, shapes, idx, call.Args)
 		}
 		// The fused Result space spells its error half as a construction
 		// of its own — `Err(Failed(1, 2))` is one value, and the variant
@@ -2794,7 +2820,7 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		if id.Name == "Err" && len(call.Args) == 1 && typ != nil {
 			if shapes, ok := e.variantShapes(e.derefNewtype(typ)); ok && isResultShapes(shapes) {
 				if idx, args, ok := e.sumCtor(shapes, call.Args[0]); ok {
-					return e.emitVariantCtor(shapes, idx, args)
+					return e.emitVariantCtor("Result", shapes, idx, args)
 				}
 			}
 		}
@@ -3013,7 +3039,7 @@ func (e *emitter) emitSumCall(sym, ptr string, variants []string) (callResult, *
 // it the same way. A variant whose payload does not fill both words
 // stores literal zero into the rest, which is what keeps the slot's
 // shape independent of which variant was built.
-func (e *emitter) emitVariantCtor(shapes []sumVariantShape, idx int, args []ast.Expr) (callResult, *NotImplemented) {
+func (e *emitter) emitVariantCtor(key string, shapes []sumVariantShape, idx int, args []ast.Expr) (callResult, *NotImplemented) {
 	words, ni := e.sumPayWords(shapes[idx], args)
 	if ni != nil {
 		return callResult{}, ni
@@ -3030,7 +3056,7 @@ func (e *emitter) emitVariantCtor(shapes []sumVariantShape, idx int, args []ast.
 	e.inst(fmt.Sprintf("store i64 %s, ptr %s", wordOr0(words, 1), p1))
 	return callResult{kind: ckSum, sum: sumSlot{
 		tag: ts, pay: pp, pay1: p1,
-		variants: sumVariantNames(shapes), shapes: shapes,
+		variants: sumVariantNames(shapes), shapes: shapes, key: key,
 	}}, nil
 }
 
@@ -6426,6 +6452,16 @@ func (e *emitter) bindArmPayload(slot sumSlot, tag string, pv *ast.PatVariant) *
 			e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", shift, ts))
 			// The payload words are the outer slot's: the error sum
 			// aliases them (the fusion spends no second pair on E).
+			//
+			// The key is deliberately empty, and it is not a gap: the
+			// inner sum E is a name the outer declaration carried, and
+			// the slot that reached here no longer holds it — the fusion
+			// erased which sum the tail came from. A comparison reads the
+			// empty key as what it is (no reachable declaration) and
+			// stops, which is the same answer E's clause would give it
+			// here: a Result's Err half is never a comparand, because the
+			// prelude declares no Eq and the outer sum's tag space is not
+			// E's.
 			e.sums2[b.Name] = sumSlot{
 				tag: ts, pay: slot.pay, pay1: slot.pay1,
 				variants: sumVariantNames(shapes[1:]), shapes: shapes[1:],
@@ -6637,13 +6673,23 @@ type eqFace struct {
 	op   string
 	// abiStr: the two-word pair.
 	strP, strL string
-	// abiGc: the record's handle and its module-qualified key.
-	reg string
+	// abiGc: the record's handle. abiSum: the slot's three words —
+	// discriminant, then the payload pair — as the addresses the walk
+	// loads from, because a sum's payload is read at the tag its value
+	// turned out to carry rather than at a fixed offset.
+	reg            string
+	tag, pay, pay1 string
+	// key names the composite the face is, module-qualified: what the
+	// walk re-checks a clause at, what a report spells, and what two
+	// faces have to agree on to be compared at all.
 	key string
 	// abiTuple: the aggregate that is the tuple value, and the shapes its
 	// elements were classified with (the same pair a tuple binding keeps,
 	// because a tuple's shape is a static fact its value does not carry).
 	elems []tupleElem
+	// abiSum: the declaration's variant table, which says what each tag's
+	// payload is. A sum's shape is static in the same way a tuple's is.
+	shapes []sumVariantShape
 }
 
 // eqLeafDomain is the domain one scalar comparand renders in, and whether
@@ -6713,13 +6759,16 @@ func (e *emitter) eqPathArg(path string) string {
 
 // emitAssertEqual compares two comparands structurally (design D9). The
 // check stage's domain gate admits the leaf set and the composites that
-// declare Eq, so what arrives here is a leaf or a record (the commits that
-// widen the face add the tuple and the sum). Both faces resolve before
-// anything emits — a trial emission could leave a call twice in the
-// stream — and the walk is straight-line calls in declaration order, which
-// is the whole of the comparison's short circuit: the failure tail those
-// helpers ride is noreturn, so the first leaf that differs is the last one
-// whose call runs.
+// declare Eq — records, sums, and newtypes with their clauses, and tuples
+// after their elements — so what arrives here is a leaf or one of those
+// four, and the walk descends until it reaches leaves. Both faces resolve
+// before anything emits — a trial emission could leave a call twice in the
+// stream — and the walk is calls in declaration order, which is the whole
+// of the comparison's short circuit: the failure tail those helpers ride
+// is noreturn, so the first leaf that differs is the last one whose call
+// runs. Only a sum adds blocks to that walk, and for a reason the others
+// have not got: its leaves are not at fixed offsets from its own address,
+// so which of them exist is a question the running value answers.
 func (e *emitter) emitAssertEqual(args []ast.Expr) (callResult, *NotImplemented) {
 	if len(args) != 2 {
 		return callResult{}, e.bnd()
@@ -6758,8 +6807,8 @@ func (e *emitter) eqFaceOf(x ast.Expr) (eqFace, *NotImplemented) {
 		if t, ok := e.tupEnv[v.Name]; ok {
 			return eqFace{kind: abiTuple, reg: t.ptr, elems: t.elems}, nil
 		}
-		if _, ok := e.sums2[v.Name]; ok {
-			return eqFace{}, bndGeneric() // T10-3 widens sums
+		if s, ok := e.sums2[v.Name]; ok {
+			return e.sumFace(s)
 		}
 		// A module-level binding is not a local: chapter 6 gives an inner
 		// binding the name, and one the body does not hold is the global's.
@@ -6838,8 +6887,25 @@ func (e *emitter) faceOfResult(res callResult) (eqFace, *NotImplemented) {
 			return eqFace{}, bndGeneric()
 		}
 		return eqFace{kind: abiI64, leaf: k, op: res.i64}, nil
+	case ckSum:
+		return e.sumFace(res.sum)
 	}
 	return eqFace{}, bndGeneric()
+}
+
+// sumFace reads a sumSlot as a comparison face. The slot has to carry
+// both halves of the answer: the table says what the variants' payloads
+// are, and the key says which declaration the table came from — which is
+// what the walk re-checks the clause through. A slot with no table at all
+// is a runtime face (receive, await, the timeout scope) that produced no
+// source-level sum, and one with no key is the error sum a Result's Err
+// aliases; both are sums the language never asks an equality of, and the
+// walk stops at the same row as a composite that declares nothing.
+func (e *emitter) sumFace(s sumSlot) (eqFace, *NotImplemented) {
+	if s.key == "" || s.shapes == nil {
+		return eqFace{}, bndGeneric()
+	}
+	return eqFace{kind: abiSum, key: s.key, tag: s.tag, pay: s.pay, pay1: s.pay1, shapes: s.shapes}, nil
 }
 
 // emitEqCompare emits one comparison — two faces at one position — and
@@ -6864,6 +6930,8 @@ func (e *emitter) emitEqCompare(a, b eqFace, path string, w eqWalk) *NotImplemen
 		return e.emitEqRecord(a, b, path, w)
 	case abiTuple:
 		return e.emitEqTuple(a, b, path, w)
+	case abiSum:
+		return e.emitEqSum(a, b, path, w)
 	}
 	return bndGeneric()
 }
@@ -7020,12 +7088,191 @@ func (e *emitter) emitEqTuple(a, b eqFace, path string, w eqWalk) *NotImplemente
 			}
 		default:
 			// A double element — the leaf the clause accepts and the
-			// assertion does not — a sum element, which T10-3 widens, and
-			// every shape the aggregate has no row for.
+			// assertion does not — and the sum element, which the check
+			// stage admits and this walk does not reach: a sum's payload
+			// is read at the tag its value carries, and the table that
+			// says what each tag holds is a fact of the declaration the
+			// element face does not carry (an element keeps its kind, its
+			// key, and its words, and the words are what the aggregate
+			// stores). The walk ends where the shape it needs ends, the
+			// same way it ends at a nested tuple.
 			return bndGeneric()
 		}
 	}
 	return nil
+}
+
+// emitEqSum walks one sum pair. The discriminant is read first, because
+// it decides whether the two values have a payload in common at all: two
+// different variants are two different declarations, and their payload
+// words are not one field read twice. So the tags are compared, the
+// differing edge reports the two names the runtime values turned out to
+// carry, and the agreeing edge dispatches on the tag — one block per
+// variant, each walking that variant's declared positions and joining
+// where the comparison goes on.
+//
+// This is the one family whose walk has control flow, and the blocks are
+// why: the payload is read at the variant the value turned out to be, so
+// which positions exist is a question only the running value answers.
+// Every other family is straight-line, and the short circuit there is the
+// noreturn tail itself.
+func (e *emitter) emitEqSum(a, b eqFace, path string, w eqWalk) *NotImplemented {
+	if eqTooDeep(path) {
+		return bndGeneric()
+	}
+	if a.key != b.key || len(a.shapes) != len(b.shapes) {
+		return bndGeneric()
+	}
+	decl, ok := e.sumDecls[a.key]
+	if !ok || !derivesEq(decl.Derives) {
+		return bndGeneric()
+	}
+	if w.seen[a.key] {
+		return bndGeneric()
+	}
+	w.seen[a.key] = true
+	defer delete(w.seen, a.key)
+
+	ta := e.loadNum(a.tag, false)
+	tb := e.loadNum(b.tag, false)
+	// The names are interned once for the pair: the two sides read the
+	// same table (the keys agree), so one pool entry per variant names
+	// both reports.
+	names := e.eqVariantNames(a.shapes)
+	n := e.blocks
+	e.blocks++
+	diffL := fmt.Sprintf("eqsd%d", n)
+	sameL := fmt.Sprintf("eqss%d", n)
+	payL := fmt.Sprintf("eqsp%d", n)
+	same := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %s", same, ta, tb))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", same, sameL, diffL))
+	e.label(diffL)
+	e.use("__we_assert_eq_variant_at")
+	e.inst(fmt.Sprintf("call void @__we_assert_eq_variant_at(ptr %s, ptr %s, ptr %s)",
+		e.eqPathArg(path), e.eqVariantNameOp(ta, names), e.eqVariantNameOp(tb, names)))
+	// The report never returns, so the differing pair's payload words —
+	// which describe the other declaration's variant — are never read.
+	e.inst("unreachable")
+	e.label(sameL)
+
+	// The dispatch tests the tag against the table's indices, one block
+	// per step, and the last variant is what the chain falls through to: a
+	// tag outside the table is not a value the language can make, since
+	// the table IS the tag space. A one-variant sum has nothing to test.
+	last := len(a.shapes) - 1
+	variantL := func(i int) string { return fmt.Sprintf("eqsv%d_%d", n, i) }
+	if last == 0 {
+		e.inst(fmt.Sprintf("br label %%%s", variantL(0)))
+	}
+	for i := 0; i < last; i++ {
+		if i > 0 {
+			e.label(fmt.Sprintf("eqst%d_%d", n, i))
+		}
+		c := e.value()
+		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %d", c, ta, i))
+		fall := variantL(last)
+		if i+1 < last {
+			fall = fmt.Sprintf("eqst%d_%d", n, i+1)
+		}
+		e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, variantL(i), fall))
+	}
+	for i, sh := range a.shapes {
+		e.label(variantL(i))
+		vp := eqPathJoin(path, sh.name)
+		if ni := e.emitEqSumVariant(sh, vp, a, b, w); ni != nil {
+			return ni
+		}
+		if !e.diverged {
+			e.inst(fmt.Sprintf("br label %%%s", payL))
+		}
+	}
+	e.label(payL)
+	return nil
+}
+
+// emitEqSumVariant walks one variant's declared payload positions. The
+// reads mirror bindArmWord's — the same words, in the same order, read
+// the same way — because a match arm's binding and the comparison are two
+// readers of one layout, and a slot that bound a payload one way and
+// compared it another would be two answers to one question.
+//
+// A `()` position contributes no word and nothing to compare: chapter 8
+// has one unit value, so two of them are equal wherever they were
+// written.
+func (e *emitter) emitEqSumVariant(sh sumVariantShape, vp string, a, b eqFace, w eqWalk) *NotImplemented {
+	word := 0
+	for i, p := range sh.pay {
+		fp := eqPathJoin(vp, strconv.Itoa(i))
+		switch p.kind {
+		case abiVoid:
+		case abiI64:
+			k, ok := eqLeafDomain(baseStrKind(p.typ))
+			if !ok {
+				return bndGeneric()
+			}
+			if ni := e.emitEqScalarLeaf(fp, k,
+				e.loadNum(eqSumWord(a, word), false), e.loadNum(eqSumWord(b, word), false)); ni != nil {
+				return ni
+			}
+		case abiStr:
+			if ni := e.emitEqStrLeaf(fp,
+				e.wordPtr(e.loadNum(a.pay, false)), e.loadNum(a.pay1, false),
+				e.wordPtr(e.loadNum(b.pay, false)), e.loadNum(b.pay1, false)); ni != nil {
+				return ni
+			}
+		case abiGc:
+			sa := eqFace{kind: abiGc, key: p.key, reg: e.wordPtr(e.loadNum(eqSumWord(a, word), false))}
+			sb := eqFace{kind: abiGc, key: p.key, reg: e.wordPtr(e.loadNum(eqSumWord(b, word), false))}
+			if ni := e.emitEqRecord(sa, sb, fp, w); ni != nil {
+				return ni
+			}
+		default:
+			// abiDouble — the leaf the clause accepts and the assertion
+			// does not — and every family the payload budget already
+			// refuses.
+			return bndGeneric()
+		}
+		word += len(abiWordTypes(p))
+	}
+	return nil
+}
+
+// eqSumWord is the slot word a payload position at word offset w lives in
+// — the same pair bindArmWord reads, which is what holds a payload to two
+// words in the first place.
+func eqSumWord(f eqFace, w int) string {
+	if w == 1 {
+		return f.pay1
+	}
+	return f.pay
+}
+
+// eqVariantNames interns one sum's variant names as the C strings a
+// report spells them with. Their pool index is the tag, which is the same
+// fact the shape table's slice position carries.
+func (e *emitter) eqVariantNames(shapes []sumVariantShape) []string {
+	ops := make([]string, len(shapes))
+	for i, s := range shapes {
+		ops[i] = e.cstr("v", s.name, "\\00")
+	}
+	return ops
+}
+
+// eqVariantNameOp is the name a tag turned out to name: a select chain
+// over the table's indices, the last variant being what the chain falls
+// through to. That tail is a spelling and not a case — a tag outside the
+// table is not a value the language can make.
+func (e *emitter) eqVariantNameOp(tag string, names []string) string {
+	op := names[len(names)-1]
+	for i := len(names) - 2; i >= 0; i-- {
+		c := e.value()
+		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %d", c, tag, i))
+		s := e.value()
+		e.inst(fmt.Sprintf("%%%s = select i1 %%%s, ptr %s, ptr %s", s, c, names[i], op))
+		op = "%" + s
+	}
+	return op
 }
 
 // emitQuestion emits `expr?`: the sum's Err branch runs the error tail —
@@ -9693,37 +9940,42 @@ func (e *emitter) payloadShape(name string, payload []ast.TypeRef) (sumVariantSh
 // declared return of a fn, a parameter's type. That is what typ is, and
 // a prelude construction in a position that names no sum stays at the
 // boundary rather than guessing one.
-func (e *emitter) variantSite(name string, typ ast.TypeRef) (int, []sumVariantShape, bool) {
+func (e *emitter) variantSite(name string, typ ast.TypeRef) (string, int, []sumVariantShape, bool) {
 	// The prelude answers first where a position named it: a local
 	// declaration may shadow a prelude name (chapter 15's prelude is an
-	// implicit import, and the innermost binding wins).
+	// implicit import, and the innermost binding wins). A prelude sum has
+	// no declaration in any module's table, and the key it reports says
+	// so — it names the prelude rather than naming nothing, which is what
+	// lets a reader of the slot tell "a sum with no clause" from "no sum
+	// at all".
 	if typ != nil {
 		if n, ok := e.derefNewtype(typ).(*ast.NamedType); ok && n.Qual == "" {
 			prelude := (n.Name == "Option" && len(n.Args) == 1) || (n.Name == "Result" && len(n.Args) == 2)
 			if prelude {
 				shapes, ok := e.variantShapes(n)
 				if !ok {
-					return 0, nil, false
+					return "", 0, nil, false
 				}
 				if idx := shapeIndexOf(shapes, name); idx >= 0 {
-					return idx, shapes, true
+					return n.Name, idx, shapes, true
 				}
-				return 0, nil, false
+				return "", 0, nil, false
 			}
 		}
 	}
-	if shapes, ok := e.localVariantShapes(name); ok {
+	if key, shapes, ok := e.localVariantShapes(name); ok {
 		idx := shapeIndexOf(shapes, name)
-		return idx, shapes, true
+		return key, idx, shapes, true
 	}
-	return 0, nil, false
+	return "", 0, nil, false
 }
 
 // localVariantShapes finds the sum the walked module declares a variant
-// of that name in. The module's sums are few and the answer is a
-// compile-time fact, so the scan is the whole lookup — there is no
-// reverse index to keep in step with the declaration tables.
-func (e *emitter) localVariantShapes(name string) ([]sumVariantShape, bool) {
+// of that name in, and the key its declaration lives under. The module's
+// sums are few and the answer is a compile-time fact, so the scan is the
+// whole lookup — there is no reverse index to keep in step with the
+// declaration tables.
+func (e *emitter) localVariantShapes(name string) (string, []sumVariantShape, bool) {
 	prefix := e.curKey + "."
 	for key := range e.sumsOrd {
 		if !strings.HasPrefix(key, prefix) {
@@ -9734,10 +9986,10 @@ func (e *emitter) localVariantShapes(name string) ([]sumVariantShape, bool) {
 			continue
 		}
 		if shapeIndexOf(shapes, name) >= 0 {
-			return shapes, true
+			return key, shapes, true
 		}
 	}
-	return nil, false
+	return "", nil, false
 }
 
 // isSumType answers whether a payload position names a sum, without
@@ -10567,7 +10819,7 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 				// two cannot disagree.
 				shapes, _ := e.variantShapes(pa.decl)
 				e.sums2[p.Name] = sumSlot{tag: ts, pay: pp, pay1: p1,
-					variants: sumVariantNames(shapes), shapes: shapes}
+					variants: sumVariantNames(shapes), shapes: shapes, key: pa.key}
 			}
 		case abiFn:
 			ps = append(ps, "ptr %"+p.Name)
@@ -11466,11 +11718,11 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 					"i64 "+e.loadNum(s.pay1, false))
 				break
 			}
-			idx, shapes, ok := e.variantSite(id.Name, abi.params[i].decl)
+			key, idx, shapes, ok := e.variantSite(id.Name, abi.params[i].decl)
 			if !ok {
 				return callResult{}, e.bnd()
 			}
-			res, ni := e.emitVariantCtor(shapes, idx, nil)
+			res, ni := e.emitVariantCtor(key, shapes, idx, nil)
 			if ni != nil {
 				return callResult{}, ni
 			}
@@ -11560,7 +11812,7 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 		}
 		return callResult{kind: ckSum, sum: sumSlot{
 			tag: ts, pay: pp, pay1: p1,
-			variants: abi.variants, shapes: abi.retShapes,
+			variants: abi.variants, shapes: abi.retShapes, key: abi.retKey,
 		}}, nil
 	}
 	return callResult{}, e.bnd()

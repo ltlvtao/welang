@@ -1,0 +1,16 @@
+{
+  "name": "test-asserteq-sum-pass",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\ntype Shape = Circle(Int64) | Rect(Int64, Int64) derives Eq\n\ntest \"sum\" {\n    let a = Rect(1, 2)\n    let b = Rect(1, 2)\n    st.assertEqual(a, b)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: sum (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
+}

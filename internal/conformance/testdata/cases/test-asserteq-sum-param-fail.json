@@ -1,0 +1,16 @@
+{
+  "name": "test-asserteq-sum-param-fail",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\ntype Shape = Circle(Int64) | Rect(Int64, Int64) derives Eq\n\nfn same(a: Shape, b: Shape) {\n    st.assertEqual(a, b)\n}\n\ntest \"param\" {\n    same(Circle(1), Circle(2))\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: param (0ms)\n  assertion failed: at Shape.Circle.0: got 1, want 2\ntotal 1, passed 0, failed 1 (0ms)\n",
+  "stderr": ""
+}

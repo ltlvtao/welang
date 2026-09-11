@@ -1,0 +1,16 @@
+{
+  "name": "test-asserteq-sum-three-variants-fail",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\ntype Shape = Circle(Int64) | Rect(Int64, Int64) | Tri(Int64) derives Eq\n\ntest \"three variants\" {\n    let a = Tri(7)\n    let b = Tri(8)\n    st.assertEqual(a, b)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: three variants (0ms)\n  assertion failed: at Shape.Tri.0: got 7, want 8\ntotal 1, passed 0, failed 1 (0ms)\n",
+  "stderr": ""
+}

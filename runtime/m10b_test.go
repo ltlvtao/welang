@@ -282,6 +282,7 @@ void __we_assert_eq_i64_at(const char *path, long long got, long long want);
 void __we_assert_eq_u64_at(const char *path, unsigned long long got, unsigned long long want);
 void __we_assert_eq_bool_at(const char *path, long long got, long long want);
 void __we_assert_eq_str_at(const char *path, const char *gp, long long gl, const char *wp, long long wl);
+void __we_assert_eq_variant_at(const char *path, const char *got, const char *want);
 
 static long long f_true(void *env) { __we_assert_true(0); return 0; }
 static long long f_false(void *env) { __we_assert_false(1); return 0; }
@@ -305,6 +306,12 @@ static long long f_eq_u64(void *env) { __we_assert_eq_u64_at(0, 1844674407370955
 static long long f_eq_bool(void *env) { __we_assert_eq_bool_at("P.flag", 1, 0); return 0; }
 static long long f_eq_str_at(void *env) {
     __we_assert_eq_str_at("P.name", "ab", 2, "cd", 2);
+    return 0;
+}
+// The sum row reports the variants unquoted: they are names the compiler
+// wrote into the position, not values the program holds.
+static long long f_eq_variant(void *env) {
+    __we_assert_eq_variant_at("Shape", "Circle", "Rect");
     return 0;
 }
 static long long f_pass2(void *env) {
@@ -332,6 +339,7 @@ int we_main(void) {
     report("equ64:", f_eq_u64);
     report("eqbool:", f_eq_bool);
     report("eqstrat:", f_eq_str_at);
+    report("eqvar:", f_eq_variant);
     report("pass2:", f_pass2);
     return 0;
 }
@@ -538,6 +546,7 @@ func TestM10bAssertHelpers(t *testing.T) {
 			"equ64: tag=1 msg=assertion failed: got 18446744073709551615, want 6\n"+
 			"eqbool: tag=1 msg=assertion failed: at P.flag: got true, want false\n"+
 			"eqstrat: tag=1 msg=assertion failed: at P.name: got \"ab\", want \"cd\"\n"+
+			"eqvar: tag=1 msg=assertion failed: at Shape: got Circle, want Rect\n"+
 			"pass2: tag=0 msg=-\n")
 }
 
