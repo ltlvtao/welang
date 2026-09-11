@@ -49,13 +49,15 @@ type NotImplemented struct{ What string }
 // registration.
 const (
 	bndStdModules = "standard-library modules (chapter 15)"
-	// assertEqual's domain face (M10a design D8): the scalar comparanda
-	// are checked here; the Eq-generic widening over composites is the
-	// standard library's own change, not this checker's.
-	bndAssertEqDomain = "assertEqual beyond the scalar, Bool, and String domains (the Eq-generic face is the standard library's own widening)"
-	bndDomainGap      = "arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)"
-	bndArityGap       = "calls with an argument count the callee does not declare (spec gap; roadmap follow-up)"
-	bndCalleeGap      = "calls on values that are not functions (spec gap; roadmap follow-up)"
+	// T10 retires this stage's assertEqual-domain word (design D9): the
+	// comparand domain is now inEqDomain, and a comparand outside it stops
+	// at the same residual row code generation's own stops use, so the two
+	// stages report one vocabulary. The wording is code generation's,
+	// verbatim — the two tables have always been copies.
+	bndGenericFns = "generic functions in code generation (monomorphization is the B-track codegen-full widening)"
+	bndDomainGap  = "arithmetic and comparisons beyond the ratified numeric and Bool domains (spec gap; roadmap follow-up)"
+	bndArityGap   = "calls with an argument count the callee does not declare (spec gap; roadmap follow-up)"
+	bndCalleeGap  = "calls on values that are not functions (spec gap; roadmap follow-up)"
 	// The two residual M5 boundary rows: a module-level destructure stops
 	// at the composite boundary (module initialization order is the module
 	// system's, M6), and walkItems keeps the control-flow row as its
@@ -2754,13 +2756,15 @@ func (c *checker) concurrentCtorCall(sum *sumInfo, x *ast.Call, expected Type) T
 // assertEqualCall types one std.test equality assertion (st.assertEqual(got,
 // want), M10a design D8): the first argument fixes T, the second must be
 // the same type — sameType, chapter 20's word for the pair — and T's
-// domain is the scalar one: the eight integer types, Bool, String. Beyond
-// that domain the face is an honest boundary, not a judgment: chapter
-// 10's Eq rides derives alone (base-type impl heads are E0811, manual
-// impls E0822, composite equality is the generated .equals()), so an
-// Eq-bound generic here would need a builtin-instances face the spec
-// does not fix — and would widen every `fn f<T where T: Eq>` in the same
-// stroke. The widening is the standard library's own change to make.
+// domain is inEqDomain: the scalar set closed over the composites that
+// declare Eq. The closure is what chapter 10's ruling leaves available —
+// composite equality is the generated .equals(), never the operator, so
+// a composite reaches this face exactly when it generates one, and its
+// components reach it exactly when they do. A tuple, which has no
+// declaration to carry a clause, follows its elements. Beyond that the
+// face stays an honest boundary: an Eq-bound generic would need a
+// builtin-instances face the spec does not fix, and would widen every
+// `fn f<T where T: Eq>` in the same stroke.
 // Unit return, no effect segment: an assertion observes, it never
 // performs.
 func (c *checker) assertEqualCall(x *ast.Call) Type {
@@ -2768,8 +2772,8 @@ func (c *checker) assertEqualCall(x *ast.Call) Type {
 		c.bnd(bndArityGap)
 	}
 	got := c.typeOf(x.Args[0], nil)
-	if b, ok := got.(baseType); !ok || !assertEqScalar[b] {
-		c.bnd(bndAssertEqDomain)
+	if !inEqDomain(got, map[*recordInfo]bool{}, map[*sumInfo]bool{}, map[*newtypeInfo]bool{}) {
+		c.bnd(bndGenericFns)
 	}
 	want := c.typeOf(x.Args[1], got)
 	if !sameType(want, got) {
@@ -2781,13 +2785,74 @@ func (c *checker) assertEqualCall(x *ast.Call) Type {
 	return unitType{}
 }
 
-// assertEqScalar is assertEqual's domain (M10a design D8): the eight
+// assertEqScalar is assertEqual's leaf set (M10a design D8): the eight
 // integer types, Bool, and String — the comparanda whose equality the
 // language fixes without an Eq instance.
 var assertEqScalar = map[baseType]bool{
 	"Int64": true, "Int32": true, "Int16": true, "Int8": true,
 	"UInt64": true, "UInt32": true, "UInt16": true, "UInt8": true,
 	"Bool": true, "String": true,
+}
+
+// inEqDomain is assertEqual's comparand domain (T10 design D9): the leaf
+// set closed over the composites that declare Eq. A record, sum, or
+// newtype is in the domain when its clause names Eq and every component
+// is; a tuple has no declaration to carry a clause and follows its
+// elements. The visiting sets hold the declarations on the current path,
+// as carries does — a cycle is not in the domain, since nothing in it
+// would terminate a comparison.
+//
+// It is deliberately not carriesType (design D9): that predicate is
+// E0823's judgement over the Eq capability — it admits every base type
+// (Float64, Rune, Bytes included) and refuses tuples outright, both of
+// which the comparand domain decides the other way, and widening it
+// would move a spec face rather than this stage's.
+func inEqDomain(t Type, visiting map[*recordInfo]bool, sumVisiting map[*sumInfo]bool, ntVisiting map[*newtypeInfo]bool) bool {
+	switch x := t.(type) {
+	case baseType:
+		return assertEqScalar[x]
+	case tupleType:
+		for _, e := range x.elems {
+			if !inEqDomain(e, visiting, sumVisiting, ntVisiting) {
+				return false
+			}
+		}
+		return true
+	case recordType:
+		if !targetIn(x.decl.derives, "Eq") || visiting[x.decl] {
+			return false
+		}
+		visiting[x.decl] = true
+		defer delete(visiting, x.decl)
+		for _, f := range x.decl.fields {
+			if !inEqDomain(subst(f.typ, x.args, nil), visiting, sumVisiting, ntVisiting) {
+				return false
+			}
+		}
+		return true
+	case newtypeType:
+		if !targetIn(x.decl.derives, "Eq") || ntVisiting[x.decl] {
+			return false
+		}
+		ntVisiting[x.decl] = true
+		defer delete(ntVisiting, x.decl)
+		return inEqDomain(subst(x.decl.underlying, x.args, nil), visiting, sumVisiting, ntVisiting)
+	case namedType:
+		if !targetIn(x.decl.derives, "Eq") || sumVisiting[x.decl] {
+			return false
+		}
+		sumVisiting[x.decl] = true
+		defer delete(sumVisiting, x.decl)
+		for _, v := range x.decl.variants {
+			for _, p := range v.payloads {
+				if !inEqDomain(subst(p, x.args, nil), visiting, sumVisiting, ntVisiting) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // channelCall types one channel construction (conc.channel(n), design

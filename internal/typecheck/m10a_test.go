@@ -215,8 +215,9 @@ func TestStdTestLoading(t *testing.T) {
 	wantOKAs(t, n, "import std.test as st\n\ntest \"equal\" {\n    st.assertEqual(1, 2)\n    st.assertEqual(true, false)\n    st.assertEqual(\"a\", \"b\")\n}\n")
 	wantDiagAs(t, n, "import std.test as st\n\ntest \"m\" {\n    st.assertEqual(1, true)\n}\n",
 		"E0501", "the argument is Bool, the parameter is Int64", 4, 23)
-	wantBndAs(t, n, "import std.test as st\n\nrecord Point { x: Int64, y: Int64 }\n\ntest \"domain\" {\n    let a = Point { x: 1, y: 2 }\n    let b = Point { x: 1, y: 2 }\n    st.assertEqual(a, b)\n}\n",
-		"assertEqual beyond the scalar, Bool, and String domains (the Eq-generic face is the standard library's own widening)")
+	// The record this row used to stop on now declares Eq and is in the
+	// domain; T10's TestAssertEqualEqDomain carries the residual rows.
+	wantOKAs(t, n, "import std.test as st\n\nrecord Point { x: Int64, y: Int64 } derives Eq\n\ntest \"domain\" {\n    let a = Point { x: 1, y: 2 }\n    let b = Point { x: 1, y: 2 }\n    st.assertEqual(a, b)\n}\n")
 	wantDiagAs(t, n, "import std.test as st\n\ntest \"u\" {\n    st.assertLength(1)\n}\n",
 		"E1304", `the module "std.test" declares no "assertLength"`, 4, 5)
 	// The bare import is legal and inert (the keyword name binds nothing
@@ -232,6 +233,66 @@ func TestStdTestLoading(t *testing.T) {
 	wantOKAs(t, "src/x.we", "import std.test\n\nfn f() {\n    return\n}\n")
 	wantDiagAs(t, "src/x.we", "import std.testing\n\nfn f() {\n    return\n}\n",
 		"E1302", `no standard-library module "std.testing"`, 1, 8)
+}
+
+// T10 D9: assertEqual's domain is the scalar set closed recursively over
+// derives-Eq composites. A record, sum, or newtype carries its comparands
+// only when it declares Eq and every component is in the domain; a tuple
+// has nowhere to write a clause and follows its elements. A composite
+// that declares nothing, or that reaches a leaf outside the scalar set,
+// is the residual boundary — which the domain word retires into, so the
+// stop reads as the generic-fn word rather than a word of its own.
+func TestAssertEqualEqDomain(t *testing.T) {
+	n := "tests/t_test.we"
+	// The accept set: each row is one composite shape whose leaves are all
+	// in the scalar set.
+	wantOKAs(t, n, "import std.test as st\n\nrecord Point { x: Int64, y: Int64 } derives Eq\n\ntest \"t\" {\n    let a = Point { x: 1, y: 2 }\n    let b = Point { x: 2, y: 2 }\n    st.assertEqual(a, b)\n}\n")
+	wantOKAs(t, n, "import std.test as st\n\nrecord Named { name: String, n: UInt8 } derives Eq\n\ntest \"t\" {\n    let a = Named { name: \"a\", n: 1u8 }\n    let b = Named { name: \"b\", n: 1u8 }\n    st.assertEqual(a, b)\n}\n")
+	// A nested composite is in the domain through its own clause.
+	wantOKAs(t, n, "import std.test as st\n\nrecord Inner { x: Int64 } derives Eq\nrecord Outer { i: Inner, b: Bool } derives Eq\n\ntest \"t\" {\n    let a = Outer { i: Inner { x: 1 }, b: true }\n    let b = Outer { i: Inner { x: 2 }, b: true }\n    st.assertEqual(a, b)\n}\n")
+	// The clause's other targets ride along; only Eq gates the domain.
+	wantOKAs(t, n, "import std.test as st\n\nrecord Point { x: Int64 } derives Eq, Hash, Show\n\ntest \"t\" {\n    let a = Point { x: 1 }\n    let b = Point { x: 2 }\n    st.assertEqual(a, b)\n}\n")
+	wantOKAs(t, n, "import std.test as st\n\ntype Shape = Circle(Int64) | Dot derives Eq\n\ntest \"t\" {\n    let a = Circle(1)\n    let b = Dot\n    st.assertEqual(a, b)\n}\n")
+	wantOKAs(t, n, "import std.test as st\n\nnewtype UserId(Int64) derives Eq\n\ntest \"t\" {\n    let a = UserId(1)\n    let b = UserId(2)\n    st.assertEqual(a, b)\n}\n")
+	// A tuple needs no clause: there is no declaration to carry one, so it
+	// follows its elements — including a record element that has its own.
+	wantOKAs(t, n, "import std.test as st\n\ntest \"t\" {\n    let a = (1, \"x\")\n    let b = (2, \"x\")\n    st.assertEqual(a, b)\n}\n")
+	wantOKAs(t, n, "import std.test as st\n\nrecord Point { x: Int64 } derives Eq\n\ntest \"t\" {\n    let a = (Point { x: 1 }, true)\n    let b = (Point { x: 2 }, true)\n    st.assertEqual(a, b)\n}\n")
+	// A newtype over a record is transparent to the domain's walk.
+	wantOKAs(t, n, "import std.test as st\n\nrecord Point { x: Int64 } derives Eq\nnewtype Wrapped(Point) derives Eq\n\ntest \"t\" {\n    let a = Wrapped(Point { x: 1 })\n    let b = Wrapped(Point { x: 2 })\n    st.assertEqual(a, b)\n}\n")
+
+	// The reject set: each row stops at the residual boundary.
+	bnd := func(src string) {
+		t.Helper()
+		wantBndAs(t, n, src, "generic functions in code generation (monomorphization is the B-track codegen-full widening)")
+	}
+	// No clause: chapter 10's composite equality is the generated
+	// .equals(), so a composite that generates none has none to compare.
+	bnd("import std.test as st\n\nrecord Point { x: Int64, y: Int64 }\n\ntest \"t\" {\n    let a = Point { x: 1, y: 2 }\n    let b = Point { x: 2, y: 2 }\n    st.assertEqual(a, b)\n}\n")
+	// The clause is present but a leaf is outside the scalar set: Float64
+	// and Rune both carry the Eq capability (E0823 admits them) without
+	// being comparanda the assertion fixes.
+	bnd("import std.test as st\n\nrecord P { f: Float64 } derives Eq\n\ntest \"t\" {\n    let a = P { f: 1.0 }\n    let b = P { f: 2.0 }\n    st.assertEqual(a, b)\n}\n")
+	bnd("import std.test as st\n\nrecord P { r: Rune } derives Eq\n\ntest \"t\" {\n    let a = P { r: 'a' }\n    let b = P { r: 'b' }\n    st.assertEqual(a, b)\n}\n")
+	// The recursion the domain gate owns is the leaf set's, not the
+	// clause's: E0823 already refuses a component that declares nothing
+	// (carries and this predicate agree there), so a component that
+	// declares Eq while reaching a leaf the assertion does not fix is
+	// what the second level is for — the shell passes E0823 and the walk
+	// still has to descend.
+	bnd("import std.test as st\n\nrecord Inner { f: Float64 } derives Eq\nrecord Outer { i: Inner } derives Eq\n\ntest \"t\" {\n    let a = Outer { i: Inner { f: 1.0 } }\n    let b = Outer { i: Inner { f: 2.0 } }\n    st.assertEqual(a, b)\n}\n")
+	bnd("import std.test as st\n\ntype Shape = Circle(Int64) | Dot\n\ntest \"t\" {\n    let a = Circle(1)\n    let b = Dot\n    st.assertEqual(a, b)\n}\n")
+	// A payload outside the scalar set stops the sum's walk.
+	bnd("import std.test as st\n\ntype Box = Hold(Float64) | Empty derives Eq\n\ntest \"t\" {\n    let a = Hold(1.0)\n    let b = Empty\n    st.assertEqual(a, b)\n}\n")
+	// A tuple element that declares nothing cuts the tuple off: the
+	// clause requirement is per component, and a tuple has none to lend.
+	bnd("import std.test as st\n\nrecord Point { x: Int64 }\n\ntest \"t\" {\n    let a = (Point { x: 1 }, true)\n    let b = (Point { x: 2 }, true)\n    st.assertEqual(a, b)\n}\n")
+	// A List is not a comparand the assertion fixes.
+	bnd("import std.test as st\n\ntest \"t\" {\n    let a: List<Int64> = []\n    st.assertEqual(a, a)\n}\n")
+	// A nested tuple is in the domain — its leaves are — even though code
+	// generation's aggregate layout stops one level down (the boundary
+	// lives in the build stage, not in this predicate).
+	wantOKAs(t, n, "import std.test as st\n\ntest \"t\" {\n    let a = (1, (2, 3))\n    let b = (1, (2, 4))\n    st.assertEqual(a, b)\n}\n")
 }
 
 // D6/D11: cross-module mock targets resolve through the import face —
