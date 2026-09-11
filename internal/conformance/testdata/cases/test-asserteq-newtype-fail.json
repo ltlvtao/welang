@@ -1,0 +1,16 @@
+{
+  "name": "test-asserteq-newtype-fail",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.test as st\n\nrecord Spot { x: Int64 } derives Eq\nnewtype Pin(Spot) derives Eq\n\ntest \"nt\" {\n    let a = Pin(Spot { x: 1 })\n    let b = Pin(Spot { x: 2 })\n    st.assertEqual(a, b)\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "fail  tests/m_test.we: nt (0ms)\n  assertion failed: at Spot.x: got 1, want 2\ntotal 1, passed 0, failed 1 (0ms)\n",
+  "stderr": ""
+}

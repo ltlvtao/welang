@@ -6640,6 +6640,10 @@ type eqFace struct {
 	// abiGc: the record's handle and its module-qualified key.
 	reg string
 	key string
+	// abiTuple: the aggregate that is the tuple value, and the shapes its
+	// elements were classified with (the same pair a tuple binding keeps,
+	// because a tuple's shape is a static fact its value does not carry).
+	elems []tupleElem
 }
 
 // eqLeafDomain is the domain one scalar comparand renders in, and whether
@@ -6751,8 +6755,8 @@ func (e *emitter) eqFaceOf(x ast.Expr) (eqFace, *NotImplemented) {
 		if g, ok := e.gcEnv[v.Name]; ok {
 			return eqFace{kind: abiGc, reg: g.reg, key: g.rec}, nil
 		}
-		if _, ok := e.tupEnv[v.Name]; ok {
-			return eqFace{}, bndGeneric() // T10-2c widens tuples
+		if t, ok := e.tupEnv[v.Name]; ok {
+			return eqFace{kind: abiTuple, reg: t.ptr, elems: t.elems}, nil
 		}
 		if _, ok := e.sums2[v.Name]; ok {
 			return eqFace{}, bndGeneric() // T10-3 widens sums
@@ -6788,7 +6792,11 @@ func (e *emitter) eqFaceOf(x ast.Expr) (eqFace, *NotImplemented) {
 		}
 		return eqFace{kind: abiGc, reg: reg, key: key}, nil
 	case *ast.Tuple:
-		return eqFace{}, bndGeneric() // T10-2c widens tuples
+		agg, elems, ni := e.emitTupleAgg(v)
+		if ni != nil {
+			return eqFace{}, ni
+		}
+		return eqFace{kind: abiTuple, reg: agg, elems: elems}, nil
 	case *ast.Call:
 		res, ni := e.emitCall(v, nil)
 		if ni != nil {
@@ -6854,6 +6862,8 @@ func (e *emitter) emitEqCompare(a, b eqFace, path string, w eqWalk) *NotImplemen
 		return e.emitEqStrLeaf(path, a.strP, a.strL, b.strP, b.strL)
 	case abiGc:
 		return e.emitEqRecord(a, b, path, w)
+	case abiTuple:
+		return e.emitEqTuple(a, b, path, w)
 	}
 	return bndGeneric()
 }
@@ -6962,6 +6972,56 @@ func (e *emitter) emitEqRecord(a, b eqFace, path string, w eqWalk) *NotImplement
 		default:
 			// fkF64 — the leaf the clause accepts and the assertion does
 			// not. The layout has no other kind.
+			return bndGeneric()
+		}
+	}
+	return nil
+}
+
+// emitEqTuple walks one tuple pair element by element. A tuple declares
+// nothing and so has no clause to require: its domain is its elements',
+// which is the whole of what the ruling says a tuple comparison is. The
+// position is the bare index — a tuple has no name — and an element that
+// is itself a composite contributes its own field names behind it, so a
+// record element reports as 0.x rather than as two names.
+func (e *emitter) emitEqTuple(a, b eqFace, path string, w eqWalk) *NotImplemented {
+	if eqTooDeep(path) {
+		return bndGeneric()
+	}
+	if len(a.elems) != len(b.elems) {
+		return bndGeneric()
+	}
+	for i, el := range a.elems {
+		if el.kind != b.elems[i].kind {
+			return bndGeneric()
+		}
+		fp := eqPathJoin(path, strconv.Itoa(i))
+		switch el.kind {
+		case abiI64:
+			k, ok := eqLeafDomain(baseStrKind(el.typ))
+			if !ok {
+				return bndGeneric()
+			}
+			if ni := e.emitEqScalarLeaf(fp, k,
+				e.gepLoadI64(a.reg, el.off), e.gepLoadI64(b.reg, el.off)); ni != nil {
+				return ni
+			}
+		case abiStr:
+			if ni := e.emitEqStrLeaf(fp,
+				e.gepLoadPtr(a.reg, el.off), e.gepLoadI64(a.reg, el.off+8),
+				e.gepLoadPtr(b.reg, el.off), e.gepLoadI64(b.reg, el.off+8)); ni != nil {
+				return ni
+			}
+		case abiGc:
+			sa := eqFace{kind: abiGc, key: el.key, reg: e.gepLoadPtr(a.reg, el.off)}
+			sb := eqFace{kind: abiGc, key: b.elems[i].key, reg: e.gepLoadPtr(b.reg, el.off)}
+			if ni := e.emitEqRecord(sa, sb, fp, w); ni != nil {
+				return ni
+			}
+		default:
+			// A double element — the leaf the clause accepts and the
+			// assertion does not — a sum element, which T10-3 widens, and
+			// every shape the aggregate has no row for.
 			return bndGeneric()
 		}
 	}

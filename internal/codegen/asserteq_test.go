@@ -225,6 +225,132 @@ func TestT10AssertEqualRecordDepthBound(t *testing.T) {
 	}
 }
 
+// A tuple compares element by element and reports the bare index: a tuple
+// has no name of its own, so the index is the whole of what reaches it.
+func TestT10AssertEqualTupleWalk(t *testing.T) {
+	ir, ni := t10Emit(t, `
+import std.test as st
+
+test "tup" {
+    let a = ("ab", 1)
+    let b = ("cd", 2)
+    st.assertEqual(a, b)
+}
+`)
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantIR(t, ir, `c"0\00"`, "the first element's position was not interned")
+	wantIR(t, ir, `c"1\00"`, "the second element's position was not interned")
+	wantOrder(t, ir,
+		"call void @__we_assert_eq_str_at(ptr @.p0, ptr",
+		"call void @__we_assert_eq_i64_at(ptr @.p1,",
+	)
+}
+
+// A record read out of a tuple is reached by its index and then by its
+// field names, exactly as a record field of a record is: the segment that
+// reached it already says which element it is.
+func TestT10AssertEqualTupleRecordElement(t *testing.T) {
+	ir, ni := t10Emit(t, `
+import std.test as st
+
+record Point { x: Int64 } derives Eq
+
+test "tup rec" {
+    let a = (Point { x: 1 }, "a")
+    let b = (Point { x: 2 }, "b")
+    st.assertEqual(a, b)
+}
+`)
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantOrder(t, ir, `c"0.x\00"`, `c"1\00"`)
+}
+
+// The tuple carries a second source: a name already bound to one, whose
+// shape rides the environment the way a list's element face does.
+func TestT10AssertEqualTupleBinding(t *testing.T) {
+	ir, ni := t10Emit(t, `
+import std.test as st
+
+test "tup let" {
+    let a = (1, "ab")
+    let b = (1, "cd")
+    st.assertEqual(a, b)
+}
+`)
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantOrder(t, ir,
+		"call void @__we_assert_eq_i64_at(ptr @.",
+		"call void @__we_assert_eq_str_at(ptr @.",
+	)
+}
+
+// An element outside the leaf set stops the whole comparison, exactly as a
+// record's field outside it does: the domain is one set, and a tuple does
+// not widen it.
+func TestT10AssertEqualTupleElementBoundaries(t *testing.T) {
+	cases := []struct{ name, a, b string }{
+		{"float element", "(1.5, 1)", "(2.5, 1)"},
+		{"rune element", "('a', 1)", "('b', 1)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, ni := t10Emit(t, "import std.test as st\n\ntest \"el\" {\n    let a = "+c.a+
+				"\n    let b = "+c.b+"\n    st.assertEqual(a, b)\n}\n")
+			if ni == nil || ni.What != bndGenericFns {
+				t.Fatalf("want the residual row %q, got %v", bndGenericFns, ni)
+			}
+		})
+	}
+}
+
+// A newtype is transparent: the wrapper erases (design D4), so a newtype
+// over a leaf compares as that leaf and reports no position at the top
+// level, and one over a record compares as the record and reports the
+// record's own name.
+func TestT10AssertEqualNewtypeTransparent(t *testing.T) {
+	t.Run("over a leaf", func(t *testing.T) {
+		ir, ni := t10Emit(t, `
+import std.test as st
+
+newtype UserId(Int64) derives Eq
+
+test "nt" {
+    let a = UserId(3)
+    let b = UserId(4)
+    st.assertEqual(a, b)
+}
+`)
+		if ni != nil {
+			t.Fatalf("boundary: %s", ni.What)
+		}
+		wantIR(t, ir, "call void @__we_assert_eq_i64(i64 3, i64 4)", "the wrapper did not erase")
+	})
+	t.Run("over a record", func(t *testing.T) {
+		ir, ni := t10Emit(t, `
+import std.test as st
+
+record Point { x: Int64 } derives Eq
+newtype Spot(Point) derives Eq
+
+test "nt rec" {
+    let a = Spot(Point { x: 1 })
+    let b = Spot(Point { x: 2 })
+    st.assertEqual(a, b)
+}
+`)
+		if ni != nil {
+			t.Fatalf("boundary: %s", ni.What)
+		}
+		wantIR(t, ir, `c"Point.x\00"`, "the path names the erased type, not the wrapper")
+	})
+}
+
 // The mirror: the rows the check stage's own table enumerates, one for
 // one. The two stages decide the same domain — this is the test that says
 // so, and it is the one that would catch a widening on either side
@@ -253,6 +379,13 @@ func TestT10AssertEqualDomainMirror(t *testing.T) {
 		// no row for it, so the record's construction is the body's stop.
 		// The mirror asks only whether the row is out, which it is.
 		{"rune field", "record R { v: Rune } derives Eq\n", "R { v: 'a' }", "R { v: 'b' }", false},
+		{"tuple", "", "(1, 2)", "(1, 3)", true},
+		{"tuple of records", "record P { x: Int64 } derives Eq\n", "(P { x: 1 }, 1)", "(P { x: 2 }, 1)", true},
+		{"tuple with a float", "", "(1.5, 1)", "(2.5, 1)", false},
+		// A tuple does not nest: the shape and the layout both refuse a
+		// tuple inside anything, so the domain stops where they do.
+		{"nested tuple", "", "((1, 2), 3)", "((1, 3), 3)", false},
+		{"newtype over a leaf", "newtype Id(Int64) derives Eq\n", "Id(1)", "Id(2)", true},
 		{"list", "", "[1, 2]", "[1, 3]", false},
 	}
 	for _, c := range cases {
