@@ -325,14 +325,16 @@ func TestNarrowDomainPrefersTheSideThatHasAWidth(t *testing.T) {
 // A value form bound to a `let` is reachable from source and runs: the
 // shape this test mirrors — `let n: Int8 = if a > 0 {2i8} else {1i8}`
 // twice, then their sum — is a program the corpus can spell, and it
-// compiles and answers. What is out of reach is reading such a binding, or
-// anything derived from it, into a `String` position: the string chain
-// asks valueKind, which carries no If/Match/BlockExpr arm and answers
-// skNone, so the hole stops there. The reachable shape has a probe behind
-// it and no fixture yet — a golden for it is registered as a T13
-// reconciliation item (docs/benchmarks.md, "Run-face anchoring", states
-// the boundary). An earlier revision of this comment claimed the pipeline
-// stopped the binding itself, which T12's probes disproved.
+// compiles and answers. An earlier revision of this comment claimed the
+// pipeline stopped the binding itself, which T12's probes disproved.
+//
+// Reading such a binding into a `String` position was out of reach when
+// this test was written: the string chain asks valueKind, which carried no
+// If/Match/BlockExpr arm and answered skNone, so the hole stopped there.
+// The arms landed (T13-1); the face is pinned by
+// TestValueFormStringFaceRenders and the golden run-value-form-string-face,
+// and a form whose arms answer String still stops there by design
+// (build-bnd-value-form-string-arm, TestHoleOutsideTheDomainStops).
 func TestNarrowValueFormTakesTheAnnotation(t *testing.T) {
 	form := func(lit string) ast.Expr {
 		return &ast.If{

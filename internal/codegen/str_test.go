@@ -405,19 +405,74 @@ func TestInterpolationOverMemberChain(t *testing.T) {
 }
 
 // TestHoleOutsideTheDomainStops: the ruled domain is the base types and
-// String. A value-form join is not statically one of them, so the hole
-// stops at the body boundary rather than guessing a converter.
+// String, and a hole renders its value through the value-to-string family.
+// A value-position control form whose arms answer String is outside that
+// set — the form's result slot is the numeric one (valueForm.put takes only
+// ckI64), so the join has no domain to classify and the hole stops at the
+// body boundary rather than guessing a converter. The control form itself
+// is classified (TestValueFormStringFaceRenders); it is its String arms
+// that stay out.
 func TestHoleOutsideTheDomainStops(t *testing.T) {
 	f := m9bModule(
-		&ast.Binding{Kw: "let", Name: "n", Init: intLit("7")},
 		&ast.Binding{Kw: "let", Name: "m", Init: interpLit([]string{"", ""},
-			valBlock(ident("n")))},
+			&ast.If{
+				Cond: binOp(">", intLit("1"), intLit("0")),
+				Then: ast.Block{Items: []ast.Stmt{&ast.ExprStmt{Expr: strLit(`"a"`)}}},
+				Else: blockOf(&ast.ExprStmt{Expr: strLit(`"b"`)}),
+			})},
 		ioCall("io", "println", ident("m")),
 		okReturn(),
 	)
 	_, ni := Emit(f, "demo")
 	if ni == nil || ni.What != bndMainBody {
 		t.Fatalf("expected the body boundary, got %v", ni)
+	}
+}
+
+// TestValueFormDeclinesABlockThatBinds: the block arm declines a block that
+// binds a name before its tail, because the classifier reads the frame the
+// block is classified in and the emission has already restored it. The
+// program below is well typed — the block's `b` is its own, the checker
+// scopes it per block exactly as the emitter does — and answering skBool
+// from the outer `b` would render the inner 5 through the bool converter
+// and print "true". Every integer family is one i64 word, so nothing
+// downstream could tell; the boundary is the answer.
+func TestValueFormDeclinesABlockThatBinds(t *testing.T) {
+	f := m9bModule(
+		&ast.Binding{Kw: "let", Name: "b", Init: boolLit("true")},
+		&ast.Binding{Kw: "let", Name: "k", Init: blockOf(
+			&ast.Binding{Kw: "let", Name: "b", Typ: &ast.NamedType{Name: "Int64"}, Init: intLit("5")},
+			&ast.ExprStmt{Expr: ident("b")})},
+		&ast.Binding{Kw: "let", Name: "s", Init: interpLit([]string{"", ""}, ident("k"))},
+		ioCall("io", "println", ident("s")),
+		okReturn(),
+	)
+	_, ni := Emit(f, "demo")
+	if ni == nil || ni.What != bndMainBody {
+		t.Fatalf("expected the body boundary, got %v", ni)
+	}
+}
+
+// TestValueFormStringFaceRenders: the other side of the same rule. With the
+// value-position forms classified, an unannotated `let` bound from one is a
+// slot the string chain can read — the hole renders it through the i64
+// converter, once, at the binding that names it. Before the arm, valueKind
+// answered skNone for the form and this program stopped at bndMainBody.
+func TestValueFormStringFaceRenders(t *testing.T) {
+	form := &ast.If{
+		Cond: binOp(">", ident("a"), intLit("0")),
+		Then: ast.Block{Items: []ast.Stmt{&ast.ExprStmt{Expr: intLit("10")}}},
+		Else: blockOf(&ast.ExprStmt{Expr: intLit("20")}),
+	}
+	ir := assertClean(t, m9bModule(
+		typedLit("a", "1"),
+		&ast.Binding{Kw: "let", Name: "n", Init: form},
+		&ast.Binding{Kw: "let", Name: "s", Init: interpLit([]string{"n=", ""}, ident("n"))},
+		ioCall("io", "println", ident("s")),
+		okReturn(),
+	), "= call %struct.we_str @__we_str_of_i64(")
+	if n := countCall(ir, "%struct.we_str", "__we_str_of_i64"); n != 1 {
+		t.Fatalf("expected one converter at the binding, got %d:\n%s", n, ir)
 	}
 }
 

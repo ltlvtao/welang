@@ -9044,14 +9044,20 @@ func narrowDomain(l, r string) string {
 // valueKind classifies x in the interpolation domain where the answer is
 // static: a literal's own kind, a binding whose site fixed its type
 // (scalarSlot.kind), a String binding or field chain, a callee's declared
-// return type, and the operators over those. Everything else — a numeric
-// record field, a match arm's payload, a foreign result, a value-form join
-// — is skNone and stops the hole at the boundary: design D3 names the base
-// family and String, and the composite traversal is D4's (T5).
+// return type, the operators over those, and a value-position control form
+// whose arms all answer the same non-String kind and whose blocks bind no
+// name their tail could read. Everything else — a match arm's payload (its
+// type is fixed by the arm's own binding, which happens at emission), a
+// block that binds before its tail, a foreign result, a form whose arms
+// disagree — is skNone and stops the hole at the boundary: design D3 names
+// the base family and String, and the composite traversal is D4's (T5).
 //
-// The classification never exceeds what the emission can do: it gates the
-// dispatch, and the emission re-checks the domain the value actually lands
-// in, so a wrong guess costs a boundary rather than a wrong rendering.
+// The answer is about the name the emission resolves, so a form declines
+// wherever its own frame could have rebound the tail — blockKind says why.
+// Elsewhere the re-check is real and a wrong answer costs a boundary: the
+// hole is the one consumer whose re-check is floatness alone, which is
+// exactly why the tower must answer about the right frame rather than lean
+// on the emission to catch it.
 func (e *emitter) valueKind(x ast.Expr) strKind {
 	switch v := x.(type) {
 	case *ast.Literal:
@@ -9100,6 +9106,72 @@ func (e *emitter) valueKind(x ast.Expr) strKind {
 		return e.binaryKind(v)
 	case *ast.Call:
 		return e.callStrKind(v)
+	case *ast.If:
+		// A value-position if is the join of its branches — `let k = if a
+		// > 1 { 10 } else { 20 }` carries the i64 domain onward, which is
+		// what lets a later `"${k}"` render it. An else spelled as a chain
+		// of ifs arrives as another *ast.If and classifies through this
+		// same arm; a missing else is a nil Expr and answers skNone.
+		return joinKind(e.blockKind(v.Then.Items), e.valueKind(v.Else))
+	case *ast.Match:
+		// Every arm must answer the same kind. The fold seeds on the first
+		// arm rather than on skNone so that a set whose arms agree on
+		// skNone stays skNone instead of joining a value's kind against a
+		// seed that was never a value.
+		if len(v.Arms) == 0 {
+			return skNone
+		}
+		k := e.valueKind(v.Arms[0].Body)
+		for _, a := range v.Arms[1:] {
+			k = joinKind(k, e.valueKind(a.Body))
+		}
+		return k
+	case *ast.BlockExpr:
+		return e.blockKind(v.Block.Items)
+	}
+	return skNone
+}
+
+// blockKind classifies a block's value — the expression a value-position
+// block hands out. It reads the same tail emitArmBlock stores (the last
+// item, and only an expression statement, is the value), so a block ending
+// in a statement or a return answers skNone exactly where the emission
+// would store nothing.
+//
+// A block that binds a name before its tail is declined. The classifier
+// reads the environment the block is classified in — the outer one, since
+// emitArmBlock has already popped the block's frame by the time anyone
+// asks — while the tail's value may be the block's own binding: under an
+// outer `b: Bool`, `{ let b: Int64 = 5  b }` would answer skBool and render
+// 5 through the bool converter, because every integer family is one i64
+// word and the hole's only re-check is floatness (emitHole). Declining
+// costs the capability of a block whose tail ignores its own bindings; that
+// is a boundary, and a boundary is the price the tower pays.
+func (e *emitter) blockKind(items []ast.Stmt) strKind {
+	n := len(items)
+	if n == 0 {
+		return skNone
+	}
+	es, ok := items[n-1].(*ast.ExprStmt)
+	if !ok {
+		return skNone
+	}
+	for _, st := range items[:n-1] {
+		if _, binds := st.(*ast.Binding); binds {
+			return skNone
+		}
+	}
+	return e.valueKind(es.Expr)
+}
+
+// joinKind is the domain two arms of a value form share. Strings are out
+// whatever the arms say: the form's result slot is the numeric set's
+// (valueForm.put takes only ckI64), so a String-valued if has no join to
+// classify and keeps stopping where the emission stops. An arm that
+// disagrees with its sibling leaves the form with no single answer.
+func joinKind(a, b strKind) strKind {
+	if a == b && a != skStr {
+		return a
 	}
 	return skNone
 }
