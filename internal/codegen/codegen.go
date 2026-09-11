@@ -37,15 +37,14 @@ type NotImplemented struct {
 
 // The boundary Whats. bndMainBody is the M9b v2 vocabulary (design D9):
 // the same statement set bndTaskBody names, anchored at main — the M8
-// wording retired with the concurrent forms. bndErrPayload and the M4
-// rows ride unchanged. M10b (design D8) retires bndOtherFns and
-// bndTestModule with the multi-function widening and adds the two rows
-// below.
+// wording retired with the concurrent forms. M10b (design D8) retires
+// bndOtherFns and bndTestModule with the multi-function widening and adds
+// the two rows below; T9 retires bndErrPayload, whose generalization
+// leaves no boundary between a reportable Err and any other construction.
 const (
-	bndMainBody   = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
-	bndErrPayload = "Err payloads beyond one plain string-literal variant argument"
-	bndTopLets    = "top-level value bindings in code generation"
-	bndTaskBody   = "task bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
+	bndMainBody = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
+	bndTopLets  = "top-level value bindings in code generation"
+	bndTaskBody = "task bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	// M10b design D8, verbatim.
 	bndGenericFns = "generic functions in code generation (monomorphization is the B-track codegen-full widening)"
 	bndFnBody     = "function bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
@@ -55,7 +54,6 @@ const (
 )
 
 func bndMain() *NotImplemented     { return &NotImplemented{What: bndMainBody} }
-func bndErrPay() *NotImplemented   { return &NotImplemented{What: bndErrPayload} }
 func bndTask() *NotImplemented     { return &NotImplemented{What: bndTaskBody} }
 func bndFn() *NotImplemented       { return &NotImplemented{What: bndFnBody} }
 func bndEqDomain() *NotImplemented { return &NotImplemented{What: bndAssertEqDomain} }
@@ -386,7 +384,9 @@ type emitter struct {
 	strPool  map[string]string
 	usedRecs map[string]bool
 	declUsed map[string]bool
-	errConst string
+	// errConsts holds the report lines the entry's Err sites write, in
+	// emission order; the first is design D5's @.err.
+	errConsts []string
 
 	// strStruct records that some body calls the String family, whose
 	// value-to-string members return design D3's two-word pair as a
@@ -821,9 +821,42 @@ type sumSlot struct {
 	pay      string   // i64 alloca holding the payload's first word
 	pay1     string   // i64 alloca holding the payload's second word
 	variants []string // return value → variant name, index-addressed
-	errPanic bool     // the Err payload is a panic-message C-string pointer
-	errMsg   string   // a static Err report line (the `?` main tail writes it)
+	// shapes is variants' other half: what each variant's payload IS, one
+	// entry per declared position. A match arm that binds a payload reads
+	// it through this — the slot alone cannot say whether the payload word
+	// is an Int64, a record's handle, or the first half of a String pair.
+	// nil where the table came from a runtime face that produced no
+	// source-level sum (receive, await, the timeout scope).
+	shapes   []sumVariantShape
+	errPanic bool   // the Err payload is a panic-message C-string pointer
+	errMsg   string // a static Err report line (the `?` main tail writes it)
 }
+
+// sumVariantShape is one variant's payload as the three-word ABI carries
+// it: one entry per declared payload position, in declaration order. The
+// slice position of the shape in its sum's table IS the tag, so a match
+// arm's discriminant test and its payload binding read the same index.
+type sumVariantShape struct {
+	name string
+	pay  []fnParamAbi
+}
+
+// payWords is the payload's width in the slot: the sum's budget is that
+// this never exceeds two (design D8).
+func (s sumVariantShape) payWords() int {
+	n := 0
+	for _, p := range s.pay {
+		n += len(abiWordTypes(p))
+	}
+	return n
+}
+
+// sumPayloadWords is the whole payload budget of design D8's layout: the
+// tag word plus the two payload words of the three-word ABI. It is the
+// only place the number appears — every producer and consumer moves the
+// three words as one arity, and variantShapes is where a declaration that
+// would need a fourth word is refused.
+const sumPayloadWords = 2
 
 func (e *emitter) inst(s string) { e.body.WriteString("  " + s + "\n") }
 
@@ -2650,6 +2683,25 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		if fv, ok := e.fnEnv[id.Name]; ok {
 			return e.emitFnValueCall(fv, call.Args)
 		}
+		// A variant construction (chapter 9's call form). A user sum's
+		// variant names its own sum — chapter 9 puts variants in the
+		// module's one name space, so a bare name picks out exactly one
+		// declaration and the tag and the payload shape both come from it.
+		if idx, shapes, ok := e.variantSite(id.Name, typ); ok {
+			return e.emitVariantCtor(shapes, idx, call.Args)
+		}
+		// The fused Result space spells its error half as a construction
+		// of its own — `Err(Failed(1, 2))` is one value, and the variant
+		// it builds is the inner one. The expectation is the same channel
+		// the prelude rows use: without a position naming the sum there is
+		// no table to read the fusion out of.
+		if id.Name == "Err" && len(call.Args) == 1 && typ != nil {
+			if shapes, ok := e.variantShapes(e.derefNewtype(typ)); ok && isResultShapes(shapes) {
+				if idx, args, ok := e.sumCtor(shapes, call.Args[0]); ok {
+					return e.emitVariantCtor(shapes, idx, args)
+				}
+			}
+		}
 		// A program fn of the walked module, through its slot.
 		if fd, ok := e.fnTable[e.curKey+"."+id.Name]; ok {
 			return e.emitFnCall(fd, call.Args)
@@ -2856,6 +2908,114 @@ func (e *emitter) emitSumCall(sym, ptr string, variants []string) (callResult, *
 	pay1Slot := e.slot("i64")
 	e.inst(fmt.Sprintf("store i64 0, ptr %s", pay1Slot))
 	return callResult{kind: ckSum, sum: sumSlot{tag: tagSlot, pay: paySlot, pay1: pay1Slot, variants: variants}}, nil
+}
+
+// emitVariantCtor materializes one variant construction into a sumSlot —
+// design D8's expression face. The words land in three fresh allocas, so
+// a constructed sum is addressable exactly like the runtime-yielded ones
+// and every downstream consumer (a match, an argument, a binding) reads
+// it the same way. A variant whose payload does not fill both words
+// stores literal zero into the rest, which is what keeps the slot's
+// shape independent of which variant was built.
+func (e *emitter) emitVariantCtor(shapes []sumVariantShape, idx int, args []ast.Expr) (callResult, *NotImplemented) {
+	words, ni := e.sumPayWords(shapes[idx], args)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	// The store order is tag-then-payload: a consumer that takes the first
+	// two zero stores of a block for the tag and the payload reads a
+	// construction the same way it reads a runtime face (acute_test's
+	// regex pins that order on the faces it covers).
+	ts := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %d, ptr %s", idx, ts))
+	pp := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", wordOr0(words, 0), pp))
+	p1 := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", wordOr0(words, 1), p1))
+	return callResult{kind: ckSum, sum: sumSlot{
+		tag: ts, pay: pp, pay1: p1,
+		variants: sumVariantNames(shapes), shapes: shapes,
+	}}, nil
+}
+
+// wordOr0 is the payload word at i, or the zero literal a variant that
+// does not reach it stores.
+func wordOr0(words []string, i int) string {
+	if i < len(words) {
+		return words[i]
+	}
+	return "0"
+}
+
+// sumPayWords emits one variant construction's payload, position by
+// position, into the i64 domain the slot and the returned aggregate both
+// carry it in. The declared arity is what decides the count: a position
+// that is `()` crosses as no word, and anything else reports the mismatch
+// rather than silently shifting the words.
+func (e *emitter) sumPayWords(sh sumVariantShape, args []ast.Expr) ([]string, *NotImplemented) {
+	if len(args) != len(sh.pay) {
+		return nil, e.bnd()
+	}
+	var words []string
+	for i, p := range sh.pay {
+		ws, ni := e.payPosWords(p, args[i])
+		if ni != nil {
+			return nil, ni
+		}
+		words = append(words, ws...)
+	}
+	return words, nil
+}
+
+// payPosWords emits one payload position's words. The slot holds words,
+// not typed registers, so a handle crosses through ptrtoint and a Float64
+// through bitcast — the same normalization a list element takes on its
+// way into the one-word carrier.
+func (e *emitter) payPosWords(p fnParamAbi, x ast.Expr) ([]string, *NotImplemented) {
+	switch p.kind {
+	case abiVoid:
+		// The `()` position: it carries nothing, but an expression that
+		// produces it still runs (its effects are the source's).
+		if c, ok := x.(*ast.Call); ok {
+			if _, ni := e.emitCall(c, nil); ni != nil {
+				return nil, ni
+			}
+		}
+		return nil, nil
+	case abiI64:
+		op, isF, ni := e.emitNumExpr(x)
+		if ni != nil {
+			return nil, ni
+		}
+		if isF {
+			return nil, e.bnd()
+		}
+		return []string{op}, nil
+	case abiDouble:
+		op, isF, ni := e.emitNumExpr(x)
+		if ni != nil {
+			return nil, ni
+		}
+		if !isF {
+			return nil, e.bnd()
+		}
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = bitcast double %s to i64", v, op))
+		return []string{"%" + v}, nil
+	case abiGc:
+		reg, _, ni := e.emitOwnedRecord(x)
+		if ni != nil {
+			return nil, ni
+		}
+		return []string{e.ptrWord(reg)}, nil
+	case abiStr:
+		data, ln, ni := e.emitStringExpr(x)
+		if ni != nil {
+			return nil, ni
+		}
+		return []string{e.ptrWord(data), ln}, nil
+	}
+	return nil, e.bnd()
 }
 
 // emitPrimCall is the method dispatch over the six families plus the
@@ -6031,7 +6191,7 @@ func (e *emitter) emitMatch(s *ast.Match, vf *valueForm) *NotImplemented {
 			// close), so the body emits here without reopening it. A
 			// false guard there leaves the match without a value, which
 			// only the join can carry.
-			if ni := e.emitMatchArm(arm, slot, join, vf); ni != nil {
+			if ni := e.emitMatchArm(arm, slot, tag, join, vf); ni != nil {
 				return ni
 			}
 			if !e.diverged {
@@ -6040,23 +6200,15 @@ func (e *emitter) emitMatch(s *ast.Match, vf *valueForm) *NotImplemented {
 			fired = true
 			continue
 		}
-		idx := -1
-		for j, v := range slot.variants {
-			if v == pv.Name {
-				idx = j
-				break
-			}
-		}
-		if idx < 0 {
+		c, ok := e.armTagTest(slot, tag, pv)
+		if !ok {
 			return e.bnd()
 		}
-		c := e.value()
-		e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %d", c, tag, idx))
 		armL := fmt.Sprintf("marm%d_%d", n, i)
 		next := fmt.Sprintf("mtest%d_%d", n, i)
 		e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, armL, next))
 		e.label(armL)
-		if ni := e.emitMatchArm(arm, slot, next, vf); ni != nil {
+		if ni := e.emitMatchArm(arm, slot, tag, next, vf); ni != nil {
 			return ni
 		}
 		if !e.diverged {
@@ -6074,6 +6226,41 @@ func (e *emitter) emitMatch(s *ast.Match, vf *valueForm) *NotImplemented {
 	return nil
 }
 
+// armTagTest renders one variant arm's tag comparison. The common case is
+// `icmp eq` against the variant's own index; `Err` with a binding or a
+// wildcard admits every error variant at once, and the fused tag space
+// (Ok at zero, the error variants above it) makes that the range test
+// rather than a chain of comparisons.
+func (e *emitter) armTagTest(slot sumSlot, tag string, pv *ast.PatVariant) (string, bool) {
+	if pv.Name == "Err" && len(pv.Args) == 1 && isResultShapes(slot.shapes) {
+		inner, isVariant := pv.Args[0].(*ast.PatVariant)
+		if !isVariant {
+			c := e.value()
+			e.inst(fmt.Sprintf("%%%s = icmp sge i64 %s, 1", c, tag))
+			return c, true
+		}
+		pv = inner
+	}
+	idx := slotVariantIndex(slot, pv.Name)
+	if idx < 0 {
+		return "", false
+	}
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %d", c, tag, idx))
+	return c, true
+}
+
+// slotVariantIndex resolves a variant name against the slot's own table —
+// the tags the comparisons and the payload bindings both index by.
+func slotVariantIndex(slot sumSlot, name string) int {
+	for j, v := range slot.variants {
+		if v == name {
+			return j
+		}
+	}
+	return -1
+}
+
 // emitMatchArm emits one arm; a PatVariant payload binding loads the
 // payload word first. A guarded arm then evaluates its condition — only
 // now, after the pattern matched (chapter 4's laziness), and inside the
@@ -6083,19 +6270,12 @@ func (e *emitter) emitMatch(s *ast.Match, vf *valueForm) *NotImplemented {
 // payload binding and everything the body registers roll back when the
 // arm closes, so no arm name is readable past the join (the follow-up #16
 // leak this frame seals).
-func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot, guardFalseL string, vf *valueForm) *NotImplemented {
+func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot, tag, guardFalseL string, vf *valueForm) *NotImplemented {
 	e.pushEnv()
 	defer e.popEnv()
-	if pv, ok := arm.Pat.(*ast.PatVariant); ok && len(pv.Args) == 1 {
-		if b, ok := pv.Args[0].(*ast.PatBinding); ok && b.Name != "_" {
-			op := e.loadNum(slot.pay, false)
-			// The payload's type is the variant's declaration (D4's
-			// traversal): the arm binding carries no domain yet.
-			if e.assigned[b.Name] {
-				e.bindScalarSlot(b.Name, op, false, skNone)
-			} else {
-				e.scalars[b.Name] = scalarSlot{operand: op}
-			}
+	if pv, ok := arm.Pat.(*ast.PatVariant); ok {
+		if ni := e.bindArmPayload(slot, tag, pv); ni != nil {
+			return ni
 		}
 	}
 	if arm.Guard != nil {
@@ -6112,6 +6292,129 @@ func (e *emitter) emitMatchArm(arm ast.MatchArm, slot sumSlot, guardFalseL strin
 		e.label(bodyL)
 	}
 	return e.emitMatchBody(arm.Body, vf)
+}
+
+// bindArmPayload binds one arm's pattern against the payload the slot
+// holds. Where the slot carries its sum's variant table the declared
+// kinds decide each position — an Int64 payload is a scalar, a String
+// payload is the (ptr, len) pair across both words, a record payload is
+// its handle — and a position a sub-pattern does not bind still consumes
+// its words, because the words are laid out by declaration order and not
+// by which of them the pattern names.
+//
+// `Err(p)` is the fused space's one composite pattern: the slot names no
+// variant called Err (chapter 14's error slot is the outer half of the
+// tag), so the inner pattern is what picks the variant, and its payload
+// is the words the outer slot already holds. A binding in that position
+// (`Err(e)`) names the whole error sum, which is a sumSlot of its own:
+// the tag it carries is the outer one shifted down past Ok.
+//
+// A slot with no table is a runtime-yielded sum (design D8's transitional
+// faces): its one payload word binds untyped, exactly as before.
+func (e *emitter) bindArmPayload(slot sumSlot, tag string, pv *ast.PatVariant) *NotImplemented {
+	shapes := slot.shapes
+	if pv.Name == "Err" && len(pv.Args) == 1 && isResultShapes(shapes) {
+		// The wildcard and the `_` binding name no name at all: the whole
+		// error sum is discarded, and neither the shifted tag nor the
+		// payload words are read. The checker accepts both spellings.
+		if _, ok := pv.Args[0].(*ast.PatWildcard); ok {
+			return nil
+		}
+		if b, ok := pv.Args[0].(*ast.PatBinding); ok {
+			if b.Name == "_" {
+				return nil
+			}
+			ts := e.slot("i64")
+			shift := e.value()
+			e.inst(fmt.Sprintf("%%%s = sub i64 %s, 1", shift, tag))
+			e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", shift, ts))
+			// The payload words are the outer slot's: the error sum
+			// aliases them (the fusion spends no second pair on E).
+			e.sums2[b.Name] = sumSlot{
+				tag: ts, pay: slot.pay, pay1: slot.pay1,
+				variants: sumVariantNames(shapes[1:]), shapes: shapes[1:],
+			}
+			return nil
+		}
+		inner, ok := pv.Args[0].(*ast.PatVariant)
+		if !ok {
+			return e.bnd()
+		}
+		pv = inner
+	}
+	if shapes == nil {
+		// The runtime faces carry one payload word and no table.
+		if len(pv.Args) == 1 {
+			e.bindArmWord(slot, 0, fnParamAbi{kind: abiI64}, pv.Args[0])
+		}
+		return nil
+	}
+	idx := shapeIndexOf(shapes, pv.Name)
+	if idx < 0 || len(pv.Args) != len(shapes[idx].pay) {
+		return e.bnd()
+	}
+	w := 0
+	for i, p := range shapes[idx].pay {
+		if ni := e.bindArmWord(slot, w, p, pv.Args[i]); ni != nil {
+			return ni
+		}
+		w += len(abiWordTypes(p))
+	}
+	return nil
+}
+
+// bindArmWord binds one payload position from the slot's words at offset
+// w. A position the pattern names `_` (or does not pattern at all) still
+// consumed its words at the caller; this only spells the binding.
+func (e *emitter) bindArmWord(slot sumSlot, w int, p fnParamAbi, pat ast.Pattern) *NotImplemented {
+	b, ok := pat.(*ast.PatBinding)
+	if !ok || b.Name == "_" {
+		return nil
+	}
+	at := slot.pay
+	if w == 1 {
+		at = slot.pay1
+	}
+	switch p.kind {
+	case abiVoid:
+		// The `()` position carries no word; the name is bound to what a
+		// unit value reads as, which is nothing at all.
+		e.scalars[b.Name] = scalarSlot{operand: "0"}
+	case abiI64:
+		op := e.loadNum(at, false)
+		if e.assigned[b.Name] {
+			e.bindScalarSlot(b.Name, op, false, baseStrKind(p.typ))
+		} else {
+			e.scalars[b.Name] = scalarSlot{operand: op, kind: baseStrKind(p.typ)}
+		}
+	case abiDouble:
+		w := e.value()
+		e.inst(fmt.Sprintf("%%%s = bitcast i64 %s to double", w, e.loadNum(at, false)))
+		if e.assigned[b.Name] {
+			e.bindScalarSlot(b.Name, "%"+w, true, baseStrKind(p.typ))
+		} else {
+			e.scalars[b.Name] = scalarSlot{operand: "%" + w, isFloat: true, kind: baseStrKind(p.typ)}
+		}
+	case abiStr:
+		if e.assigned[b.Name] {
+			// A String an arm writes needs an addressable pair, which the
+			// String binding has not got yet (T4's two-word storage face).
+			return e.bnd()
+		}
+		e.strEnv[b.Name] = strBinding{
+			dataOp: e.wordPtr(e.loadNum(slot.pay, false)),
+			lenOp:  e.loadNum(slot.pay1, false),
+		}
+	case abiGc:
+		e.gcEnv[b.Name] = gcBinding{rec: p.key, reg: e.wordPtr(e.loadNum(at, false))}
+	}
+	return nil
+}
+
+// isResultShapes reports whether a slot's table is a Result's — the fused
+// one, whose head is Ok and whose tail is the error sum's variants.
+func isResultShapes(shapes []sumVariantShape) bool {
+	return len(shapes) > 0 && shapes[0].name == "Ok"
 }
 
 // emitMatchBody emits one arm's body: a block body runs as an arm block
@@ -8476,39 +8779,148 @@ func (e *emitter) emitTail(v ast.Expr) *NotImplemented {
 		return nil
 	case "Err":
 		if len(call.Args) != 1 {
-			return bndErrPay()
+			return bndMain()
 		}
-		ctor, ok := call.Args[0].(*ast.Call)
-		if !ok || len(ctor.Args) != 1 {
-			return bndErrPay()
+		// The entry's declared return names the fused table; the variant
+		// the payload constructs names the tag, and its own declared
+		// payload is what the line renders.
+		shapes, ok := e.variantShapes(e.derefNewtype(e.mainRet))
+		if !ok || !isResultShapes(shapes) {
+			return bndMain()
 		}
-		vfn, ok := ctor.Fn.(*ast.Ident)
+		idx, args, ok := e.sumCtor(shapes, call.Args[0])
 		if !ok {
-			return bndErrPay()
+			return bndMain()
 		}
-		lit, ok := ctor.Args[0].(*ast.Literal)
-		if !ok || lit.Kind != "string" {
-			return bndErrPay()
+		sh := shapes[idx]
+		if len(args) != len(sh.pay) {
+			return bndMain()
 		}
-		payload, ok := decodeStringLiteral(lit.Text)
-		if !ok {
-			return bndErrPay()
+		head := "error: " + sh.name
+		if len(sh.pay) > 0 {
+			head += ": "
 		}
-		if !isStringPayloadVariant(e.sums, e.rootKey, e.mainRet, vfn.Name) {
-			return bndErrPay()
+		// The whole line is a compile-time constant wherever its payload
+		// is — the face the M4 report had, unchanged to the byte: one
+		// global, no calls, no rendering at run time.
+		if payload, ok := constErrPayload(args); ok {
+			line := head + payload + "\n"
+			name := e.errName()
+			e.errConsts = append(e.errConsts, fmt.Sprintf(
+				"@%s = private unnamed_addr constant [%d x i8] c\"%s\"", name, len(line), irEscape(line)))
+			e.use("__we_fail")
+			e.inst(fmt.Sprintf("call void @__we_fail(ptr @%s, i64 %d)", name, len(line)))
+			e.inst("unreachable")
+			return nil
 		}
-		// The report line is the runtime-written byte sequence: the
-		// payload decodes to the bytes the source means, and __we_fail
-		// writes exactly this many of them (design D5).
-		line := "error: " + vfn.Name + ": " + payload + "\n"
-		e.errConst = fmt.Sprintf("@.err = private unnamed_addr constant [%d x i8] c\"%s\"", len(line), irEscape(line))
+		// Anything else renders at run time through the same value-to-
+		// String face interpolation uses, joined by the runtime's own
+		// concatenation: __we_fail writes the bytes the pair carries.
+		p, l, ni := e.errReport(head, args)
+		if ni != nil {
+			return ni
+		}
 		e.use("__we_fail")
-		e.inst(fmt.Sprintf("call void @__we_fail(ptr @.err, i64 %d)", len(line)))
+		e.inst(fmt.Sprintf("call void @__we_fail(ptr %s, i64 %s)", p, l))
 		e.inst("unreachable")
 		return nil
 	default:
 		return bndMain()
 	}
+}
+
+// errName is the constant one report site's line lives in. The first
+// keeps the M4 spelling; a report that is not the entry's tail — a deep
+// return beside it, or a second one of either — takes its own global, so
+// two sites never share the bytes of one.
+func (e *emitter) errName() string {
+	if len(e.errConsts) == 0 {
+		return ".err"
+	}
+	return fmt.Sprintf(".err%d", len(e.errConsts))
+}
+
+// constErrPayload renders a report's payload at compile time: the bytes
+// the runtime's own printers would write, for the literal arguments whose
+// rendering is the text the source spelled. A non-literal, or a kind
+// whose rendering is not a decode (a float's shortest decimal, a rune's
+// character), answers false and the line renders at run time.
+func constErrPayload(args []ast.Expr) (string, bool) {
+	var b strings.Builder
+	for i, a := range args {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		lit, ok := a.(*ast.Literal)
+		if !ok {
+			return "", false
+		}
+		switch lit.Kind {
+		case "string":
+			if len(lit.Holes) > 0 {
+				return "", false
+			}
+			s, ok := decodeStringLiteral(lit.Text)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(s)
+		case "int":
+			text, suf := splitIntSuffix(lit.Text)
+			if strings.HasPrefix(suf, "u") {
+				u, err := strconv.ParseUint(text, 0, 64)
+				if err != nil {
+					return "", false
+				}
+				b.WriteString(strconv.FormatUint(u, 10))
+				continue
+			}
+			n, err := strconv.ParseInt(text, 0, 64)
+			if err != nil {
+				return "", false
+			}
+			b.WriteString(strconv.FormatInt(n, 10))
+		case "bool":
+			if lit.Text != "true" && lit.Text != "false" {
+				return "", false
+			}
+			b.WriteString(lit.Text)
+		default:
+			return "", false
+		}
+	}
+	return b.String(), true
+}
+
+// errReport renders one report line at run time: the literal head, every
+// payload position through the value-to-String face interpolation uses,
+// and the newline, joined by the runtime's concatenation. The positions
+// render in declaration order and are joined by ", ", which is the same
+// text the constant path writes — so whether a line is folded at compile
+// time is unobservable in what it prints.
+func (e *emitter) errReport(head string, args []ast.Expr) (string, string, *NotImplemented) {
+	type pair struct{ p, l string }
+	parts := []pair{{e.intern(head), strconv.Itoa(len(head))}}
+	for i, a := range args {
+		if i > 0 {
+			parts = append(parts, pair{e.intern(", "), "2"})
+		}
+		res, ni := e.emitHole(a)
+		if ni != nil {
+			return "", "", ni
+		}
+		parts = append(parts, pair{res.strBind.dataOp, res.strBind.lenOp})
+	}
+	parts = append(parts, pair{e.intern("\n"), "1"})
+	acc := parts[0]
+	for _, p := range parts[1:] {
+		d, l, ni := e.concatStr(acc.p, acc.l, p.p, p.l)
+		if ni != nil {
+			return "", "", ni
+		}
+		acc = pair{d, l}
+	}
+	return acc.p, acc.l, nil
 }
 
 // --- the M10b fn defines and calls (design D1/D2/D3) --------------------------
@@ -8555,7 +8967,32 @@ type fnAbi struct {
 	retName  string      // the declared base type name, where the return names one
 	variants []string    // the ret sum's variant names, decl order (abiSum)
 	elems    []tupleElem // the returned tuple's element shapes (abiTuple)
-	params   []fnParamAbi
+	// retShapes is variants' payload half: what each variant carries, at
+	// the same index. A return writes its payload words through it, and a
+	// caller matching on the result binds them back through it.
+	retShapes []sumVariantShape
+	params    []fnParamAbi
+}
+
+// sumVariantNames is the name column of a shape table — the same list
+// sumSlot.variants carries, derived from the one table rather than
+// repeated beside it.
+func sumVariantNames(shapes []sumVariantShape) []string {
+	names := make([]string, len(shapes))
+	for i, s := range shapes {
+		names[i] = s.name
+	}
+	return names
+}
+
+// shapeIndexOf resolves a variant name to its tag in one sum's table.
+func shapeIndexOf(shapes []sumVariantShape, name string) int {
+	for i, s := range shapes {
+		if s.name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // fnAbiOf classifies one fn's signature against the walked module's
@@ -8604,7 +9041,20 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 		return abiVoid, "", false
 	}
 	if n.Name == "Result" && len(n.Args) == 2 {
-		return abiSum, "Result", true // the prelude sum — Ok/Err
+		// The prelude sum — Ok/Err. Its shape table is the fused one, and
+		// its budget is the same two words every other sum gets: a Result
+		// whose Ok or whose E variant needs a third payload word has no
+		// encoding here and stops at the boundary like any other.
+		if _, ok := e.variantShapes(t); !ok {
+			return abiVoid, "", false
+		}
+		return abiSum, "Result", true
+	}
+	if n.Name == "Option" && len(n.Args) == 1 {
+		if _, ok := e.variantShapes(t); !ok {
+			return abiVoid, "", false
+		}
+		return abiSum, "Option", true
 	}
 	if len(n.Args) != 0 {
 		return abiVoid, "", false
@@ -8622,9 +9072,196 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 		return abiGc, key, true
 	}
 	if _, ok := e.sums[key]; ok {
+		// A sum reaches the ABI only if every one of its variants fits the
+		// payload budget — the single point that rule is enforced at, so
+		// no producer, binder, or argument expansion repeats it.
+		if _, ok := e.variantShapes(t); !ok {
+			return abiVoid, "", false
+		}
 		return abiSum, key, true
 	}
 	return abiVoid, "", false
+}
+
+// variantShapes is the tag-indexed variant table of one sum type: the
+// slice position IS the tag the slot carries. A user sum's tags are its
+// declaration order; Option's are None 0 / Some 1; and Result's fuse the
+// outer Ok/Err with E's own variants — Ok is tag 0 and E's k-th variant
+// is tag 1+k, both sharing the one payload pair. That fusion is design
+// D8's adjudication and it is what lets a single three-word slot hold an
+// `Err(Failed(1, 2))` whole: E1204 already guarantees E is a named sum,
+// so the encoding is total over every legal Result.
+//
+// It reports false for anything outside the budget, which is the other
+// half of its job: the two payload words, no payload position that is
+// itself a sum or a tuple.
+func (e *emitter) variantShapes(t ast.TypeRef) ([]sumVariantShape, bool) {
+	n, ok := t.(*ast.NamedType)
+	if !ok || n.Qual != "" {
+		return nil, false
+	}
+	switch {
+	case n.Name == "Option" && len(n.Args) == 1:
+		some, ok := e.payloadShape("Some", n.Args[:1])
+		if !ok {
+			return nil, false
+		}
+		return append([]sumVariantShape{{name: "None"}}, some), true
+	case n.Name == "Result" && len(n.Args) == 2:
+		okShape, ok := e.payloadShape("Ok", n.Args[:1])
+		if !ok {
+			return nil, false
+		}
+		errShapes, ok := e.namedSumShapes(n.Args[1])
+		if !ok {
+			return nil, false
+		}
+		return append([]sumVariantShape{okShape}, errShapes...), true
+	}
+	return e.namedSumShapes(t)
+}
+
+// namedSumShapes shapes a sum the walked module declares. The key is the
+// module's own — a sum reached by a qualified name belongs to another
+// module's tables and stops here, which is the same discipline classType
+// applies to a qualified reference.
+func (e *emitter) namedSumShapes(t ast.TypeRef) ([]sumVariantShape, bool) {
+	n, ok := t.(*ast.NamedType)
+	if !ok || n.Qual != "" || len(n.Args) != 0 {
+		return nil, false
+	}
+	key := e.curKey + "." + n.Name
+	ord, ok := e.sumsOrd[key]
+	if !ok {
+		return nil, false
+	}
+	decl := e.sums[key]
+	shapes := make([]sumVariantShape, 0, len(ord))
+	for _, name := range ord {
+		s, ok := e.payloadShape(name, decl[name])
+		if !ok {
+			return nil, false
+		}
+		shapes = append(shapes, s)
+	}
+	return shapes, true
+}
+
+// payloadShape classifies one variant's declared payload positions. The
+// budget lives here: at most two words in total, and no position that is
+// itself a sum or a tuple. A sum payload has no spare tag bits to carry
+// its own discriminant, and a tuple payload would need an aggregate the
+// flat payload words cannot spell — both are design D8's disclosed
+// boundary, not an oversight.
+func (e *emitter) payloadShape(name string, payload []ast.TypeRef) (sumVariantShape, bool) {
+	s := sumVariantShape{name: name}
+	for _, p := range payload {
+		if _, unit := p.(*ast.UnitType); unit {
+			// `()` is chapter 8's one value and crosses as no word at all.
+			// The position stays in the shape — a declared `V(())` and a
+			// declared `V()` are different arities at the source, and the
+			// constructor and the arm bind by declaration order — but it
+			// contributes no word to the budget.
+			s.pay = append(s.pay, fnParamAbi{kind: abiVoid})
+			continue
+		}
+		if e.isSumType(p) {
+			return sumVariantShape{}, false
+		}
+		k, key, ok := e.classType(p)
+		if !ok || k == abiVoid || k == abiTuple || k == abiFn || k == abiSum {
+			return sumVariantShape{}, false
+		}
+		s.pay = append(s.pay, fnParamAbi{kind: k, key: key, typ: baseTypeName(e.derefNewtype(p))})
+		if s.payWords() > sumPayloadWords {
+			return sumVariantShape{}, false
+		}
+	}
+	return s, true
+}
+
+// variantSite resolves a construction's head to the sum it builds: the
+// tag, and the shape table that tag indexes into.
+//
+// A user sum needs no help — chapter 9 puts variant names in the module's
+// one name space, so a bare name picks out exactly one declaration (the
+// check stage rejects a second with E0404) and looking through the
+// walked module's own sums is the same answer the check made. The prelude
+// is the other half: `Some`/`None`/`Ok`/`Err` carry no payload type of
+// their own, so they are only resolvable where chapter 7's agreement
+// rules have already named the sum — the annotation of a binding, the
+// declared return of a fn, a parameter's type. That is what typ is, and
+// a prelude construction in a position that names no sum stays at the
+// boundary rather than guessing one.
+func (e *emitter) variantSite(name string, typ ast.TypeRef) (int, []sumVariantShape, bool) {
+	// The prelude answers first where a position named it: a local
+	// declaration may shadow a prelude name (chapter 15's prelude is an
+	// implicit import, and the innermost binding wins).
+	if typ != nil {
+		if n, ok := e.derefNewtype(typ).(*ast.NamedType); ok && n.Qual == "" {
+			prelude := (n.Name == "Option" && len(n.Args) == 1) || (n.Name == "Result" && len(n.Args) == 2)
+			if prelude {
+				shapes, ok := e.variantShapes(n)
+				if !ok {
+					return 0, nil, false
+				}
+				if idx := shapeIndexOf(shapes, name); idx >= 0 {
+					return idx, shapes, true
+				}
+				return 0, nil, false
+			}
+		}
+	}
+	if shapes, ok := e.localVariantShapes(name); ok {
+		idx := shapeIndexOf(shapes, name)
+		return idx, shapes, true
+	}
+	return 0, nil, false
+}
+
+// localVariantShapes finds the sum the walked module declares a variant
+// of that name in. The module's sums are few and the answer is a
+// compile-time fact, so the scan is the whole lookup — there is no
+// reverse index to keep in step with the declaration tables.
+func (e *emitter) localVariantShapes(name string) ([]sumVariantShape, bool) {
+	prefix := e.curKey + "."
+	for key := range e.sumsOrd {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		shapes, ok := e.namedSumShapes(&ast.NamedType{Name: strings.TrimPrefix(key, prefix)})
+		if !ok {
+			continue
+		}
+		if shapeIndexOf(shapes, name) >= 0 {
+			return shapes, true
+		}
+	}
+	return nil, false
+}
+
+// isSumType answers whether a payload position names a sum, without
+// shaping it. payloadShape reads this before classifying so a sum nested
+// in a sum is refused by inspection rather than by descending into
+// variantShapes again — which is also what keeps a self-referential
+// declaration from recursing (the check stage rejects those, and this
+// keeps the compiler off the same edge derefNewtype guards).
+func (e *emitter) isSumType(t ast.TypeRef) bool {
+	n, ok := e.derefNewtype(t).(*ast.NamedType)
+	if !ok || n.Qual != "" {
+		return false
+	}
+	if n.Name == "Option" && len(n.Args) == 1 {
+		return true
+	}
+	if n.Name == "Result" && len(n.Args) == 2 {
+		return true
+	}
+	if len(n.Args) != 0 {
+		return false
+	}
+	_, ok = e.sums[e.curKey+"."+n.Name]
+	return ok
 }
 
 func (e *emitter) fnAbiOf(d *ast.FnDecl) (fnAbi, bool) {
@@ -8665,11 +9302,17 @@ func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
 			abi.retTyp = "ptr"
 		case abiSum:
 			abi.retTyp = "{ i64, i64, i64 }"
-			if key == "Result" {
-				abi.variants = []string{"Ok", "Err"}
-			} else {
-				abi.variants = e.sumsOrd[key]
+			// The variant table and its payload shapes are one answer read
+			// twice: the names come from the declaration order, and the
+			// shapes from the same walk the budget check already made. A
+			// Result's table is the fused one classType classified against,
+			// so the tag a return writes is the tag a match arm tests.
+			shapes, ok := e.variantShapes(t)
+			if !ok {
+				return abi, false
 			}
+			abi.retShapes = shapes
+			abi.variants = sumVariantNames(shapes)
 		}
 	default:
 		return abi, false
@@ -9919,36 +10562,115 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 		if !hasValue {
 			return "", bndFn()
 		}
-		c, ok := value.(*ast.Call)
-		if !ok {
-			return "", bndFn()
+		// The returned aggregate is a constant wherever its words are:
+		// the zero-payload forms (Ok(unit), a nullary variant name) keep
+		// exactly the text the two-word layout gave them. A payload that
+		// is a register cannot ride a constant — LLVM takes constant
+		// structs there — so those build through insertvalue, the same
+		// register-level face the String pair and the tuple use.
+		tag, words, ni := e.sumReturnWords(abi.retShapes, value)
+		if ni != nil {
+			return "", ni
 		}
-		id, ok := c.Fn.(*ast.Ident)
-		if !ok {
-			return "", bndFn()
+		if tag != "" && !hasRegister(words) {
+			return fmt.Sprintf("{ i64, i64, i64 } { i64 %s, i64 %s, i64 %s }",
+				tag, wordOr0(words, 0), wordOr0(words, 1)), nil
 		}
-		// Ok(unit) on a Result return is the zero pair; every Err shape
-		// and every payload-bearing return stops (the B-track widens).
-		if abi.retKey == "Result" {
-			if id.Name != "Ok" || len(c.Args) != 1 {
-				return "", bndFn()
-			}
-			if _, ok := c.Args[0].(*ast.Unit); !ok {
-				return "", bndFn()
-			}
-			return "{ i64, i64, i64 } { i64 0, i64 0, i64 0 }", nil
+		cur := "undef"
+		insert := func(w string, at int) {
+			v := e.value()
+			e.inst(fmt.Sprintf("%%%s = insertvalue { i64, i64, i64 } %s, i64 %s, %d", v, cur, w, at))
+			cur = "%" + v
 		}
-		if len(c.Args) != 0 {
-			return "", bndFn()
+		if tag == "" {
+			// A value a binding already holds: its tag is a word like its
+			// payload words, not a tag the construction named.
+			tag, words = words[0], words[1:]
 		}
-		for i, n := range abi.variants {
-			if n == id.Name {
-				return fmt.Sprintf("{ i64, i64, i64 } { i64 %d, i64 0, i64 0 }", i), nil
-			}
-		}
-		return "", bndFn()
+		insert(tag, 0)
+		insert(wordOr0(words, 0), 1)
+		insert(wordOr0(words, 1), 2)
+		return "{ i64, i64, i64 } " + cur, nil
 	}
 	return "", bndFn()
+}
+
+// sumReturnWords resolves a returned sum value to its tag and its payload
+// words. Two forms reach here: a construction, whose tag the variant
+// table names and whose payload the constructor's arguments produce, and
+// a binding that already holds a sum, whose three words load back out of
+// its slot. The tag is the empty string in the second case — the words
+// carry it, first — because a slot's tag is a value, not a variant index.
+func (e *emitter) sumReturnWords(shapes []sumVariantShape, value ast.Expr) (string, []string, *NotImplemented) {
+	if idx, args, ok := e.sumCtor(shapes, value); ok {
+		sh := shapes[idx]
+		if len(args) != len(sh.pay) {
+			return "", nil, bndFn()
+		}
+		words, ni := e.sumPayWords(sh, args)
+		if ni != nil {
+			return "", nil, ni
+		}
+		return strconv.Itoa(idx), words, nil
+	}
+	id, ok := value.(*ast.Ident)
+	if !ok {
+		return "", nil, bndFn()
+	}
+	sl, ok := e.sums2[id.Name]
+	if !ok {
+		return "", nil, bndFn()
+	}
+	return "", []string{
+		e.loadNum(sl.tag, false), e.loadNum(sl.pay, false), e.loadNum(sl.pay1, false),
+	}, nil
+}
+
+// sumCtor resolves a construction expression against one sum's table: the
+// tag it writes and the argument list its payload takes. Three spellings
+// reach here — a variant name bare (a nullary variant) or called, and the
+// fused Result's `Err(x)`, which names no tag of its own because Ok spent
+// the zero: what follows Err is itself the error construction, so the
+// resolution recurses into it and the tag it answers with is the fused
+// index. A name that is a binding rather than a variant is not a
+// construction and reports false, which is what lets a caller fall
+// through to the slot a value already lives in.
+func (e *emitter) sumCtor(shapes []sumVariantShape, value ast.Expr) (int, []ast.Expr, bool) {
+	if id, ok := value.(*ast.Ident); ok {
+		idx := shapeIndexOf(shapes, id.Name)
+		if idx < 0 || len(shapes[idx].pay) != 0 {
+			return 0, nil, false
+		}
+		return idx, nil, true
+	}
+	c, ok := value.(*ast.Call)
+	if !ok {
+		return 0, nil, false
+	}
+	id, ok := c.Fn.(*ast.Ident)
+	if !ok {
+		return 0, nil, false
+	}
+	if id.Name == "Err" && len(c.Args) == 1 && isResultShapes(shapes) {
+		return e.sumCtor(shapes, c.Args[0])
+	}
+	idx := shapeIndexOf(shapes, id.Name)
+	if idx < 0 {
+		return 0, nil, false
+	}
+	return idx, c.Args, true
+}
+
+// hasRegister reports whether any operand is an SSA register rather than
+// a literal — the split between the constant aggregate and the
+// insertvalue chain.
+func hasRegister(words []string) bool {
+	for _, w := range words {
+		if strings.HasPrefix(w, "%") {
+			return true
+		}
+	}
+	return false
 }
 
 // recvKeyOf resolves the record a receiver expression denotes without
@@ -10230,7 +10952,10 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 			e.inst(fmt.Sprintf("%%%s = extractvalue %s %%%s, %d", ev, abi.retTyp, v, i))
 			e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", ev, w))
 		}
-		return callResult{kind: ckSum, sum: sumSlot{tag: ts, pay: pp, pay1: p1, variants: abi.variants}}, nil
+		return callResult{kind: ckSum, sum: sumSlot{
+			tag: ts, pay: pp, pay1: p1,
+			variants: abi.variants, shapes: abi.retShapes,
+		}}, nil
 	}
 	return callResult{}, e.bnd()
 }
@@ -10370,8 +11095,8 @@ func (e *emitter) render(module string) string {
 	if len(maps) > 0 {
 		groups = append(groups, maps)
 	}
-	if e.errConst != "" {
-		groups = append(groups, []string{e.errConst})
+	if len(e.errConsts) > 0 {
+		groups = append(groups, e.errConsts)
 	}
 	if len(e.ovfs) > 0 {
 		groups = append(groups, e.ovfs)
@@ -10425,30 +11150,6 @@ func (e *emitter) render(module string) string {
 	sb.WriteString(e.bodyText())
 	sb.WriteString("}\n")
 	return sb.String()
-}
-
-// isStringPayloadVariant is the variant-attribution back-check of design
-// D3: name must be a variant of the E in the entry main's `Result<(), E>`
-// return annotation, carrying exactly one String payload. key is the
-// entry module's — the error type resolves in its own module's table.
-// Typecheck already established the semantics; this only confirms the
-// attribution from the module's own declarations, without leaning on
-// typecheck internals.
-func isStringPayloadVariant(sums map[string]map[string][]ast.TypeRef, key string, ret ast.TypeRef, name string) bool {
-	res, ok := ret.(*ast.NamedType)
-	if !ok || res.Qual != "" || res.Name != "Result" || len(res.Args) != 2 {
-		return false
-	}
-	errTy, ok := res.Args[1].(*ast.NamedType)
-	if !ok || errTy.Qual != "" {
-		return false
-	}
-	payload, ok := sums[key+"."+errTy.Name][name]
-	if !ok || len(payload) != 1 {
-		return false
-	}
-	str, ok := payload[0].(*ast.NamedType)
-	return ok && str.Qual == "" && str.Name == "String" && len(str.Args) == 0
 }
 
 // decodeRuneLiteral resolves a rune literal (Text holds the source slice,

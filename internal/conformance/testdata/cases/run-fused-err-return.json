@@ -1,0 +1,16 @@
+{
+  "name": "run-fused-err-return",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(Int64, Int64) | Nope\n\nfn classify(n: Int64) -> Result<Int64, AppError> {\n    if n > 0 {\n        return Ok(n)\n    }\n    if n == 0i64 {\n        return Err(Nope)\n    }\n    return Err(Failed(1i64, 2i64))\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = classify(5i64)\n    match a {\n        Ok(v) => { io.println(\"ok ${v}\") }\n        Err(Failed(x, y)) => { io.println(\"failed ${x} ${y}\") }\n        Err(Nope) => { io.println(\"nope\") }\n    }\n    let b = classify(0i64)\n    match b {\n        Ok(v) => { io.println(\"ok ${v}\") }\n        Err(e) => { match e {\n            Failed(x, y) => { io.println(\"inner ${x} ${y}\") }\n            Nope => { io.println(\"inner nope\") }\n        } }\n    }\n    let c = classify(-3i64)\n    match c {\n        Ok(v) => { io.println(\"ok ${v}\") }\n        Err(_) => { io.println(\"wildcard\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "ok 5\ninner nope\nwildcard\n",
+  "stderr": ""
+}

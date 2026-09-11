@@ -277,12 +277,14 @@ func TestM10bFnAbiMatrix(t *testing.T) {
 	}, {
 		// The prelude Result's own return face: `Ok(())` is the fused tag
 		// space's zero, and it is the other half of fnRetOperand's sum
-		// arm — a declared fn, not a tail, is where it is reachable.
+		// arm — a declared fn, not a tail, is where it is reachable. The
+		// value type is chapter 8's, so the one payload position is the
+		// unit position and the aggregate is the zero constant.
 		name: "result ok unit",
 		mod: ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
 			appError(),
 			pubFn("go", nil, &ast.NamedType{Name: "Result", Args: []ast.TypeRef{
-				named("Int64"), named("AppError")}}, okReturn()),
+				&ast.UnitType{}, named("AppError")}}, okReturn()),
 			mainDecl(okReturn()),
 		}}},
 		defines: []string{

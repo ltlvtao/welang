@@ -1,0 +1,16 @@
+{
+  "name": "run-sum-ctor-expression",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Nope | Broken\n\nfn pick(n: Int64) -> Option<Int64> {\n    if n > 0 {\n        return Some(n)\n    }\n    return None\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = pick(3i64)\n    match a {\n        Some(v) => { io.println(\"some ${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let b: Option<Int64> = Some(42i64)\n    match b {\n        Some(v) => { io.println(\"lit ${v}\") }\n        None => { io.println(\"lit none\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "some 3\nlit 42\n",
+  "stderr": ""
+}

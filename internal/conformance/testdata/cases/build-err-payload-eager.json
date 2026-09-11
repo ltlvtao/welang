@@ -1,5 +1,5 @@
 {
-  "name": "build-bnd-err-payload",
+  "name": "build-err-payload-eager",
   "args": [
     "build",
     "."
@@ -10,7 +10,7 @@
       "src/main.we": "pub type AppError = Failed(Int64, Int64)\n\npub fn main() -> Result<(), AppError> {\n    return Err(Failed(1i64, 2i64))\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 0,
   "stdout": "",
-  "stderr": "we: Err payloads beyond one plain string-literal variant argument are not implemented in this reference build yet\n"
+  "stderr": ""
 }

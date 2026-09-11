@@ -131,6 +131,11 @@ func itoa(n int64) string {
 	return string(b[i:])
 }
 
+// The body word, spelled once: most rows of the table below answer with
+// it, and a row that means to pin a boundary of its own must not be able
+// to match it by accident.
+const BODYW = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
+
 // Each What row fires on its own trigger (design D3's closed table).
 func TestBoundaryWhats(t *testing.T) {
 	cases := []struct {
@@ -162,30 +167,38 @@ func TestBoundaryWhats(t *testing.T) {
 			replaceBody(okModule(), []ast.Stmt{&ast.Return{}}),
 			"main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)",
 		},
+		// The four rows below were the M4 Err-payload table, whose one
+		// accepted shape was a single string-literal variant argument.
+		// T9-2 retires that word — the report line renders every payload
+		// the variant declares — and what is left of these programs is
+		// what stops them now: a payload-bearing variant named bare, a
+		// name no binding holds, and a constructor the error sum does not
+		// declare. Each is the body word's own trigger, not a report
+		// boundary's: an arity or a name the check stage rejects.
 		{
-			"unit variant as Err argument",
+			"payload variant named bare as Err argument",
 			replaceBody(errModule("\"boom\""), []ast.Stmt{
 				&ast.Return{HasValue: true, Value: &ast.Call{
 					Fn:   &ast.Ident{Name: "Err"},
 					Args: []ast.Expr{&ast.Ident{Name: "Failed"}},
 				}},
 			}),
-			"Err payloads beyond one plain string-literal variant argument",
+			BODYW,
 		},
 		{
-			"non-literal payload",
+			"payload name no binding holds",
 			replaceBody(errModule("\"boom\""), []ast.Stmt{
 				&ast.Return{HasValue: true, Value: &ast.Call{
 					Fn:   &ast.Ident{Name: "Err"},
 					Args: []ast.Expr{&ast.Call{Fn: &ast.Ident{Name: "Failed"}, Args: []ast.Expr{&ast.Ident{Name: "x"}}}},
 				}},
 			}),
-			"Err payloads beyond one plain string-literal variant argument",
+			BODYW,
 		},
 		{
-			"interpolated payload",
+			"interpolated payload with an unbound hole",
 			errModule("\"a${b}c\""),
-			"Err payloads beyond one plain string-literal variant argument",
+			BODYW,
 		},
 		{
 			"unknown payload constructor",
@@ -195,7 +208,7 @@ func TestBoundaryWhats(t *testing.T) {
 					Args: []ast.Expr{&ast.Call{Fn: &ast.Ident{Name: "Unknown"}, Args: []ast.Expr{&ast.Literal{Kind: "string", Text: "\"x\""}}}},
 				}},
 			}),
-			"Err payloads beyond one plain string-literal variant argument",
+			BODYW,
 		},
 		{
 			// The M10b multi-function widening (design D8): a valueless
@@ -259,7 +272,14 @@ func TestBoundaryWhats(t *testing.T) {
 
 // Two payloads of Int64: the multi-payload variant form (golden
 // build-bnd-err-payload's module shape).
-func TestBoundaryWhatMultiPayload(t *testing.T) {
+// T9-2 (design D8): the report line renders every payload word the
+// variant declares, in declaration order. This program is the
+// two-word shape the retired one-string-literal rule used to stop, and
+// it is the module the build-err-payload-eager golden compiles: the
+// constant folds through the same constant path the one-word payload
+// took, so what the rule's removal bought is a wider line, not a wider
+// emitter.
+func TestErrReportMultiPayload(t *testing.T) {
 	f := &ast.File{Items: []ast.Item{
 		&ast.SumDecl{
 			Pub:  true,
@@ -280,10 +300,15 @@ func TestBoundaryWhatMultiPayload(t *testing.T) {
 			}}}},
 		},
 	}}
-	_, ni := Emit(f, "demo")
-	if ni == nil || ni.What != "Err payloads beyond one plain string-literal variant argument" {
-		t.Fatalf("want Err-payload boundary, got: %v", ni)
+	ir, ni := Emit(f, "demo")
+	if ni != nil {
+		t.Fatalf("unexpected boundary: %s", ni.What)
 	}
+	// "error: Failed: 1, 2\n" is 20 bytes: 15 of prefix, 4 of payload
+	// ("1, 2" — the separator belongs to the renderer, not the payload),
+	// newline.
+	wantIR(t, ir, `@.err = private unnamed_addr constant [20 x i8] c"error: Failed: 1, 2\0A"`, "the report line")
+	wantIR(t, ir, "call void @__we_fail(ptr @.err, i64 20)", "the fail call")
 }
 
 // Emission is a pure function: two calls over the same module agree
@@ -304,4 +329,66 @@ func replaceBody(f *ast.File, items []ast.Stmt) *ast.File {
 func appendItem(f *ast.File, it ast.Item) *ast.File {
 	f.Items = append(f.Items, it)
 	return f
+}
+
+// T9-2 (design D8): a payload that is not a constant cannot fold into the
+// report line, so the line renders at run time through the same
+// value-to-String face interpolation uses — __we_str_of_* per word, then
+// the runtime's own concatenation, with the separator and the newline as
+// interned literals of their own. __we_fail still takes the pair the
+// chain ends on, so the face it presents to the runtime is unchanged.
+func TestErrReportRendersNonConstantPayload(t *testing.T) {
+	f := &ast.File{Items: []ast.Item{
+		bigErr(),
+		mainDecl(
+			letBind("n", intLit("41")),
+			&ast.Return{HasValue: true, Value: call(ident("Err"), call(ident("Failed"), intLit("11i64"), ident("n")))},
+		),
+	}}
+	ir, ni := Emit(f, "demo")
+	if ni != nil {
+		t.Fatalf("unexpected boundary: %s", ni.What)
+	}
+	wantIR(t, ir, `@.s0 = private unnamed_addr constant [15 x i8] c"error: Failed: "`, "the literal head")
+	wantIR(t, ir, `@.s1 = private unnamed_addr constant [2 x i8] c", "`, "the separator")
+	wantIR(t, ir, "declare %struct.we_str @__we_str_of_i64(i64)", "the word renderer")
+	for _, frag := range []string{
+		"call %struct.we_str @__we_str_of_i64(i64 11)",
+		"call %struct.we_str @__we_str_of_i64(i64 41)",
+		"call %struct.we_str @__we_str_concat(ptr @.s0, i64 15,",
+		"i64 %v8, ptr @.s1, i64 2)",
+	} {
+		wantIR(t, ir, frag, "the report chain")
+	}
+	wantIR(t, ir, "call void @__we_fail(ptr %v16, i64 %v17)", "the fail call")
+	wantNoIR(t, ir, "@.err = private", "a constant folded line")
+}
+
+// Two report sites in one entry do not share a line. `@.err` keeps the
+// M4 spelling for the first and the rest take a numbered global, so a
+// deep return and the tail return each print the bytes they spelled —
+// the shape a main with an early error beside its trailing one reaches.
+func TestErrReportSitesDoNotShareAGlobal(t *testing.T) {
+	f := &ast.File{Items: []ast.Item{appError(), mainDecl(
+		&ast.ExprStmt{Expr: &ast.If{
+			Cond: binOp("==", intLit("1"), intLit("1")),
+			Then: ast.Block{Items: []ast.Stmt{&ast.Return{HasValue: true, Value: &ast.Call{
+				Fn:   ident("Err"),
+				Args: []ast.Expr{&ast.Call{Fn: ident("Failed"), Args: []ast.Expr{strLit(`"early"`)}}},
+			}}}},
+		}},
+		&ast.Return{HasValue: true, Value: &ast.Call{
+			Fn:   ident("Err"),
+			Args: []ast.Expr{&ast.Call{Fn: ident("Failed"), Args: []ast.Expr{strLit(`"late"`)}}},
+		}},
+	)}}
+	ir, ni := Emit(f, "demo")
+	if ni != nil {
+		t.Fatalf("unexpected boundary: %s", ni.What)
+	}
+	// "error: Failed: early\n" is 21 bytes, "...late\n" is 20.
+	wantIR(t, ir, `@.err = private unnamed_addr constant [21 x i8] c"error: Failed: early\0A"`, "the early return's line")
+	wantIR(t, ir, `@.err1 = private unnamed_addr constant [20 x i8] c"error: Failed: late\0A"`, "the tail return's line")
+	wantIR(t, ir, "call void @__we_fail(ptr @.err, i64 21)", "the early site's fail call")
+	wantIR(t, ir, "call void @__we_fail(ptr @.err1, i64 20)", "the tail site's fail call")
 }
