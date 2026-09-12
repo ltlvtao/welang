@@ -590,6 +590,31 @@ func (e *emitter) siteOf(n ast.Expr) (typecheck.Site, bool) {
 	return typecheck.Site{}, false
 }
 
+// instShape resolves one recorded shape through the instantiation in
+// flight: a position the enclosing clause left open is read from the
+// binding the instantiation supplied, and every other shape is itself. It
+// is the shape-level half of what substRef does for references, and it is
+// what makes a site inside a generic body resolvable — the check stage
+// walked that body once, with the declaration's own positions still open,
+// so what it recorded there is open too.
+//
+// A position the instantiation does not bind stays open and is answered as
+// it stands: the caller meets it where a resolved shape is required and
+// stops there, which is the boundary, never a guess (design D1).
+func (e *emitter) instShape(s typecheck.Shape) typecheck.Shape {
+	for s.Kind == typecheck.ShapeParam {
+		if e.instEnv == nil || s.Pos < 0 || s.Pos >= len(e.instEnv.params) {
+			break
+		}
+		b, ok := e.instEnv.bind(e.instEnv.params[s.Pos])
+		if !ok {
+			break
+		}
+		s = b
+	}
+	return s
+}
+
 // siteArgs turns one site's clause bindings into the argument list an
 // instantiation takes, in the declaration's own parameter order. A site
 // that names fewer positions than the declaration declares is not a
@@ -608,6 +633,11 @@ func (e *emitter) siteArgs(n ast.Expr, params int) ([]typecheck.Shape, bool) {
 // position the site left unfilled is not a determined application — the
 // caller stops at the boundary rather than filling the gap with a guess,
 // which is the one thing D1 forbids.
+//
+// Every binding is read through the instantiation in flight (instShape):
+// inside a generic body the check stage recorded the enclosing clause's
+// own positions still open, and what an application here applies is the
+// enclosing instantiation's arguments, not those positions.
 func (e *emitter) siteArgsFrom(n ast.Expr, off, params int) ([]typecheck.Shape, bool) {
 	site, ok := e.siteOf(n)
 	if !ok {
@@ -620,7 +650,7 @@ func (e *emitter) siteArgsFrom(n ast.Expr, off, params int) ([]typecheck.Shape, 
 		if p < 0 || p >= params {
 			return nil, false
 		}
-		args[p] = a.Shape
+		args[p] = e.instShape(a.Shape)
 		filled[p] = true
 	}
 	for _, ok := range filled {

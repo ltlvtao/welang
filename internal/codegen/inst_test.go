@@ -287,6 +287,45 @@ pub fn main() effect io -> Result<(), AppError> {
 		"the inferred construction's layout")
 }
 
+// An inferred application inside a generic body names the enclosing
+// instantiation's argument, not the declaration's own position. The check
+// stage walks a generic body once, so what it records at `id(x)` inside
+// `twice<T>` is the open position T; resolving it is the instantiation's
+// job, and an unresolved position is not a type the emitter can name —
+// before the shape is substituted at the site, this program reaches the
+// mangler with an open position and the build dies on
+// `codegen: mangling an unresolved type position` rather than emitting.
+func TestInferredApplicationInsideAGenericBodyResolves(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", `import std.io
+
+pub type AppError = Failed(String)
+
+fn id<T>(x: T) -> T {
+    return x
+}
+
+fn twice<T>(x: T) -> T {
+    let a = id(x)
+    return id(a)
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let n = twice(3)
+    io.println("${n}")
+    return Ok(())
+}
+`)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	if n := strings.Count(ir, "define i64 @main.id$Int64("); n != 1 {
+		t.Fatalf("the inferred application emitted %d defines, want 1\n--\n%s", n, ir)
+	}
+	wantIR(t, ir, "define i64 @main.twice$Int64(", "the enclosing instantiation")
+	wantIR(t, ir, "define i64 @main.id$Int64(", "the application inside the generic body")
+}
+
 // The two spellings are one site (design D1): a construction that writes
 // its arguments and one that leaves them to inference resolve through the
 // same registry entry, so they share one synthesized declaration rather
