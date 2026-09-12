@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ltlvtao/welang/internal/ast"
+	"github.com/ltlvtao/welang/internal/typecheck"
 )
 
 // NotImplemented reports one type-clean form outside the acceptance set.
@@ -488,8 +489,27 @@ type emitter struct {
 	fns        []fnDef                      // program fns, module order then source order
 	fnTable    map[string]*fnDef            // "<key>.<name>" -> def
 	declKeys   map[ast.Item]string          // declaration node -> its "<module>.<Name>" key (mangle.go)
-	fnsDone    []string                     // finished fn define texts
-	slots      []string                     // slot globals, materialization order
+	// B1b T3: the instantiation in flight (design D3). instEnv holds the
+	// type parameters an enclosing instantiation bound and the shapes it
+	// bound them to; it is nil outside one, which is what makes every
+	// substitution the identity on the monomorphic path. The references
+	// the substitution produces record the key and the shape they stand
+	// for, because neither can be read off the reference's own name.
+	instEnv    *instCtx
+	instMemo   map[ast.TypeRef]ast.TypeRef
+	subst      map[*ast.NamedType]string
+	substShape map[*ast.NamedType]typecheck.Shape
+	// generics indexes the declarations that emit nothing of their own —
+	// the templates (design D3). An instantiation supplies the arguments;
+	// what reaches the records/sums/newtypes tables is the synthesized
+	// concrete declaration, never the template.
+	generics map[string]ast.Item
+	// insts is the program's instantiation registry (design D2): the one
+	// place a {declaration, arguments} pair becomes a symbol, and the one
+	// place a symbol met twice under different arguments is caught.
+	insts      instTable
+	fnsDone    []string // finished fn define texts
+	slots      []string // slot globals, materialization order
 	slotSeen   map[string]bool
 	curKey     string // the module whose body is being walked/emitted
 	curImports map[string]string
@@ -735,6 +755,12 @@ type fnDef struct {
 	// declaration with no type arguments, which is every symbol B1a
 	// spelled — the empty suffix is what leaves them byte-identical.
 	suffix string
+	// instArgs are the shapes this def instantiated its template at
+	// (design D3), in type-parameter position order; empty on a fn that is
+	// not an instantiation. They are what enterFnInst binds, so the
+	// template's body substitutes once per instantiation and the same
+	// definition serves every site that names it.
+	instArgs []typecheck.Shape
 }
 
 // sym renders one fn's IR symbol: `<module>.<name>` for a plain fn,
@@ -1085,6 +1111,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		modStd:      make(map[string]map[string]string),
 		modConc:     make(map[string]map[string]bool),
 		fnTable:     make(map[string]*fnDef),
+		generics:    make(map[string]ast.Item),
 		declKeys:    declIndex(mods),
 		slotSeen:    make(map[string]bool),
 		topSlots:    make(map[string]topSlot),
@@ -1112,6 +1139,10 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		for _, it := range m.File.Items {
 			switch d := it.(type) {
 			case *ast.SumDecl:
+				if len(d.TypeParams) != 0 {
+					e.generics[m.Key+"."+d.Name] = d
+					continue
+				}
 				variants := make(map[string][]ast.TypeRef, len(d.Variants))
 				names := make([]string, len(d.Variants))
 				for i, v := range d.Variants {
@@ -1124,7 +1155,12 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				e.sumDecls[key] = d
 			case *ast.FnDecl:
 				if len(d.TypeParams) != 0 {
-					return "", bndGeneric()
+					// A generic fn is a template (design D3): it emits no
+					// define of its own. Each instantiation emits one, under
+					// the symbol its arguments mangle to, when a site names
+					// them.
+					e.generics[m.Key+"."+d.Name] = d
+					continue
 				}
 				if d.Name == "main" && m.Key == root.Key && mode == ModeBuild && entry == nil {
 					entry = d
@@ -1138,6 +1174,10 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 					return "", ni
 				}
 			case *ast.RecordDecl:
+				if len(d.TypeParams) != 0 {
+					e.generics[m.Key+"."+d.Name] = d
+					continue
+				}
 				key := m.Key + "." + d.Name
 				if _, seen := e.records[key]; !seen {
 					e.order = append(e.order, recRef{name: key, decl: d})
@@ -1146,10 +1186,12 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 			case *ast.NewtypeDecl:
 				// Newtypes are zero-cost wrappers (chapter 8): the layout
 				// erases (design D4), so the table carries what a value of
-				// the wrapper erases to. The generic form is B1b's, like
-				// every other generic declaration's.
+				// the wrapper erases to. A generic one is a template, like
+				// every other generic declaration: what reaches the table is
+				// the underlying type an instantiation substituted.
 				if len(d.TypeParams) != 0 {
-					return "", bndGeneric()
+					e.generics[m.Key+"."+d.Name] = d
+					continue
 				}
 				e.newtypes[m.Key+"."+d.Name] = d.Underlying
 			case *ast.InterfaceDecl:
@@ -1297,7 +1339,10 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 			}
 		}
 	}
-	for i := range e.fns {
+	// The fn group drains to a fixpoint (design D3): an instantiation a
+	// body registers appends here, so the loop emits every define the
+	// program reaches, in registration order.
+	for i := 0; i < len(e.fns); i++ {
 		if ni := e.emitFnDefine(&e.fns[i]); ni != nil {
 			return "", ni
 		}
@@ -3010,8 +3055,12 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 				}
 			}
 		}
-		// A program fn of the walked module, through its slot.
-		if fd, ok := e.fnTable[e.curKey+"."+id.Name]; ok {
+		// A program fn of the walked module, through its slot — or, for a
+		// generic one, the instantiation the call's type arguments name.
+		if fd, is, ni := e.instCallee(e.curKey, id.Name, call.TypeArgs); is {
+			if ni != nil {
+				return callResult{}, ni
+			}
 			return e.emitFnCall(fd, call.Args)
 		}
 		return callResult{}, e.bnd()
@@ -3068,9 +3117,12 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		// module's imports first, then by the module's own key (the
 		// no-import form of a cross-module call resolves by key).
 		if k := e.resolveQual(recv.Name); k != "" {
-			fd, ok := e.fnTable[k+"."+fn.Name]
-			if !ok {
+			fd, is, ni := e.instCallee(k, fn.Name, call.TypeArgs)
+			if !is {
 				return callResult{}, e.bnd()
+			}
+			if ni != nil {
+				return callResult{}, ni
 			}
 			return e.emitFnCall(fd, call.Args)
 		}
@@ -5500,18 +5552,7 @@ func (e *emitter) recordKeyOf(x ast.Expr) (string, bool) {
 		g, ok := e.gcEnv[v.Name]
 		return g.rec, ok
 	case *ast.Construct:
-		key := e.curKey
-		if v.Qual != "" {
-			key = e.resolveQual(v.Qual)
-			if key == "" {
-				return "", false
-			}
-		}
-		rec, ok := e.records[key+"."+v.Name]
-		if !ok || len(rec.TypeParams) != 0 || len(v.TypeArgs) != 0 {
-			return "", false
-		}
-		return key + "." + rec.Name, true
+		return e.constructKey(v)
 	}
 	return "", false
 }
@@ -9555,11 +9596,12 @@ func (e *emitter) layout(key string, rec *ast.RecordDecl) ([]fieldSlot, int, boo
 	slots := make([]fieldSlot, len(rec.Fields))
 	off := 16
 	for i, fd := range rec.Fields {
-		n, ok := fd.Typ.(*ast.NamedType)
+		n, ok := e.resolveRef(fd.Typ).(*ast.NamedType)
 		if !ok || n.Qual != "" || len(n.Args) != 0 {
 			return nil, 0, false
 		}
 		slots[i].off = off
+		fkey := e.namedKey(key, n)
 		switch n.Name {
 		case "String":
 			slots[i].kind = fkStr
@@ -9576,7 +9618,7 @@ func (e *emitter) layout(key string, rec *ast.RecordDecl) ([]fieldSlot, int, boo
 			slots[i].typ = n.Name
 			off += 8
 		default:
-			r, ok := e.records[key+"."+n.Name]
+			r, ok := e.records[fkey]
 			if !ok || len(r.TypeParams) != 0 {
 				return nil, 0, false
 			}
@@ -9588,7 +9630,7 @@ func (e *emitter) layout(key string, rec *ast.RecordDecl) ([]fieldSlot, int, boo
 			default:
 				return nil, 0, false
 			}
-			slots[i].typ = key + "." + n.Name
+			slots[i].typ = fkey
 			slots[i].isRef = true
 			off += 8
 		}
@@ -9645,10 +9687,14 @@ func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplement
 			return "", "", e.bnd()
 		}
 	}
-	rec, ok := e.records[key+"."+c.Name]
-	if !ok || len(rec.TypeParams) != 0 || len(c.TypeArgs) != 0 {
+	// An explicit application names an instantiation (design D3): the
+	// arguments the site wrote are what the record is, and what lays out is
+	// the synthesized declaration under the instantiated key.
+	headKey, ok := e.constructKey(c)
+	if !ok {
 		return "", "", e.bnd()
 	}
+	rec := e.records[headKey]
 	slots, total, ok := e.layout(key, rec)
 	if !ok {
 		return "", "", e.bnd()
@@ -10155,11 +10201,11 @@ func shapeIndexOf(shapes []sumVariantShape, name string) int {
 // newtypeOf reports the module-qualified key when t names a newtype the
 // walked module declares — the wrapper design D4 erases.
 func (e *emitter) newtypeOf(t ast.TypeRef) (string, bool) {
-	n, ok := t.(*ast.NamedType)
+	n, ok := e.resolveRef(t).(*ast.NamedType)
 	if !ok || n.Qual != "" {
 		return "", false
 	}
-	key := e.curKey + "." + n.Name
+	key := e.namedKey(e.curKey, n)
 	if _, ok := e.newtypes[key]; !ok {
 		return "", false
 	}
@@ -10188,7 +10234,7 @@ func (e *emitter) derefNewtype(t ast.TypeRef) ast.TypeRef {
 // tables are the walked module's, so the caller enters that module first
 // (classify does for a fn, emitNewtypeCtor for a construction).
 func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
-	t = e.derefNewtype(t)
+	t = e.derefNewtype(e.resolveRef(t))
 	n, ok := t.(*ast.NamedType)
 	if !ok {
 		return abiVoid, "", false
@@ -10232,7 +10278,7 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 	case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool":
 		return abiI64, "", true
 	}
-	key := e.curKey + "." + n.Name
+	key := e.namedKey(e.curKey, n)
 	if _, ok := e.records[key]; ok {
 		return abiGc, key, true
 	}
@@ -10291,11 +10337,11 @@ func (e *emitter) variantShapes(t ast.TypeRef) ([]sumVariantShape, bool) {
 // module's tables and stops here, which is the same discipline classType
 // applies to a qualified reference.
 func (e *emitter) namedSumShapes(t ast.TypeRef) ([]sumVariantShape, bool) {
-	n, ok := t.(*ast.NamedType)
+	n, ok := e.resolveRef(t).(*ast.NamedType)
 	if !ok || n.Qual != "" || len(n.Args) != 0 {
 		return nil, false
 	}
-	key := e.curKey + "." + n.Name
+	key := e.namedKey(e.curKey, n)
 	ord, ok := e.sumsOrd[key]
 	if !ok {
 		return nil, false
@@ -10417,7 +10463,7 @@ func (e *emitter) localVariantShapes(name string) (string, []sumVariantShape, bo
 // declaration from recursing (the check stage rejects those, and this
 // keeps the compiler off the same edge derefNewtype guards).
 func (e *emitter) isSumType(t ast.TypeRef) bool {
-	n, ok := e.derefNewtype(t).(*ast.NamedType)
+	n, ok := e.derefNewtype(e.resolveRef(t)).(*ast.NamedType)
 	if !ok || n.Qual != "" {
 		return false
 	}
@@ -10430,7 +10476,7 @@ func (e *emitter) isSumType(t ast.TypeRef) bool {
 	if len(n.Args) != 0 {
 		return false
 	}
-	_, ok = e.sums[e.curKey+"."+n.Name]
+	_, ok = e.sums[e.namedKey(e.curKey, n)]
 	return ok
 }
 
@@ -10460,7 +10506,10 @@ func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
 			return abi, false
 		}
 		abi.ret, abi.retKey = k, key
-		abi.retName = baseTypeName(e.derefNewtype(t))
+		// The name is the resolved one: inside an instantiation the
+		// declared spelling is a type parameter, and what the caller binds
+		// the result by is the argument it was applied at.
+		abi.retName = baseTypeName(e.derefNewtype(e.resolveRef(t)))
 		switch k {
 		case abiI64:
 			abi.retTyp = "i64"
@@ -10584,13 +10633,18 @@ func (e *emitter) tupleShapeOf(t *ast.TupleType) ([]tupleElem, bool) {
 	return elems, true
 }
 
-// classify resolves fd's ABI lazily — in fd's own module's tables — and
-// caches it on the def (the fnTable and the fns slice share the object).
+// classify resolves fd's ABI lazily — in fd's own module's tables, and
+// under fd's own instantiation: an instantiated fn's signature is its
+// template's with the arguments substituted, so `Box<T>` classifies as the
+// instantiation the site named, not as an open position. It caches on the
+// def (the fnTable and the fns slice share the object).
 func (e *emitter) classify(fd *fnDef) (fnAbi, bool) {
 	if !fd.abiOK {
 		caller := e.curKey
 		e.enterModule(fd.key)
+		restoreInst := e.enterFnInst(fd)
 		fd.abi, fd.abiOK = e.fnAbiOf(fd.decl)
+		restoreInst()
 		e.enterModule(caller)
 	}
 	return fd.abi, fd.abiOK
@@ -10719,12 +10773,12 @@ func bareTypeName(t ast.TypeRef) string {
 // opaque table's one reader — `isOpaqueRef` for the yes-or-no question,
 // the scope resource head for the key a release dispatches under.
 func (e *emitter) opaqueKeyOf(t ast.TypeRef) (string, bool) {
-	n, ok := t.(*ast.NamedType)
+	n, ok := e.resolveRef(t).(*ast.NamedType)
 	if !ok || len(n.Args) != 0 {
 		return "", false
 	}
 	if n.Qual == "" {
-		key := e.curKey + "." + n.Name
+		key := e.namedKey(e.curKey, n)
 		return key, e.opaques[key]
 	}
 	if k := e.resolveQual(n.Qual); k != "" {
@@ -11043,6 +11097,11 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	}
 	e.enterModule(fd.key)
 
+	// The body walks under fd's own instantiation: a template's type
+	// parameters are bound here, so every reference the body resolves
+	// names the instantiation this define is for.
+	restoreInst := e.enterFnInst(fd)
+
 	savedCtx, savedBody := e.ctx, e.body
 	savedCur := e.curBlock
 	savedAllocas, savedAssigned := e.allocas, e.assigned
@@ -11058,6 +11117,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	savedLoops, savedScopes := e.loopFrames, e.scopeLive
 	savedRes, savedNest := e.resFrames, e.nest
 	restore := func() {
+		restoreInst()
 		e.ctx, e.body = savedCtx, savedBody
 		e.scalars, e.sums2, e.prims = savedScalars, savedSums, savedPrims
 		e.fnEnv = savedFns
@@ -11922,17 +11982,7 @@ func (e *emitter) recvKeyOf(x ast.Expr) (string, bool) {
 		}
 		return slot.typ, true
 	case *ast.Construct:
-		key := e.curKey
-		if v.Qual != "" {
-			key = e.resolveQual(v.Qual)
-			if key == "" {
-				return "", false
-			}
-		}
-		if _, ok := e.records[key+"."+v.Name]; !ok {
-			return "", false
-		}
-		return key + "." + v.Name, true
+		return e.constructKey(v)
 	}
 	return "", false
 }
@@ -12317,7 +12367,13 @@ func (e *emitter) render(module string) string {
 
 	var groups [][]string
 	var structs, maps []string
-	for _, r := range e.order {
+	// A layout resolves the field types it walks, and resolving an
+	// application synthesizes the instantiation it names — a record
+	// registered here, mid-walk. The walk is drained to a fixpoint for the
+	// same reason the define loop is: an instantiation reached through a
+	// field is used by construction, and owes its own type line.
+	for i := 0; i < len(e.order); i++ {
+		r := e.order[i]
 		if !e.usedRecs[r.name] {
 			continue
 		}
