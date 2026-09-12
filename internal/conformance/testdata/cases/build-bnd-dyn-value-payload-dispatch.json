@@ -1,0 +1,16 @@
+{
+  "name": "build-bnd-dyn-value-payload-dispatch",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\ninterface Describe {\n    fn describe(self) -> String\n}\n\nnewtype Celsius(Int64)\n\nimpl Describe for Celsius {\n    fn describe(self) -> String { \"c\" }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let d = Dyn<Describe>(Celsius(1))\n    let s = d.describe()\n    io.println(\"${s}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n"
+}

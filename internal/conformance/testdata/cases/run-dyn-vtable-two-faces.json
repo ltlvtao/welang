@@ -1,0 +1,16 @@
+{
+  "name": "run-dyn-vtable-two-faces",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\ninterface A { fn a(self) -> Int64 }\ninterface B { fn b(self) -> Int64 }\n\nrecord R { x: Int64 }\n\nimpl A for R {\n    fn a(self) -> Int64 { 1 }\n}\nimpl B for R {\n    fn b(self) -> Int64 { 2 }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let p = Dyn<A>(R { x: 1 })\n    let q = Dyn<B>(R { x: 2 })\n    let s = p.a()\n    let t = q.b()\n    io.println(\"${s}\")\n    io.println(\"${t}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "1\n2\n",
+  "stderr": ""
+}

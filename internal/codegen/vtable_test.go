@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/ltlvtao/welang/internal/ast"
@@ -588,6 +589,83 @@ pub fn main() effect io -> Result<(), AppError> {
 	if slot, face := wantDispatch(t, ir); slot != "8" || face != "i64" {
 		t.Fatalf("the call reads slot offset %s at face %q, want the second slot at i64", slot, face)
 	}
+}
+
+// TestVtableIsStaticAndNeverAllocated pins design D6's negative boundary:
+// a table is a compile-time constant and a thunk is a define, so neither is
+// ever heap-allocated. D6 decision 2 leaves a box without a tag because
+// there is no downcast to read one with, and that is the same fact from the
+// other side — the table is reached by the code that built the box, not by
+// asking the box what it is.
+func TestVtableIsStaticAndNeverAllocated(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", t6DispatchSrc)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantIR(t, ir,
+		"@.vt.Iterator$Int64.main.CountIter = private unnamed_addr constant [1 x ptr] "+
+			"[ptr @.vt.Iterator$Int64.main.CountIter.next]",
+		"the table as a constant initializer, so nothing allocates it")
+	for _, line := range strings.Split(ir, "\n") {
+		if !strings.Contains(line, "@.vt.") {
+			continue
+		}
+		if strings.Contains(line, "__we_alloc") {
+			t.Fatalf("a table or thunk is heap-allocated: %s", line)
+		}
+	}
+	for _, m := range dispatchAllocRe.FindAllString(ir, -1) {
+		t.Fatalf("a call produces a table: %s", m)
+	}
+}
+
+// dispatchAllocRe matches any call whose result names a table or thunk: a
+// table is data the module owns, so the only reads of one are the address
+// it is stored by and the loads made through that address.
+var dispatchAllocRe = regexp.MustCompile(`= call [^\n]*@\.vt\.`)
+
+// TestTwoFacesOverOneHeadKeepSeparateTables pins the other negative half of
+// D6's boundary: one head behind two interfaces gets one table per face and
+// no merged one. A merged table would have to hold a slot for each face's
+// methods, and a call through either would then read an index that only one
+// of the two faces agrees with — the widths and the orderings are the
+// interfaces', and nothing here reconciles them.
+func TestTwoFacesOverOneHeadKeepSeparateTables(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", `import std.io
+
+pub type AppError = Failed(String)
+
+interface A { fn a(self) -> Int64 }
+interface B { fn b(self) -> Int64 }
+
+record R { x: Int64 }
+
+impl A for R {
+    fn a(self) -> Int64 { 1 }
+}
+impl B for R {
+    fn b(self) -> Int64 { 2 }
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let p = Dyn<A>(R { x: 1 })
+    let q = Dyn<B>(R { x: 2 })
+    let s = p.a()
+    let t = q.b()
+    io.println("${s}")
+    io.println("${t}")
+    return Ok(())
+}
+`)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantIR(t, ir, "@.vt.main.A.main.R = private unnamed_addr constant [1 x ptr] [ptr @.vt.main.A.main.R.a]",
+		"the first face's own table, holding only its own slot")
+	wantIR(t, ir, "@.vt.main.B.main.R = private unnamed_addr constant [1 x ptr] [ptr @.vt.main.B.main.R.b]",
+		"the second face's own table, holding only its own slot")
 }
 
 // TestVtableIsEmittedWhereABoxIsBuilt: the table is a site's, not an
