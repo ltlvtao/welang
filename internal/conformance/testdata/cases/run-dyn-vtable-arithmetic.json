@@ -1,0 +1,16 @@
+{
+  "name": "run-dyn-vtable-arithmetic",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\ninterface Shape {\n    fn area(self) -> Int64\n}\n\nrecord Square { s: Int64 }\n\nimpl Shape for Square {\n    fn area(self) -> Int64 { 4 }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let d = Dyn<Shape>(Square { s: 1 })\n    let n = d.area() + 1\n    io.println(\"${n}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "5\n",
+  "stderr": ""
+}

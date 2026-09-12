@@ -9714,6 +9714,25 @@ func (e *emitter) callStrKind(call *ast.Call) strKind {
 	if e.valueKind(fn.Recv) == skStr {
 		return strMemberKind(fn.Name)
 	}
+	// A dispatched call carries its slot's return family, read out of the
+	// same table the call itself goes through (design D6). A box has no
+	// record behind it for the method table to answer with, so without
+	// this arm the value of a call on a box is undetermined — bindable and
+	// printable, since those consumers re-check the domain where the value
+	// lands, but never an operand: a binop asks both sides' kinds before
+	// emitting either, and an undetermined one takes the whole expression
+	// to the boundary.
+	if _, face, ok := e.dynRecvOf(fn.Recv); ok {
+		slot, is := e.dynSlotIndex(face, fn.Name)
+		if !is {
+			return skNone
+		}
+		abi, ok := e.dynSlotAbi(face, slot)
+		if !ok {
+			return skNone
+		}
+		return baseStrKind(abi.retName)
+	}
 	// A method call carries its method's return family (design D4): the
 	// table answers what the fn table answers for a plain call, so a
 	// method result joins the String domain like any other.
@@ -10700,26 +10719,46 @@ func (e *emitter) dynRecvOf(x ast.Expr) (string, typecheck.Shape, bool) {
 // The second result says whether the name was the face's to dispatch at
 // all; false leaves the caller's other faces to answer, which is where a
 // defaulted method lands: it has no slot to be reached through.
-func (e *emitter) emitDynCall(box string, face typecheck.Shape, name string, args []ast.Expr) (callResult, bool, *NotImplemented) {
+// dynSlotIndex answers where a member sits in a face's table: the index a
+// call's slot read is scaled by, and the one fact a dispatch and a
+// dispatch's own classification both need, so that the two cannot disagree
+// about which method a name reaches.
+func (e *emitter) dynSlotIndex(face typecheck.Shape, name string) (int, bool) {
 	slots, ok := e.ifaceSlots(face)
 	if !ok {
-		return callResult{}, false, nil
+		return 0, false
 	}
-	slot := -1
 	for i, s := range slots {
 		if s.Name == name {
-			slot = i
-			break
+			return i, true
 		}
 	}
-	if slot < 0 {
-		return callResult{}, false, nil
+	return 0, false
+}
+
+// dynSlotAbi classifies one slot of a face at the arguments the face was
+// applied at: the interface's own positions substituted first, then the
+// slot's signature fitted the way any other signature is. It is the same
+// classification the thunk was built at, which is what makes the call site
+// and the thunk agree word for word.
+func (e *emitter) dynSlotAbi(face typecheck.Shape, index int) (fnAbi, bool) {
+	slots, ok := e.ifaceSlots(face)
+	if !ok || index >= len(slots) {
+		return fnAbi{}, false
 	}
 	ifaceArgs := make([]typecheck.Shape, len(face.Args))
 	for i, a := range face.Args {
 		ifaceArgs[i] = e.instShape(a)
 	}
-	abi, ok := e.slotAbi(slots[slot], ifaceArgs)
+	return e.slotAbi(slots[index], ifaceArgs)
+}
+
+func (e *emitter) emitDynCall(box string, face typecheck.Shape, name string, args []ast.Expr) (callResult, bool, *NotImplemented) {
+	slot, ok := e.dynSlotIndex(face, name)
+	if !ok {
+		return callResult{}, false, nil
+	}
+	abi, ok := e.dynSlotAbi(face, slot)
 	if !ok {
 		return callResult{}, true, e.bnd()
 	}

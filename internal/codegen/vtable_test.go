@@ -591,6 +591,58 @@ pub fn main() effect io -> Result<(), AppError> {
 	}
 }
 
+// TestDispatchResultJoinsTheArithmeticDomain: a call on a box is an
+// expression like any other, so its value classifies the way a static
+// method's does — out of the same table the call itself goes through. A
+// box has no record behind it for the method table to answer with, so
+// without the arm the value is undetermined: bindable and printable, since
+// those consumers re-check the domain where the value lands, but never an
+// operand, because a binop asks both sides' kinds before it emits either
+// and an undetermined one takes the whole expression to the boundary.
+func TestDispatchResultJoinsTheArithmeticDomain(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", `import std.io
+
+pub type AppError = Failed(String)
+
+interface Shape {
+    fn area(self) -> Int64
+}
+
+record Square { s: Int64 }
+
+impl Shape for Square {
+    fn area(self) -> Int64 { 4 }
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let d = Dyn<Shape>(Square { s: 1 })
+    let n = d.area() + 1
+    io.println("${n}")
+    return Ok(())
+}
+`)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	if slot, face := wantDispatch(t, ir); slot != "0" || face != "i64" {
+		t.Fatalf("the call reads slot offset %s at face %q, want the face's only slot at i64", slot, face)
+	}
+	// The call's own register is what the addition consumes, and the
+	// addition is the integer one: the classified kind is what picked the
+	// domain, so the arithmetic consuming the result is what pins the arm.
+	m := operandBinopRe.FindStringSubmatch(ir)
+	if m == nil || m[1] != m[2] {
+		t.Fatalf("the dispatched value is not the addition's own operand:\n%s", ir)
+	}
+}
+
+// operandBinopRe matches a dispatched call whose result the very next
+// instruction adds to a literal, capturing both sides of that addition.
+var operandBinopRe = regexp.MustCompile(
+	`(%v\d+) = call i64 %v\d+\(ptr %v\d+\)\n` +
+		`\s+%v\d+ = call \{ i64, i1 \} @llvm\.sadd\.with\.overflow\.i64\(i64 (%v\d+), i64 1\)`)
+
 // TestVtableIsStaticAndNeverAllocated pins design D6's negative boundary:
 // a table is a compile-time constant and a thunk is a define, so neither is
 // ever heap-allocated. D6 decision 2 leaves a box without a tag because
