@@ -487,6 +487,7 @@ type emitter struct {
 	stdQuals   map[string]string            // the walked module's qualifier -> std key
 	fns        []fnDef                      // program fns, module order then source order
 	fnTable    map[string]*fnDef            // "<key>.<name>" -> def
+	declKeys   map[ast.Item]string          // declaration node -> its "<module>.<Name>" key (mangle.go)
 	fnsDone    []string                     // finished fn define texts
 	slots      []string                     // slot globals, materialization order
 	slotSeen   map[string]bool
@@ -729,16 +730,23 @@ type fnDef struct {
 	// D4's method table); empty on a plain fn. It names the symbol's
 	// middle segment — and, inside the body, the record `self` holds.
 	recvKey string
+	// suffix is the instantiation suffix design D2 appends: the type
+	// arguments' encodings, "$"-separated (mangle.go). It is empty on a
+	// declaration with no type arguments, which is every symbol B1a
+	// spelled — the empty suffix is what leaves them byte-identical.
+	suffix string
 }
 
 // sym renders one fn's IR symbol: `<module>.<name>` for a plain fn,
 // `<module>.<Head>.<name>` for a method — the head type's segment keeps a
-// method from colliding with a same-named plain fn of its module.
+// method from colliding with a same-named plain fn of its module. One
+// instantiated appends its type arguments (design D2): `<key>.<name>`
+// then `$<arg>…`.
 func (fd *fnDef) sym() string {
 	if fd.recvKey != "" {
-		return fd.recvKey + "." + fd.name
+		return fd.recvKey + "." + fd.name + fd.suffix
 	}
-	return fd.key + "." + fd.name
+	return fd.key + "." + fd.name + fd.suffix
 }
 
 // captureSet is one task block's environment face: the names the body
@@ -1077,6 +1085,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		modStd:      make(map[string]map[string]string),
 		modConc:     make(map[string]map[string]bool),
 		fnTable:     make(map[string]*fnDef),
+		declKeys:    declIndex(mods),
 		slotSeen:    make(map[string]bool),
 		topSlots:    make(map[string]topSlot),
 		initEmitted: make(map[string]bool),
