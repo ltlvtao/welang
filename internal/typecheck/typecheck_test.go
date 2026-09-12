@@ -20,7 +20,10 @@ func runCheck(t *testing.T, src string, mode Mode) (*diag.Diagnostic, *NotImplem
 	if ni != nil {
 		t.Fatalf("parse boundary: %s", ni.What)
 	}
-	return Check(f, "test.we", mode)
+	// The instantiation registry is the code stage's input, not this
+	// helper's: the type-stage assertions read the diagnostic alone.
+	td, tni, _ := Check(f, "test.we", mode)
+	return td, tni
 }
 
 func wantOK(t *testing.T, src string) {
@@ -67,7 +70,7 @@ func wantDiagProject(t *testing.T, src, code, part string, line, col int) {
 	if dni != nil || pni != nil {
 		t.Fatalf("parse failed: %v %+v", dni, pni)
 	}
-	d, ni := Check(f, "src/main.we", Project)
+	d, ni, _ := Check(f, "src/main.we", Project)
 	if ni != nil {
 		t.Fatalf("expected %s, got boundary %q", code, ni.What)
 	}

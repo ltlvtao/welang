@@ -392,6 +392,10 @@ type sumInfo struct {
 	variants []variantInfo
 	derives  []string
 	methods  []memberMethod
+	// node is the declaration's own AST node, for the export face's
+	// declaration identity (design D1's implementation note): a builtin
+	// entry is built from a literal and carries none.
+	node ast.Item
 }
 
 type variantInfo struct {
@@ -415,6 +419,8 @@ type recordInfo struct {
 	fields  []fieldInfo
 	methods []memberMethod
 	opaque  bool
+	// node is the declaration's own AST node (see sumInfo.node).
+	node ast.Item
 }
 
 type fieldInfo struct {
@@ -435,6 +441,8 @@ type newtypeInfo struct {
 	underLine  int
 	underCol   int
 	methods    []memberMethod
+	// node is the declaration's own AST node (see sumInfo.node).
+	node ast.Item
 }
 
 // memberMethod is one method of a nominal type's member set (design D3's
@@ -463,6 +471,8 @@ type ifaceInfo struct {
 	assocs       []string
 	methods      []ifaceMethod
 	deriveTarget bool
+	// node is the declaration's own AST node (see sumInfo.node).
+	node ast.Item
 }
 
 // ifaceMethod is one interface method: the receiver mutability, the
@@ -1698,6 +1708,10 @@ type checker struct {
 	fnRet    Type // the enclosing fn's declared return; nil = valueless
 	fnParams map[*ast.FnDecl][]Type
 	fnRets   map[*ast.FnDecl]Type
+	// shapes is the export face this check fills (design D1, shape.go):
+	// the application sites the checker resolved and the interfaces'
+	// dispatch faces. The walks note into it; the entry hands it out.
+	shapes *Shapes
 	// fnTags holds each fn or method declaration's resolved effect segment
 	// (chapter 16): canonical keys, first-occurrence order (design D3).
 	// nil/absent = pure. AST-keyed, so one checker's every module shares it.
@@ -1863,8 +1877,11 @@ type captureInfo struct {
 }
 
 // Check runs the type stage over one parsed module. It returns the first
-// diagnostic, or a NotImplemented boundary, or both nil on a clean check.
-func Check(f *ast.File, file string, mode Mode) (d *diag.Diagnostic, ni *NotImplemented) {
+// diagnostic, or a NotImplemented boundary, or both nil on a clean check —
+// and, with them, the instantiation registry the walk filled (design D1):
+// nil whenever the check stopped short, since a stopped check resolved no
+// whole set of sites.
+func Check(f *ast.File, file string, mode Mode) (d *diag.Diagnostic, ni *NotImplemented, sh *Shapes) {
 	c := newChecker(mode)
 	defer stopTo(&d, &ni)
 	// The stdlib's own faces check first, every time (design D3): the
@@ -1882,7 +1899,7 @@ func Check(f *ast.File, file string, mode Mode) (d *diag.Diagnostic, ni *NotImpl
 		}
 	}
 	c.ingest(f, file, "main", true)
-	return nil, nil
+	return nil, nil, c.shapes
 }
 
 // Module is one imported module of a project's graph (chapter 15): the
@@ -1900,7 +1917,7 @@ type Module struct {
 // bind — a test module's entry point is the synthesized driver, not
 // src/main.we's fn main. Each test module of a run checks as its own
 // root over its own dependency slice.
-func CheckTestRoot(root *ast.File, rootPath, rootKey string, deps []Module) (d *diag.Diagnostic, ni *NotImplemented) {
+func CheckTestRoot(root *ast.File, rootPath, rootKey string, deps []Module) (d *diag.Diagnostic, ni *NotImplemented, sh *Shapes) {
 	c := newChecker(Project)
 	defer stopTo(&d, &ni)
 	c.file = stdBodyFile
@@ -1910,7 +1927,7 @@ func CheckTestRoot(root *ast.File, rootPath, rootKey string, deps []Module) (d *
 	}
 	c.noMain = true
 	c.ingest(root, rootPath, rootKey, true)
-	return nil, nil
+	return nil, nil, c.shapes
 }
 
 // CheckProject runs the type stage over a multi-module project (design
@@ -1919,7 +1936,7 @@ func CheckTestRoot(root *ast.File, rootPath, rootKey string, deps []Module) (d *
 // order), then the root module, whose main convention binds it alone.
 // A diagnostic in any module stops the whole check (the first error
 // wins, whatever module holds it).
-func CheckProject(root *ast.File, rootPath string, deps []Module) (d *diag.Diagnostic, ni *NotImplemented) {
+func CheckProject(root *ast.File, rootPath string, deps []Module) (d *diag.Diagnostic, ni *NotImplemented, sh *Shapes) {
 	c := newChecker(Project)
 	defer stopTo(&d, &ni)
 	// The same stdlib-first walk a single-file check runs (design D3).
@@ -1929,7 +1946,7 @@ func CheckProject(root *ast.File, rootPath string, deps []Module) (d *diag.Diagn
 		c.ingest(m.File, m.Path, m.Key, false)
 	}
 	c.ingest(root, rootPath, "main", true)
-	return nil, nil
+	return nil, nil, c.shapes
 }
 
 // newChecker builds one checker over a single-module check. The maps the
@@ -1948,6 +1965,7 @@ func newChecker(mode Mode) *checker {
 		implWheres: map[*ast.ImplDecl]*whereInfo{},
 		resLets:    map[*ast.Binding]bool{},
 		prop:       &propCtx{},
+		shapes:     newShapes(),
 	}
 }
 
@@ -2042,6 +2060,7 @@ func (c *checker) checkModule(f *ast.File) {
 				params:  typeParamNames(x.TypeParams),
 				byval:   x.Byval,
 				derives: deriveTargetNames(x.Derives),
+				node:    x,
 			}
 			for _, v := range x.Variants {
 				sum.variants = append(sum.variants, variantInfo{name: v.Name})
@@ -2056,15 +2075,17 @@ func (c *checker) checkModule(f *ast.File) {
 				cat:     x.Cat,
 				params:  typeParamNames(x.TypeParams),
 				derives: deriveTargetNames(x.Derives),
+				node:    x,
 			}, pub: x.Pub}
 		case *ast.NewtypeDecl:
 			c.syms[x.Name] = &symbol{kind: symNewtype, nt: &newtypeInfo{
 				name:    x.Name,
 				params:  typeParamNames(x.TypeParams),
 				derives: deriveTargetNames(x.Derives),
+				node:    x,
 			}, pub: x.Pub}
 		case *ast.InterfaceDecl:
-			inf := &ifaceInfo{name: x.Name, params: typeParamNames(x.TypeParams)}
+			inf := &ifaceInfo{name: x.Name, params: typeParamNames(x.TypeParams), node: x}
 			for _, a := range x.Assocs {
 				inf.assocs = append(inf.assocs, a.Name)
 			}
@@ -2094,6 +2115,7 @@ func (c *checker) checkModule(f *ast.File) {
 						params:  typeParamNames(it.TypeParams),
 						derives: deriveTargetNames(it.Derives),
 						opaque:  it.Opaque,
+						node:    it,
 					}, pub: it.Pub}
 				}
 			}
@@ -3264,6 +3286,10 @@ func (c *checker) checkInterface(x *ast.InterfaceDecl) {
 		c.popTypes()
 		inf.methods = append(inf.methods, im)
 	}
+	// The dispatch face registers once the method set is whole (design D6
+	// decision 2): a body walk reads the slots, and the walk order is the
+	// declaration order the check itself took.
+	c.noteFace(inf)
 }
 
 // checkIfaceBodies types an interface's default bodies: self is the
@@ -3306,6 +3332,13 @@ const (
 // bodies); a marker body (the compiler-intrinsic combinators) walks
 // nothing, exactly as an empty user default does.
 func (c *checker) checkBuiltinCombinators() {
+	// The bodies walked here are the stdlib's own, built from literals:
+	// their nodes belong to no tree a caller holds, so nothing can ever
+	// key on the sites they resolve. The registry records this program's
+	// instantiations (shape.go), so the walk runs with it detached.
+	saved := c.shapes
+	c.shapes = nil
+	defer func() { c.shapes = saved }()
 	self := ifaceType{decl: iteratorIface, args: clauseArgs(iteratorIface.params)}
 	for i := range iteratorIface.methods {
 		im := &iteratorIface.methods[i]
@@ -6144,6 +6177,7 @@ func (c *checker) constructType(x *ast.Construct) Type {
 	if args != nil {
 		c.checkImplWhereAtConstruct(rec, args, x)
 		c.checkFieldInstantiation(rec, typeArgAnchors(x.TypeArgs, args, x.Line, x.Col), args, rt)
+		c.noteApply(x, bindArgs(args), nil, rt)
 	}
 	if x.Base != nil {
 		// The category check precedes the field checks (E0606's fact is
@@ -7190,6 +7224,7 @@ func (c *checker) dynCall(x *ast.Call) Type {
 	}
 	face := ifaceType{decl: box.inf, args: box.args}
 	if c.implementsFace(at, face) {
+		c.noteBox(x, at, box)
 		return box
 	}
 	line, col := exprPos(x.Args[0])
@@ -7701,6 +7736,25 @@ func (c *checker) methodCall(ft fnType, m *ast.Member, x *ast.Call, recv Type) T
 			}
 		}
 	}
+	// The determination is the call's own: the positions the arguments
+	// pinned, in clause order. What the receiver had already resolved is
+	// not a binding of this call — it stands substituted in Params and
+	// Ret — so the registry lists only these positions (shape.go's Arg).
+	if c.shapes != nil && len(bindings) > 0 {
+		hi := 0
+		for i := range bindings {
+			if i+1 > hi {
+				hi = i + 1
+			}
+		}
+		bs := make([]Arg, 0, len(bindings))
+		for i := 0; i < hi; i++ {
+			if b, ok := bindings[i]; ok {
+				bs = append(bs, Arg{Pos: i, Shape: shapeOf(b)})
+			}
+		}
+		c.noteApply(x, bs, substMapList(ft.params, bindings), substMap(ft.ret, bindings))
+	}
 	return substMap(ft.ret, bindings)
 }
 
@@ -7809,9 +7863,12 @@ func (c *checker) fnCall(fd *ast.FnDecl, x *ast.Call, mod string) Type {
 	}
 	c.checkArgs(x.Args, params)
 	if fd.Ret == nil {
+		c.noteApply(x, bindArgs(args), params, unitType{})
 		return unitType{}
 	}
-	return subst(c.fnRets[fd], args, nil)
+	ret := subst(c.fnRets[fd], args, nil)
+	c.noteApply(x, bindArgs(args), params, ret)
+	return ret
 }
 
 // ctorCall types one call to a user variant constructor: a generic
@@ -7845,7 +7902,9 @@ func (c *checker) ctorCall(sum *sumInfo, vi int, x *ast.Call) Type {
 	}
 	c.checkArgs(x.Args, payloads)
 	if args != nil {
-		return namedType{decl: sum, args: args}
+		ret := namedType{decl: sum, args: args}
+		c.noteApply(x, bindArgs(args), payloads, ret)
+		return ret
 	}
 	return namedType{decl: sum}
 }
@@ -7925,7 +7984,9 @@ func (c *checker) newtypeCall(nt *newtypeInfo, x *ast.Call) Type {
 		c.bnd(bndArityGap)
 	}
 	c.checkArgs(x.Args, []Type{under})
-	return newtypeType{decl: nt, args: args}
+	ret := newtypeType{decl: nt, args: args}
+	c.noteApply(x, bindArgs(args), []Type{under}, ret)
+	return ret
 }
 
 // builtinCtorCall types Ok/Err/Some/None: the expected type determines

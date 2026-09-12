@@ -231,7 +231,7 @@ func (e *env) runTestProject(dir string) int {
 			}
 			return code
 		}
-		td, tni := typecheck.CheckTestRoot(f.File, rootPath, key, deps)
+		td, tni, _ := typecheck.CheckTestRoot(f.File, rootPath, key, deps)
 		if td != nil {
 			e.report(*td)
 			return exitCompileFailure

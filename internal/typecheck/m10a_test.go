@@ -29,7 +29,8 @@ func runCheckAs(t *testing.T, name, src string) (*diag.Diagnostic, *NotImplement
 	if ni != nil {
 		t.Fatalf("parse boundary: %s", ni.What)
 	}
-	return Check(f, name, SingleFile)
+	td, tni, _ := Check(f, name, SingleFile)
+	return td, tni
 }
 
 func wantOKAs(t *testing.T, name, src string) {
@@ -93,10 +94,11 @@ func runCrossModule(t *testing.T, testSrc string) (*diag.Diagnostic, *NotImpleme
 	if d != nil || ni != nil {
 		t.Fatalf("root parse failed: %v %+v", d, ni)
 	}
-	return CheckProject(rootF, "src/main.we", []Module{
+	td, tni, _ := CheckProject(rootF, "src/main.we", []Module{
 		{Key: "util", Path: "src/util.we", File: utilF},
 		{Key: "t", Path: "src/t_test.we", File: testF},
 	})
+	return td, tni
 }
 
 // D3: the test body is a valueless fn context ("(test)") whose direct

@@ -94,7 +94,9 @@ func checkSrc(path string, src []byte) (*ast.File, []diag.Diagnostic, string) {
 	if ni != nil {
 		return nil, nil, ni.What
 	}
-	td, tni := typecheck.Check(file, path, typecheck.SingleFile)
+	// The instantiation registry is the code stage's input (design D1);
+	// the type-stage-only faces drop it.
+	td, tni, _ := typecheck.Check(file, path, typecheck.SingleFile)
 	if td != nil {
 		return nil, []diag.Diagnostic{*td}, ""
 	}
@@ -161,7 +163,7 @@ func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.Fi
 	if code != exitOK {
 		return nil, nil, "", nil, nil, code
 	}
-	td, tni := typecheck.CheckProject(file, root, mods)
+	td, tni, _ := typecheck.CheckProject(file, root, mods)
 	if td != nil {
 		e.report(*td)
 		return nil, nil, "", nil, nil, exitDiagnostic

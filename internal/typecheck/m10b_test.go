@@ -65,7 +65,7 @@ func TestStdTimeUserSameName(t *testing.T) {
 		t.Fatal("std.time not registered")
 	}
 	root := parseModule(t, "src/main.we", "import time\nimport std.time as clock\n\npub type AppError = Failed(String)\n\nfn probe() effect time -> Int64 {\n    return clock.now()\n}\n\npub fn main() effect time -> Result<(), AppError> {\n    let _ = time.helper()\n    let _ = probe()\n    return Ok(())\n}\n")
-	d, ni := CheckProject(root, "src/main.we", []Module{
+	d, ni, _ := CheckProject(root, "src/main.we", []Module{
 		{Key: "std.time", Path: "std.time", File: stdTime},
 		{Key: "time", Path: "src/time.we", File: userTime},
 	})
