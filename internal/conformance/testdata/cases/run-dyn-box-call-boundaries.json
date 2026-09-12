@@ -1,0 +1,16 @@
+{
+  "name": "run-dyn-box-call-boundaries",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\ninterface Describe {\n    fn describe(self) -> String\n}\n\nrecord Point { x: Int64, y: Int64 }\nnewtype Celsius(Int64)\nnewtype Tag(String)\n\nimpl Describe for Point {\n    fn describe(self) -> String { \"point\" }\n}\nimpl Describe for Celsius {\n    fn describe(self) -> String { \"c\" }\n}\nimpl Describe for Tag {\n    fn describe(self) -> String { \"t\" }\n}\n\nfn makePoint(seed: Int64) -> Dyn<Describe> {\n    return Dyn<Describe>(Point { x: seed, y: seed + 1 })\n}\n\nfn makeCelsius(n: Int64) -> Dyn<Describe> {\n    return Dyn<Describe>(Celsius(n))\n}\n\nfn makeTag(s: String) -> Dyn<Describe> {\n    return Dyn<Describe>(Tag(s))\n}\n\nfn pick(a: Dyn<Describe>, b: Dyn<Describe>, first: Bool) -> Dyn<Describe> {\n    if first {\n        return a\n    }\n    return b\n}\n\nfn width(d: Dyn<Describe>) -> Int64 {\n    return 1\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let p = makePoint(3)\n    let c = makeCelsius(7)\n    let t = makeTag(\"hello\")\n    let one = pick(p, c, true)\n    let two = pick(c, t, false)\n    let n = width(one) + width(two) + width(p) + width(t) + width(c)\n    io.println(\"${n}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "5\n",
+  "stderr": ""
+}

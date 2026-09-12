@@ -469,15 +469,16 @@ type emitter struct {
 	// restored around the nested bodies emission swaps in.
 	curBlock string
 
-	concAlias map[string]bool // the std.concurrent import's alias set
-	defers    []ast.Block     // a body's defer blocks, emission inverted
-	panics    []string        // NUL-terminated panic-message constants
-	caps      *captureSet     // the task body being emitted reads these
-	chanDescs []string        // channel element-bitmap descriptor globals
-	envMaps   []string        // task environment-block bitmap globals
-	cdsc      int             // fresh channel-element descriptor count
-	fnMap     string          // the fn-value carrier's trace descriptor
-	cbN       int             // fresh closure-thunk count
+	concAlias map[string]bool   // the std.concurrent import's alias set
+	defers    []ast.Block       // a body's defer blocks, emission inverted
+	panics    []string          // NUL-terminated panic-message constants
+	caps      *captureSet       // the task body being emitted reads these
+	chanDescs []string          // channel element-bitmap descriptor globals
+	envMaps   []string          // task environment-block bitmap globals
+	cdsc      int               // fresh channel-element descriptor count
+	fnMap     string            // the fn-value carrier's trace descriptor
+	dynMaps   map[string]string // box payload face -> its @.dynmap<n> descriptor (B1b T5)
+	cbN       int               // fresh closure-thunk count
 
 	// T1 env scoping: per-block snapshots of the five env maps (see
 	// pushEnv/popEnv). Block-local registrations land on the block's
@@ -1268,6 +1269,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		sums2:          make(map[string]sumSlot),
 		prims:          make(map[string]string),
 		fnEnv:          make(map[string]fnValue),
+		dynMaps:        make(map[string]string),
 		modKeys:        make(map[string]bool),
 		modImports:     make(map[string]map[string]string),
 		modStd:         make(map[string]map[string]string),
@@ -3207,6 +3209,17 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			e.inst(fmt.Sprintf("%%%s = call ptr @__we_sig_current()", v))
 			return callResult{kind: ckPrim, i64: "%" + v}, nil
 		}
+		// The chapter 10 box (design D5). `Dyn` is a prelude name no
+		// declaration of the program carries, and the check stage recorded
+		// the concrete type this construction boxes at this very node:
+		// the registry is the authority for the payload face, so a site it
+		// recorded no box for falls through to the rows below rather than
+		// having a face guessed at it.
+		if id.Name == "Dyn" && len(call.TypeArgs) == 1 {
+			if site, ok := e.siteOf(call); ok && site.Boxed != nil {
+				return e.emitBox(call, *site.Boxed)
+			}
+		}
 		// A newtype construction (chapter 8's `Name(expr)`): the wrapper
 		// costs nothing and shows nowhere — design D4's erasure means the
 		// result simply IS the inner expression's value, at the underlying
@@ -3509,6 +3522,48 @@ func wordOr0(words []string, i int) string {
 		return words[i]
 	}
 	return "0"
+}
+
+// sumArgWords yields one sum expression's three ABI words as i64 operands.
+// A call constructs where a name reads a slot, and a bare name at a sum
+// position is itself one of two things: a binding that holds a sum, or a
+// variant with no payload — a construction that had no parentheses to
+// arrive through. The binding answers first, since a declaration shadows a
+// variant name and that is the order variantSite keeps as well. want is
+// the sum the position names, which is what resolves a bare variant.
+func (e *emitter) sumArgWords(x ast.Expr, want ast.TypeRef) ([]string, *NotImplemented) {
+	if c, ok := x.(*ast.Call); ok {
+		res, ni := e.emitCall(c, want)
+		if ni != nil {
+			return nil, ni
+		}
+		if res.kind != ckSum {
+			return nil, e.bnd()
+		}
+		return e.sumSlotWords(res.sum), nil
+	}
+	id, ok := x.(*ast.Ident)
+	if !ok {
+		return nil, e.bnd()
+	}
+	if s, is := e.sums2[id.Name]; is {
+		return e.sumSlotWords(s), nil
+	}
+	key, idx, shapes, ok := e.variantSite(id.Name, want)
+	if !ok {
+		return nil, e.bnd()
+	}
+	res, ni := e.emitVariantCtor(key, shapes, idx, nil)
+	if ni != nil {
+		return nil, ni
+	}
+	return e.sumSlotWords(res.sum), nil
+}
+
+// sumSlotWords reads one sum slot's three words out — the one reader a
+// construction and a returned value share (design D8's ABI).
+func (e *emitter) sumSlotWords(s sumSlot) []string {
+	return []string{e.loadNum(s.tag, false), e.loadNum(s.pay, false), e.loadNum(s.pay1, false)}
 }
 
 // sumPayWords emits one variant construction's payload, position by
@@ -9949,14 +10004,294 @@ func (e *emitter) emitConstruct(c *ast.Construct) (string, string, *NotImplement
 // map word, and the root push every construction owes before a field value
 // can allocate.
 func (e *emitter) allocRecord(recKey string, total int) string {
+	return e.allocObj("@.map."+recKey, total)
+}
+
+// allocObj opens one gc object with a given map word operand: the
+// allocation, the frozen header's map word, and the root push every
+// construction owes before a payload value can allocate. A record and a
+// box take the one protocol (design D5 decision 5) — only the descriptor,
+// and what follows it, differ.
+func (e *emitter) allocObj(mapOp string, total int) string {
 	e.use("__we_alloc")
 	e.use("__we_root_push")
 	e.pushes++
 	reg := "%" + e.value()
 	e.inst(fmt.Sprintf("%s = call ptr @__we_alloc(i64 %d)", reg, total))
-	e.inst(fmt.Sprintf("store ptr @.map.%s, ptr %s", recKey, reg))
+	e.inst(fmt.Sprintf("store ptr %s, ptr %s", mapOp, reg))
 	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
 	return reg
+}
+
+// --- chapter 10: the Dyn box (design D5) ------------------------------------
+
+// dynBoxOff is the offset of a box's first payload word: the frozen header
+// {map@0, size@8} is 16 bytes, and design D5 decision 1 puts the table
+// pointer between it and the payload.
+const dynBoxOff = 24
+
+// boxWord is one payload word of a box: the LLVM type it is stored at, and
+// whether the box's layout descriptor traces it. The two together are the
+// payload face's whole content — the descriptor is derived from it
+// (dynMapName) and the stores are emitted from it (emitBoxPayload) — and
+// nothing else about a box's payload reaches the module.
+type boxWord struct {
+	typ    string // "ptr", "i64", or "double"
+	traced bool   // the layout descriptor's bitmap covers this word
+}
+
+// boxFace is one box payload's resolved face: the carrying face the boxed
+// value reaches the ABI with, and the words that face takes in the box.
+type boxFace struct {
+	kind  fnAbiKind
+	words []boxWord
+}
+
+// emitBox emits one Dyn<I>(v) construction: the box of design D5 decision
+// 1, whose protocol is allocRecord's one word longer (decision 5).
+//
+// The check stage recorded the concrete type this construction boxes at
+// this node (D1), so the payload face is a compile-time fact and the
+// descriptor is a constant beside it — nothing about a box is synthesized
+// at run time (decision 4).
+func (e *emitter) emitBox(call *ast.Call, boxed typecheck.Shape) (callResult, *NotImplemented) {
+	t := e.refOfShape(e.instShape(boxed))
+	face, ok := e.boxFace(t)
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	mapOp := "null"
+	if g := e.dynMapName(face); g != "" {
+		mapOp = g
+	}
+	reg := e.allocObj(mapOp, dynBoxOff+8*len(face.words))
+	// The table pointer (design D5 decision 1): the box's one word of type
+	// evidence and the only word in it that is not payload. T6 writes the
+	// vtable global here; until a dispatch point exists there is no table
+	// to name, and the word stays what __we_alloc left it. It is written
+	// as a pointer either way — the shape the thunks will read it through
+	// — never as a tag (decision 2: no downcast, so no tag).
+	e.gepStore(reg, 16, "ptr null")
+	if ni := e.emitBoxPayload(reg, call.Args[0], t, face); ni != nil {
+		return callResult{}, ni
+	}
+	return callResult{kind: ckGc, gcReg: reg}, nil
+}
+
+// boxFace resolves one concrete type to the payload face its box stores it
+// under (design D5 decision 3): the carrying face the type reaches the ABI
+// with, and the words that face takes. A false second result is a
+// boundary — the carrying face has no box encoding, and the box stops
+// rather than having one guessed at it.
+func (e *emitter) boxFace(t ast.TypeRef) (boxFace, bool) {
+	k, _, ok := e.classType(t)
+	if !ok {
+		return boxFace{}, false
+	}
+	switch k {
+	case abiGc:
+		// A record of either category. A value-category one is a pointer
+		// here too, and chapter 8's sharing rule reaches the box through
+		// emitBoxPayload's ownership read, not through a second layout.
+		return boxFace{kind: k, words: []boxWord{{typ: "ptr", traced: true}}}, true
+	case abiI64:
+		return boxFace{kind: k, words: []boxWord{{typ: "i64"}}}, true
+	case abiDouble:
+		return boxFace{kind: k, words: []boxWord{{typ: "double"}}}, true
+	case abiStr:
+		// Two words and neither traced: a String's bytes are malloc'd,
+		// outside the gc domain, so the data word is no gc reference —
+		// the posture layout takes for a String field (fkStr).
+		return boxFace{kind: k, words: []boxWord{{typ: "ptr"}, {typ: "i64"}}}, true
+	case abiSum:
+		words, ok := e.boxSumWords(t)
+		if !ok {
+			return boxFace{}, false
+		}
+		return boxFace{kind: k, words: words}, true
+	}
+	return boxFace{}, false
+}
+
+// boxSumWords lays a sum's three ABI words into a box: the tag, then the
+// two payload words design D8 budgets. The tag is never traced.
+//
+// The payload words are the one place a box's descriptor is not read off
+// the boxed type alone. All three words are compile-time constants, but
+// which payload word holds a gc handle is the tag's answer and the tag is
+// a run-time value — one descriptor has to cover every variant. So a
+// payload position is traced only where every variant that reaches it
+// carries a gc handle there, which is exact: a variant reaching no word
+// stores the zero a trace skips, and a variant whose word is a scalar is a
+// scalar in every variant that agrees with it. Two variants that read one
+// position differently have no single descriptor to write; that is a fact
+// about the declaration rather than about any one site, and it is a
+// boundary.
+func (e *emitter) boxSumWords(t ast.TypeRef) ([]boxWord, bool) {
+	shapes, ok := e.variantShapes(t)
+	if !ok {
+		return nil, false
+	}
+	// The tag first, then one word per payload position. The box carries
+	// the whole ABI — all three words — rather than the widest variant's
+	// payload, because the words are what a reader reconstructs: a variant
+	// that reaches no word stores the zero its slot holds there.
+	words := make([]boxWord, 1+sumPayloadWords)
+	for i := range words {
+		words[i] = boxWord{typ: "i64"}
+	}
+	seen := [sumPayloadWords]bool{}
+	for _, v := range shapes {
+		pay, ok := e.sumPayFace(v)
+		if !ok {
+			return nil, false
+		}
+		if len(pay) > sumPayloadWords {
+			return nil, false
+		}
+		for i, w := range pay {
+			if seen[i] && words[i+1] != w {
+				return nil, false
+			}
+			words[i+1] = w
+			seen[i] = true
+		}
+	}
+	return words, true
+}
+
+// sumPayFace is one variant's payload words as a box stores them: the same
+// arithmetic payPosWords emits — a handle through ptrtoint, a double
+// through bitcast, both one i64 word — read for its shape instead. The
+// kinds it accepts are exactly the ones payPosWords emits, so a variant
+// whose construction stops at the boundary stops here too.
+func (e *emitter) sumPayFace(v sumVariantShape) ([]boxWord, bool) {
+	var out []boxWord
+	for _, p := range v.pay {
+		switch p.kind {
+		case abiVoid:
+			// `()` carries no word (payPosWords) and holds no position.
+		case abiI64, abiDouble:
+			out = append(out, boxWord{typ: "i64"})
+		case abiGc:
+			out = append(out, boxWord{typ: "i64", traced: true})
+		case abiStr:
+			out = append(out, boxWord{typ: "i64"}, boxWord{typ: "i64"})
+		default:
+			return nil, false
+		}
+	}
+	return out, true
+}
+
+// emitBoxPayload stores one boxed value's payload words at their offsets,
+// by the face boxFace resolved. Nothing here copies because the box says
+// so: a gc handle goes in as its handle (the box is a gc value, and its
+// descriptor is what keeps the payload alive), a scalar or a String pair
+// as its own words, and a sum as the three words its slot carries. The
+// payload's own construction still runs and still roots what it builds, so
+// a field value that allocates is safe between the box's push and these
+// stores (the reason allocRecord pushes before the payload too).
+func (e *emitter) emitBoxPayload(reg string, arg ast.Expr, t ast.TypeRef, f boxFace) *NotImplemented {
+	switch f.kind {
+	case abiGc:
+		// The ownership read every abiGc argument takes, so a
+		// value-category record arrives in the box as a copy the box owns
+		// (chapter 8's "passing copies") and a gc-category one as its own
+		// reference.
+		r, _, ni := e.emitOwnedRecord(arg)
+		if ni != nil {
+			return ni
+		}
+		e.gepStore(reg, dynBoxOff, "ptr "+r)
+	case abiI64:
+		op, isF, ni := e.emitNumExpr(arg)
+		if ni != nil {
+			return ni
+		}
+		if isF {
+			return e.bnd()
+		}
+		e.gepStore(reg, dynBoxOff, "i64 "+op)
+	case abiDouble:
+		op, isF, ni := e.emitNumExpr(arg)
+		if ni != nil {
+			return ni
+		}
+		if !isF {
+			return e.bnd()
+		}
+		e.gepStore(reg, dynBoxOff, "double "+op)
+	case abiStr:
+		data, ln, ni := e.emitStringExpr(arg)
+		if ni != nil {
+			return ni
+		}
+		e.gepStore(reg, dynBoxOff, "ptr "+data)
+		e.gepStore(reg, dynBoxOff+8, "i64 "+ln)
+	case abiSum:
+		words, ni := e.sumArgWords(arg, t)
+		if ni != nil {
+			return ni
+		}
+		for i, w := range words {
+			e.gepStore(reg, dynBoxOff+8*i, "i64 "+w)
+		}
+	default:
+		return e.bnd()
+	}
+	return nil
+}
+
+// dynMapName returns the layout descriptor global one box payload face
+// needs — emitting it into the module's map group on first use — or ""
+// where the payload holds no gc reference at all.
+//
+// The descriptor is a constant like a record's (design D5 decision 4): the
+// boxed type is static at every construction point, so there is nothing to
+// synthesize at run time the way list.c must. Two payload faces that agree
+// on their trace bits share the one global, since the bits are all a
+// descriptor carries.
+//
+// An all-untraced payload gets no descriptor: the map word is null and the
+// collector skips the block's contents whole (gc.c:174-176), the posture
+// list.c takes for a scalar element. A one-word traced payload's bitmap is
+// bit 1 — the word at 24 — so its descriptor reads [i64 2], the same shape
+// @.fnmap carries for its one traced word at 16: both are a code-or-table
+// pointer in the header's shadow followed by one gc payload word.
+func (e *emitter) dynMapName(f boxFace) string {
+	key := make([]byte, len(f.words))
+	traced := false
+	for i, w := range f.words {
+		key[i] = 's'
+		if w.traced {
+			key[i] = 'g'
+			traced = true
+		}
+	}
+	if !traced {
+		return ""
+	}
+	fkey := string(key)
+	if g, ok := e.dynMaps[fkey]; ok {
+		return g
+	}
+	var bitmap []uint64
+	for i, w := range f.words {
+		if !w.traced {
+			continue
+		}
+		slot := i + 1 // slot 0 is the table pointer at offset 16
+		for len(bitmap) <= slot/64 {
+			bitmap = append(bitmap, 0)
+		}
+		bitmap[slot/64] |= 1 << (slot % 64)
+	}
+	g := fmt.Sprintf("@.dynmap%d", len(e.dynMaps))
+	e.dynMaps[fkey] = g
+	e.envMaps = append(e.envMaps, fmt.Sprintf("%s = private unnamed_addr constant %s",
+		g, mapLiteral(bitmap, len(f.words)+1)))
+	return g
 }
 
 // emitFieldStore writes one field of a record under construction (or one
@@ -10479,6 +10814,16 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 			return abiVoid, "", false
 		}
 		return abiSum, "Option", true
+	}
+	if n.Name == "Dyn" && len(n.Args) == 1 {
+		// Chapter 10's box (design D5 decision 6): one gc handle, whatever
+		// face the boxed value's payload takes. The payload appears at the
+		// construction point and — from T6 — at the thunk, never in a
+		// signature, so the box opens no ABI face of its own: this is the
+		// whole of the classifier's Dyn support, and fitAbi gains no arm.
+		// The empty key is what makes the box share rather than copy
+		// wherever a record's key would have sent it to emitOwnedRecord.
+		return abiGc, "", true
 	}
 	if len(n.Args) != 0 {
 		return abiVoid, "", false
@@ -12423,31 +12768,11 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 			}
 			ops = append(ops, "ptr "+reg)
 		case abiSum:
-			// A bare name at a sum position is one of two things: a
-			// binding that holds a sum, or a variant with no payload —
-			// a construction that had no parentheses to arrive through
-			// the call arm above. The binding answers first, since a
-			// declaration shadows a variant name and that is the order
-			// variantSite keeps as well.
-			id, ok := a.(*ast.Ident)
-			if !ok {
-				return callResult{}, e.bnd()
-			}
-			if s, is := e.sums2[id.Name]; is {
-				ops = append(ops, "i64 "+e.loadNum(s.tag, false), "i64 "+e.loadNum(s.pay, false),
-					"i64 "+e.loadNum(s.pay1, false))
-				break
-			}
-			key, idx, shapes, ok := e.variantSite(id.Name, abi.params[i].decl)
-			if !ok {
-				return callResult{}, e.bnd()
-			}
-			res, ni := e.emitVariantCtor(key, shapes, idx, nil)
+			words, ni := e.sumArgWords(a, abi.params[i].decl)
 			if ni != nil {
 				return callResult{}, ni
 			}
-			ops = append(ops, "i64 "+e.loadNum(res.sum.tag, false), "i64 "+e.loadNum(res.sum.pay, false),
-				"i64 "+e.loadNum(res.sum.pay1, false))
+			ops = append(ops, "i64 "+words[0], "i64 "+words[1], "i64 "+words[2])
 		case abiFn:
 			// The argument crosses as its carrier. A closure literal is
 			// emitted here (its captures frozen at this call site), a

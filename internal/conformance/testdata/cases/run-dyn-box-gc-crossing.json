@@ -1,0 +1,16 @@
+{
+  "name": "run-dyn-box-gc-crossing",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\ninterface Describe {\n    fn describe(self) -> String\n}\n\nrecord Cell { n: Int64 }\nnewtype Celsius(Int64)\n\nimpl Describe for Cell {\n    fn describe(self) -> String { \"cell\" }\n}\nimpl Describe for Celsius {\n    fn describe(self) -> String { \"c\" }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let cold = Dyn<Describe>(Celsius(5))\n    let held = Dyn<Describe>(Cell { n: 7 })\n    var acc: Int64 = 0\n    var i: Int64 = 0\n    while i < 120000 {\n        let c = Cell { n: i }\n        acc = acc + c.n\n        i = i + 1\n    }\n    io.println(\"${acc}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "7199940000\n",
+  "stderr": ""
+}
