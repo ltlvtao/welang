@@ -184,6 +184,12 @@ pub fn main() effect io -> Result<(), AppError> {
 // word. The payload arrives through the ownership read every abiGc
 // position takes, so a value-category record enters as a copy the box
 // owns.
+//
+// The table word is the vtable's from T6 on: a gc payload is the one
+// payload face a thunk can hand a receiver to, so it is the face a table
+// is emitted for, and this is the step where the word stops being null.
+// The three faces below — scalar, String, sum — keep the null word, since
+// no thunk could be fronted by any of them.
 func TestBoxGcPayloadDescriptorMatchesTheFnCarrier(t *testing.T) {
 	f, sh := dynModule(t, dynPrelude+`
 byval record Point {
@@ -213,7 +219,7 @@ pub fn main() effect io -> Result<(), AppError> {
 		"store ptr @.dynmap0, ptr %box",
 		"call void @__we_root_push(ptr %box)",
 		"%box = getelementptr i8, ptr %box, i64 16",
-		"store ptr null, ptr %box",
+		"store ptr @.vt.main.Describe.main.Point, ptr %box",
 		"%box = getelementptr i8, ptr %box, i64 24",
 		"store ptr %r, ptr %box",
 	})

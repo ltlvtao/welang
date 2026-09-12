@@ -641,6 +641,95 @@ func (e *emitter) instShape(s typecheck.Shape) typecheck.Shape {
 	return s
 }
 
+// substShapeArgs replaces every open position of one shape with the
+// argument standing at it — the substitution an interface's own clause
+// takes when a face is applied, at every depth. It is the shape-level half
+// of what a reference's substitution does for `Box<T>` inside a body: the
+// declaration is written once with T open, and a face the declaration is
+// applied at fills it in everywhere it appears.
+//
+// A position with no argument at it — a face applied at fewer arguments
+// than the declaration declares — stays open and is answered as it stands;
+// the caller meets it where a resolved shape is required and stops there
+// (design D1).
+func substShapeArgs(s typecheck.Shape, args []typecheck.Shape) typecheck.Shape {
+	switch s.Kind {
+	case typecheck.ShapeParam:
+		if s.Pos >= 0 && s.Pos < len(args) {
+			return args[s.Pos]
+		}
+		return s
+	case typecheck.ShapeTuple:
+		if len(s.Elems) == 0 {
+			return s
+		}
+		elems := make([]typecheck.Shape, len(s.Elems))
+		for i, el := range s.Elems {
+			elems[i] = substShapeArgs(el, args)
+		}
+		s.Elems = elems
+		return s
+	case typecheck.ShapeFn:
+		if len(s.Params) != 0 {
+			params := make([]typecheck.Shape, len(s.Params))
+			for i, p := range s.Params {
+				params[i] = substShapeArgs(p, args)
+			}
+			s.Params = params
+		}
+		if s.Ret != nil {
+			ret := substShapeArgs(*s.Ret, args)
+			s.Ret = &ret
+		}
+		return s
+	case typecheck.ShapeNominal, typecheck.ShapeDyn:
+		if len(s.Args) == 0 {
+			return s
+		}
+		as := make([]typecheck.Shape, len(s.Args))
+		for i, a := range s.Args {
+			as[i] = substShapeArgs(a, args)
+		}
+		s.Args = as
+		return s
+	}
+	return s
+}
+
+// resolvedShape reports whether one shape is closed: it carries no
+// position an enclosing declaration left open, at any depth. Mangling a
+// shape to a symbol and resolving it to a face both require that (design
+// D1), and a shape that still carries one is a boundary at the caller —
+// never a symbol with a position in it.
+func resolvedShape(s typecheck.Shape) bool {
+	switch s.Kind {
+	case typecheck.ShapeParam, typecheck.ShapeAssoc:
+		return false
+	case typecheck.ShapeTuple:
+		for _, el := range s.Elems {
+			if !resolvedShape(el) {
+				return false
+			}
+		}
+	case typecheck.ShapeFn:
+		for _, p := range s.Params {
+			if !resolvedShape(p) {
+				return false
+			}
+		}
+		if s.Ret != nil && !resolvedShape(*s.Ret) {
+			return false
+		}
+	case typecheck.ShapeNominal, typecheck.ShapeDyn:
+		for _, a := range s.Args {
+			if !resolvedShape(a) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // siteArgs turns one site's clause bindings into the argument list an
 // instantiation takes, in the declaration's own parameter order. A site
 // that names fewer positions than the declaration declares is not a

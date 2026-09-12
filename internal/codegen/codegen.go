@@ -479,6 +479,8 @@ type emitter struct {
 	fnMap     string            // the fn-value carrier's trace descriptor
 	dynMaps   map[string]string // box payload face -> its @.dynmap<n> descriptor (B1b T5)
 	cbN       int               // fresh closure-thunk count
+	vtables   []string          // vtable globals, first-use order (B1b T6)
+	vtSeen    map[string]bool   // vtable names already emitted
 
 	// T1 env scoping: per-block snapshots of the five env maps (see
 	// pushEnv/popEnv). Block-local registrations land on the block's
@@ -1399,6 +1401,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		implTmpl:       make(map[string]*implTemplate),
 		ifaceDefs:      make(map[string]*ast.InterfaceDecl),
 		ifacePairs:     make(map[string]*ifacePair),
+		vtSeen:         make(map[string]bool),
 		mode:           mode,
 	}
 	root := mods[len(mods)-1]
@@ -3341,7 +3344,7 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		// having a face guessed at it.
 		if id.Name == "Dyn" && len(call.TypeArgs) == 1 {
 			if site, ok := e.siteOf(call); ok && site.Boxed != nil {
-				return e.emitBox(call, *site.Boxed)
+				return e.emitBox(call, site)
 			}
 		}
 		// A newtype construction (chapter 8's `Name(expr)`): the wrapper
@@ -10178,7 +10181,8 @@ type boxFace struct {
 // this node (D1), so the payload face is a compile-time fact and the
 // descriptor is a constant beside it — nothing about a box is synthesized
 // at run time (decision 4).
-func (e *emitter) emitBox(call *ast.Call, boxed typecheck.Shape) (callResult, *NotImplemented) {
+func (e *emitter) emitBox(call *ast.Call, site typecheck.Site) (callResult, *NotImplemented) {
+	boxed := *site.Boxed
 	t := e.refOfShape(e.instShape(boxed))
 	face, ok := e.boxFace(t)
 	if !ok {
@@ -10189,13 +10193,16 @@ func (e *emitter) emitBox(call *ast.Call, boxed typecheck.Shape) (callResult, *N
 		mapOp = g
 	}
 	reg := e.allocObj(mapOp, dynBoxOff+8*len(face.words))
-	// The table pointer (design D5 decision 1): the box's one word of type
-	// evidence and the only word in it that is not payload. T6 writes the
-	// vtable global here; until a dispatch point exists there is no table
-	// to name, and the word stays what __we_alloc left it. It is written
-	// as a pointer either way — the shape the thunks will read it through
-	// — never as a tag (decision 2: no downcast, so no tag).
-	e.gepStore(reg, 16, "ptr null")
+	// The table pointer (design D6 decision 1): the box's one word of type
+	// evidence and the only word in it that is not payload — the vtable a
+	// dispatch point reads its method out of. It is written as a pointer,
+	// the shape the thunks read it through, never as a tag (decision 2: no
+	// downcast, so no tag).
+	table, ni := e.boxTable(face, site)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	e.gepStore(reg, 16, "ptr "+table)
 	if ni := e.emitBoxPayload(reg, call.Args[0], t, face); ni != nil {
 		return callResult{}, ni
 	}
@@ -10416,6 +10423,206 @@ func (e *emitter) dynMapName(f boxFace) string {
 	e.envMaps = append(e.envMaps, fmt.Sprintf("%s = private unnamed_addr constant %s",
 		g, mapLiteral(bitmap, len(f.words)+1)))
 	return g
+}
+
+// --- chapter 10: the vtable (design D6) -------------------------------------
+
+// boxTable names the operand a box's table word holds: the vtable global
+// of design D6 decision 3, emitted here on first use — or "null" where the
+// box carries no table.
+//
+// A table is emitted where it can be dispatched through, and that is where
+// the box's payload is one gc handle. A method define's receiver is
+// `ptr %self` at every head, whatever the head is, so the thunk that
+// fronts a slot needs an object to pass — and the payload word of a gc
+// face IS that object. No other payload face has one: a scalar, a String
+// pair or a sum's three words are values, and "the receiver as a value" is
+// no form this build has — the newtype receiver is a boundary of its own
+// (recvKeyOf answers no dispatch for one), so nothing here establishes
+// what a value receiver would even mean.
+//
+// Which is why such a box keeps the null word T5 gave it: carrying a
+// scalar behind an interface is legal and corpus-pinned (a box is a value
+// that crosses call boundaries, dispatched or not), so refusing the box
+// would narrow a landed face to guard a path nothing walks. What the
+// table word buys is dispatchability, and the box's own IR is where that
+// stops being free.
+func (e *emitter) boxTable(face boxFace, site typecheck.Site) (string, *NotImplemented) {
+	iface := site.Ret
+	slots, ok := e.ifaceSlots(iface)
+	if !ok {
+		return "", e.bnd()
+	}
+	if len(slots) == 0 {
+		// A marker face: no method to dispatch, so no slot to name and no
+		// table to hold one. The word stays null, as it does for every
+		// face without a slot list.
+		return "null", nil
+	}
+	if face.kind != abiGc {
+		return "null", nil
+	}
+	headKey, ok := e.shapeKey(e.instShape(*site.Boxed))
+	if !ok {
+		return "", e.bnd()
+	}
+	return e.vtableFor(iface, slots, headKey)
+}
+
+// ifaceSlots reads one interface face's non-defaulted methods — the
+// vtable's slots, in declaration order (design D6 decision 1/2). The
+// builtin faces have no source tree, so the list is the check stage's own
+// registration; a face it never registered is not a face to build a table
+// from and the caller stops rather than emitting an empty one.
+func (e *emitter) ifaceSlots(iface typecheck.Shape) ([]typecheck.Slot, bool) {
+	f, ok := e.ifaceFace(iface.Decl)
+	if !ok {
+		return nil, false
+	}
+	return f.Slots, true
+}
+
+// vtableFor emits one vtable global and the thunk of every slot, and
+// answers its name — or the name already emitted, since the table is keyed
+// by {interface face, implementing head} and two boxes of the same pair
+// share one.
+//
+// The name is design D6 decision 3's: `@.vt.<interface key>$<arguments>.
+// <concrete key>`, which is the interface's own declaration key at the
+// arguments the box's face was applied at (design D2's mangling), a dot,
+// then the boxed type's. A dot cannot occur in the mangled alphabet's
+// segments the way `$` divides them, so the reading stays left to right:
+// the last dot separates the face from the head.
+//
+// Every slot's target must exist and agree: a slot the head defines
+// nothing for is the check stage's to have refused (an obligation is what
+// a non-defaulted method is), and a generic method is no target at all
+// without a call site to complete it — both stop the table rather than
+// leaving a null slot to jump through. The table is emitted whole or not
+// at all, because a vtable with a hole in it is a call to address zero.
+func (e *emitter) vtableFor(iface typecheck.Shape, slots []typecheck.Slot, headKey string) (string, *NotImplemented) {
+	ifaceKey, ok := e.ifaceKeyOf(iface)
+	if !ok {
+		return "", e.bnd()
+	}
+	name := "@.vt." + ifaceKey + "." + headKey
+	if e.vtSeen[name] {
+		return name, nil
+	}
+	args := make([]typecheck.Shape, len(iface.Args))
+	for i, a := range iface.Args {
+		args[i] = e.instShape(a)
+	}
+	targets := make([]string, len(slots))
+	for i, s := range slots {
+		key := headKey + "." + s.Name
+		if _, generic := e.genericMethods[key]; generic {
+			return "", e.bnd()
+		}
+		fd, ok := e.methods[key]
+		if !ok {
+			return "", e.bnd()
+		}
+		abi, ok := e.slotAbi(s, args)
+		if !ok {
+			return "", e.bnd()
+		}
+		implAbi, ok := e.classify(fd)
+		if !ok {
+			return "", e.bnd()
+		}
+		if !sameAbi(abi, implAbi) {
+			// The interface's signature at this face and the head's own
+			// must forward word for word: the call site reads the slot's
+			// face and the thunk calls the impl's. The check stage holds
+			// the two together (chapter 10's impl agreement); a
+			// disagreement reaching here is one this stage will not paper
+			// over with a conversion.
+			return "", e.bnd()
+		}
+		thunk := name + "." + s.Name
+		e.emitVtableThunk(thunk, abi, fd)
+		targets[i] = "ptr " + thunk
+	}
+	e.vtSeen[name] = true
+	e.vtables = append(e.vtables, fmt.Sprintf("%s = private unnamed_addr constant [%d x ptr] [%s]",
+		name, len(targets), strings.Join(targets, ", ")))
+	return name, nil
+}
+
+// ifaceKeyOf renders one interface face's own key: its declaration key at
+// the arguments it is applied to — the `Iterator$Int64` of design D2,
+// which is what a vtable is filed under. A face carrying a position the
+// enclosing declaration left open names no application, and answers false
+// rather than being mangled (design D1).
+func (e *emitter) ifaceKeyOf(iface typecheck.Shape) (string, bool) {
+	args := make([]typecheck.Shape, len(iface.Args))
+	for i, a := range iface.Args {
+		args[i] = e.instShape(a)
+		if !resolvedShape(args[i]) {
+			return "", false
+		}
+	}
+	return e.mangleApply(e.declKey(iface.Decl), args), true
+}
+
+// slotAbi classifies one vtable slot at the arguments the boxed face was
+// applied at: the interface's own positions substitute first, so
+// `Iterator<T>.next` reads as the `Option<Int64>` an `Iterator<Int64>`
+// box's next returns, and the substituted faces classify the way any
+// signature does. It is the ABI a dispatch point builds its indirect call
+// from — the head is a run-time value there, so the slot is the only
+// signature it has.
+func (e *emitter) slotAbi(slot typecheck.Slot, args []typecheck.Shape) (fnAbi, bool) {
+	params := make([]ast.Param, len(slot.Params))
+	for i, p := range slot.Params {
+		t := e.refOfShape(substShapeArgs(p, args))
+		if t == nil {
+			return fnAbi{}, false
+		}
+		params[i] = ast.Param{Type: t}
+	}
+	var ret ast.TypeRef
+	if slot.Ret != nil {
+		ret = e.refOfShape(substShapeArgs(*slot.Ret, args))
+		if ret == nil {
+			return fnAbi{}, false
+		}
+	}
+	return e.fitAbi(ret, params)
+}
+
+// emitVtableThunk emits one slot's thunk: the thin adapter of design D6
+// decision 4, the same form emitFnRef's adapter takes for a declared fn
+// (an entry parameter dropped or supplied, then a direct call of the
+// symbol itself). Here the supplied word is the receiver — read out of the
+// box's payload, which the box's face put at dynBoxOff as the handle it
+// is — and the rest of the parameters forward word for word, so the
+// thunk's own signature is the slot's.
+func (e *emitter) emitVtableThunk(name string, abi fnAbi, fd *fnDef) {
+	decl := []string{"ptr %box"}
+	args := []string{"ptr %recv"}
+	n := 0
+	for _, p := range abi.params {
+		for _, wt := range abiWordTypes(p) {
+			reg := fmt.Sprintf("%%a%d", n)
+			decl = append(decl, wt+" "+reg)
+			args = append(args, wt+" "+reg)
+			n++
+		}
+	}
+	call := fmt.Sprintf("call %s @%s(%s)", abi.retTyp, fd.sym(), strings.Join(args, ", "))
+	var body string
+	if abi.ret == abiVoid {
+		body = "  " + call + "\n  ret void\n"
+	} else {
+		body = fmt.Sprintf("  %%r = %s\n  ret %s %%r\n", call, abi.retTyp)
+	}
+	// name carries its own sigil: it is the vtable's symbol with the slot
+	// appended, and the global's line and the thunk's both read it as one.
+	e.thunks = append(e.thunks, fmt.Sprintf(
+		"define internal %s %s(%s) {\nentry:\n  %%addr = getelementptr i8, ptr %%box, i64 %d\n  %%recv = load ptr, ptr %%addr\n%s}\n",
+		abi.retTyp, name, strings.Join(decl, ", "), dynBoxOff, body))
 }
 
 // emitFieldStore writes one field of a record under construction (or one
@@ -13142,6 +13349,9 @@ func (e *emitter) render(module string) string {
 	}
 	if len(e.envMaps) > 0 {
 		groups = append(groups, e.envMaps)
+	}
+	if len(e.vtables) > 0 {
+		groups = append(groups, e.vtables)
 	}
 	if len(e.chanDescs) > 0 {
 		groups = append(groups, e.chanDescs)
