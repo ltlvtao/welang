@@ -582,10 +582,18 @@ type emitter struct {
 	// a value of the newtype IS a value of the underlying, at every
 	// position, so the table answers `classType` and the `.value` read
 	// alike. Generic newtypes are B1b's.
-	newtypes   map[string]ast.TypeRef
-	ifaceDefs  map[string]*ast.InterfaceDecl // "<module>.<interface>" -> decl
-	ifaceHeads map[string][]string           // interface key -> implementing head keys, impl order
-	ifaceSeen  map[string]map[string]bool    // interface key -> head keys already bound
+	newtypes  map[string]ast.TypeRef
+	ifaceDefs map[string]*ast.InterfaceDecl // "<module>.<interface>" -> decl
+	// ifacePairs is the impl pairing table (design D6): the heads an impl
+	// satisfied, indexed by *what* they satisfied — the interface's own
+	// declaration key with the arguments the impl applied it at. Two
+	// argument lists are two faces, so `impl Iterator<Int64> for Cursor`
+	// and `impl Iterator<String> for Cursor` are two rows; one head
+	// implemented twice for one interface is E0809's. A builtin face has
+	// no declaration to file under, so its rows carry the check stage's
+	// own key and no tree.
+	ifacePairs map[string]*ifacePair
+	ifaceOrd   []string // pairing keys, impl order
 
 	// M12 foreign state (design D4/D5). Opaque records live in their own
 	// table — no layout, no constructor, no records/order entry (E1707
@@ -707,8 +715,12 @@ func (e *emitter) registerImpls(tmplKey, instKey string, args []typecheck.Shape)
 // (design D4). The head names the table's key, so `impl Greeter for User`
 // and `impl User` land in the same place — which is what lets a default
 // body's `self.greet()` resolve. A non-nominal head has no key to hang a
-// method on. An interface impl also records the head under its interface,
-// the pairing collectDefaults instantiates from.
+// method on. An interface impl also records the head in the pairing table
+// under the interface *applied to the impl's arguments* — the face it
+// satisfied, which is what collectDefaults instantiates a default from.
+// The argument list is what the head no longer has to leave empty: an
+// interface's type parameters are the impl's to bind, and a default body
+// instantiated at them is a real method on a concrete head.
 //
 // The two generic shapes (B1b T4) are templates rather than entries, and
 // which template depends on what the head contributes:
@@ -765,14 +777,16 @@ func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
 		e.methods[key] = &fnDef{key: modKey, name: md.Name, recvKey: headKey, decl: md}
 		e.methodsOrd = append(e.methodsOrd, key)
 	}
-	if iface, ok := d.Iface.(*ast.NamedType); ok && iface.Qual == "" && len(iface.Args) == 0 {
-		ik := modKey + "." + iface.Name
-		if e.ifaceSeen[ik] == nil {
-			e.ifaceSeen[ik] = make(map[string]bool)
+	if ik, declKey, args, ok := e.ifacePairKey(modKey, d.Iface); ok {
+		p := e.ifacePairs[ik]
+		if p == nil {
+			p = &ifacePair{declKey: declKey, modKey: modKey, args: args, seen: make(map[string]bool)}
+			e.ifacePairs[ik] = p
+			e.ifaceOrd = append(e.ifaceOrd, ik)
 		}
-		if !e.ifaceSeen[ik][headKey] {
-			e.ifaceSeen[ik][headKey] = true
-			e.ifaceHeads[ik] = append(e.ifaceHeads[ik], headKey)
+		if !p.seen[headKey] {
+			p.seen[headKey] = true
+			p.heads = append(p.heads, headKey)
 		}
 	}
 	return nil
@@ -796,14 +810,108 @@ func paramsInOrder(args []ast.TypeRef, params []*ast.TypeParam) bool {
 	return true
 }
 
+// ifacePair is one row of the impl pairing table: an interface, the
+// arguments an impl applied it at, and the heads that implement it in
+// impl order. The declaration key names the interface without its
+// arguments, and modKey is the module it is declared in — the module a
+// default body's own names resolve in.
+type ifacePair struct {
+	declKey string // "<module>.<interface>", or a builtin face's bare name
+	modKey  string // the module the interface is declared in
+	args    []typecheck.Shape
+	heads   []string // implementing head keys, impl order
+	seen    map[string]bool
+}
+
+// ifacePairKey resolves the interface one impl names to the key its
+// pairing row is filed under: the interface's own declaration key with
+// the arguments the impl applied it at, which is design D2's mangling of
+// the face (`Iterator$Int64`). It is also what makes the row a row per
+// *application* — the antecedent the table was missing while an impl of a
+// parameterized interface was excluded whole.
+//
+// The name resolves the way the check stage resolves it: a declaration of
+// the module itself first, so a module's own `Iterator` is its own and
+// not the builtin face of that name, then the builtin faces the checker
+// owns. A qualified interface names a declaration outside the walked
+// module, and a name that is neither is no face at all: both answer false
+// and the impl registers no row rather than a row nothing can name. The
+// qualified form is not this table's to open — the impl's own head is
+// refused at the same qualifier (collectImpl's first line), so widening
+// here would file rows for impls whose methods were never collected.
+func (e *emitter) ifacePairKey(modKey string, t ast.TypeRef) (string, string, []typecheck.Shape, bool) {
+	iface, ok := t.(*ast.NamedType)
+	if !ok || iface.Qual != "" {
+		return "", "", nil, false
+	}
+	declKey := modKey + "." + iface.Name
+	if _, ok := e.ifaceDefs[declKey]; !ok {
+		if _, ok := e.ifaceFace(typecheck.ShapeDecl{Kind: typecheck.DeclIface, Name: iface.Name}); !ok {
+			return "", "", nil, false
+		}
+		declKey = iface.Name
+	}
+	args := make([]typecheck.Shape, len(iface.Args))
+	for i, a := range iface.Args {
+		s, ok := e.shapeOfRef(a)
+		if !ok {
+			return "", "", nil, false
+		}
+		args[i] = s
+	}
+	return e.mangleApply(declKey, args), declKey, args, true
+}
+
+// ifaceFace returns one interface declaration's dispatch face — its
+// non-defaulted methods in declaration order (design D6 decision 2). The
+// builtin faces have no source tree: their methods are the checker's own
+// registration, which is why the face is read from the check stage rather
+// than from a declaration the emitter could walk.
+func (e *emitter) ifaceFace(decl typecheck.ShapeDecl) (typecheck.Face, bool) {
+	for _, reg := range e.shapes {
+		for _, f := range reg.Faces() {
+			if decl.Node != nil {
+				if f.Decl.Node == decl.Node {
+					return f, true
+				}
+				continue
+			}
+			if f.Decl.Node == nil && f.Decl.Name == decl.Name {
+				return f, true
+			}
+		}
+	}
+	return typecheck.Face{}, false
+}
+
 // collectDefaults instantiates every interface default body once per
 // implementing head (design D4) — the step that makes a default method
 // real. A head that defines the method itself keeps its own definition: a
 // default is what an impl leaves unsaid. Runs after pass one, when every
 // module's interfaces and impls are known, whatever their source order.
+//
+// The rows are walked in registration order rather than by map iteration:
+// what the walk appends lands in methodsOrd, and that order is the define
+// order. A head served by two interfaces keeps whichever default reached
+// it first — the same first-definition-wins rule the method table states.
+//
+// A parameterized interface's default is emitted at the arguments its
+// impl applied it at, which is the instantiation in flight for that body:
+// the interface's own positions substitute exactly as a generic fn's
+// template does. The key is the head's and the name's either way — a
+// default is the head's method once it is instantiated, and an interface
+// is implemented at most once for one head (E0809), so no two rows can
+// want one key.
 func (e *emitter) collectDefaults() {
-	for ik, iface := range e.ifaceDefs {
-		for _, headKey := range e.ifaceHeads[ik] {
+	for _, ik := range e.ifaceOrd {
+		p := e.ifacePairs[ik]
+		iface := e.ifaceDefs[p.declKey]
+		if iface == nil {
+			// A builtin face: its methods are the check stage's own
+			// registration, and nothing here can read a body for them.
+			continue
+		}
+		for _, headKey := range p.heads {
 			for _, m := range iface.Methods {
 				if m.Body == nil {
 					continue // a bare signature is the impl's obligation, not a body
@@ -812,12 +920,17 @@ func (e *emitter) collectDefaults() {
 				if _, ok := e.methods[key]; ok {
 					continue
 				}
-				e.methods[key] = &fnDef{
-					key:     ik[:strings.LastIndex(ik, ".")],
+				fd := &fnDef{
+					key:     p.modKey,
 					name:    m.Name,
 					recvKey: headKey,
 					decl:    defaultFnDecl(m),
 				}
+				if len(p.args) != 0 {
+					fd.instArgs = p.args
+					fd.instParams = typeParamNames(iface.TypeParams)
+				}
+				e.methods[key] = fd
 				e.methodsOrd = append(e.methodsOrd, key)
 			}
 		}
@@ -1285,8 +1398,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		genericMethods: make(map[string]*methodTmpl),
 		implTmpl:       make(map[string]*implTemplate),
 		ifaceDefs:      make(map[string]*ast.InterfaceDecl),
-		ifaceHeads:     make(map[string][]string),
-		ifaceSeen:      make(map[string]map[string]bool),
+		ifacePairs:     make(map[string]*ifacePair),
 		mode:           mode,
 	}
 	root := mods[len(mods)-1]
@@ -1310,6 +1422,17 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 			e.shapes = append(e.shapes, m.Shapes)
 		}
 		e.enterModule(m.Key)
+		// The module's interface declarations register before its items are
+		// walked. An impl names the interface it satisfies, and which one a
+		// written name denotes is the module's answer — its own declaration
+		// first, so a module's `Iterator` is its own and not the builtin
+		// face of that name — which may not depend on where in the file the
+		// declaration stands.
+		for _, it := range m.File.Items {
+			if d, ok := it.(*ast.InterfaceDecl); ok {
+				e.ifaceDefs[m.Key+"."+d.Name] = d
+			}
+		}
 		for _, it := range m.File.Items {
 			switch d := it.(type) {
 			case *ast.SumDecl:
@@ -1369,13 +1492,14 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 				}
 				e.newtypes[m.Key+"."+d.Name] = d.Underlying
 			case *ast.InterfaceDecl:
-				// The interface itself emits no IR — its member set is a
-				// declaration-level fact the check stage consumes. Its
-				// default bodies do reach IR, but never under the
-				// interface's name: each instantiates per implementing
-				// head (see collectDefaults), because a default body's
-				// `self.m()` dispatches to the head's own method.
-				e.ifaceDefs[m.Key+"."+d.Name] = d
+				// Registered in the pre-pass above — the interface itself
+				// emits no IR. Its member set is a declaration-level fact
+				// the check stage consumes; its default bodies do reach IR,
+				// but never under the interface's name: each instantiates
+				// per implementing head (see collectDefaults), because a
+				// default body's `self.m()` dispatches to the head's own
+				// method.
+				continue
 			case *ast.ImplDecl:
 				// An impl's methods reach IR under the head type's key —
 				// the method table of design D4. The impl's own face (the
