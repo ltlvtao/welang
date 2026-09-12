@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"regexp"
 	"testing"
 
 	"github.com/ltlvtao/welang/internal/ast"
@@ -362,6 +363,231 @@ entry:
 	wantIR(t, ir, "@"+fd.sym()+"(ptr %recv)", "the thunk's call, by the method's own symbol")
 	wantIR(t, ir, "define { i64, i64, i64 } @"+fd.sym()+"(ptr %self)",
 		"the define that symbol names")
+}
+
+// t6DispatchSrc is the task's dispatch shape: the box's method is called,
+// so the call site has to read the table the construction emitted. The
+// impl's body both reads and writes its receiver, so what the thunk hands
+// over is a real object and not a value the call could have carried.
+const t6DispatchSrc = `import std.io
+
+pub type AppError = Failed(String)
+
+record CountIter { n: Int64, hi: Int64 }
+
+impl Iterator<Int64> for CountIter {
+    fn next(mut self) -> Option<Int64> {
+        if self.n >= self.hi {
+            return None
+        }
+        let v = self.n
+        self.n = self.n + 1
+        return Some(v)
+    }
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let d = Dyn<Iterator<Int64> >(CountIter { n: 10, hi: 12 })
+    let a = d.next()
+    match a {
+        Some(v) => { io.println("${v}") }
+        None => { io.println("none") }
+    }
+    return Ok(())
+}
+`
+
+// dispatchRe matches one method call through a box's table, capturing each
+// register so the chain can be checked link by link: Go's regexp has no
+// backreferences, so what lines up is asserted below rather than in the
+// pattern. The slot's own offset is a capture — a table holding more than
+// one slot only dispatches correctly if the index is the member's — and so
+// is the return face, since the call is emitted at the slot's face and not
+// at a common one.
+var dispatchRe = regexp.MustCompile(
+	`(%v\d+) = getelementptr i8, ptr (%v\d+), i64 16\n` +
+		`\s+(%v\d+) = load ptr, ptr (%v\d+)\n` +
+		`\s+(%v\d+) = getelementptr i8, ptr (%v\d+), i64 (\d+)\n` +
+		`\s+(%v\d+) = load ptr, ptr (%v\d+)\n` +
+		`\s+(%v\d+) = call (.+?) (%v\d+)\(ptr (%v\d+)\)`)
+
+// wantDispatch asserts one dispatch's whole load chain and answers the
+// slot's offset and the return face the call was emitted at. The groups
+// are, in order: the address the table is loaded from, the box, the table,
+// the two registers each load repeats, the slot's address, the slot's
+// offset, the call's register, the return face, the thunk and the receiver
+// passed.
+func wantDispatch(t *testing.T, ir string) (slot, face string) {
+	t.Helper()
+	m := dispatchRe.FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("no dispatch through the box's table:\n%s", ir)
+	}
+	for _, c := range []struct {
+		what      string
+		got, want string
+	}{
+		{"the table is loaded from the address just computed", m[4], m[1]},
+		{"the slot is taken out of the loaded table", m[6], m[3]},
+		{"the thunk is loaded from the slot's address", m[9], m[5]},
+		{"the call goes through the loaded thunk, not a symbol", m[12], m[8]},
+		{"the receiver passed is the box itself, not its payload", m[13], m[2]},
+	} {
+		if c.got != c.want {
+			t.Fatalf("%s: %s vs %s\n--\n%s", c.what, c.got, c.want, ir)
+		}
+	}
+	return m[7], m[11]
+}
+
+// TestDispatchReadsTheSlotOutOfTheBox pins the dispatch point's own form
+// (design D6 decision 5): the table word at the box's own offset, the slot
+// at its index within that table, the loaded thunk as the callee — the
+// same load a fn-value call takes out of its carrier, at the same offsets.
+//
+// What is passed is the box, not its payload: the thunk is the one that
+// knows the payload's face, so unwrapping belongs to it and the call site
+// stays free of the face. And the slot's own ABI is what the call is
+// emitted at, so a sum return crosses whole instead of being narrowed to
+// the words a common return face would allow.
+func TestDispatchReadsTheSlotOutOfTheBox(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", t6DispatchSrc)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	if slot, face := wantDispatch(t, ir); face != "{ i64, i64, i64 }" || slot != "0" {
+		t.Fatalf("the call is emitted at %q out of slot %s, want the slot's own sum face at the face's only slot", face, slot)
+	}
+}
+
+// TestDispatchIsEmittedOnlyWhereATableWas pins the boundary the dispatch
+// shares with the table (design D6 decision 4's refutation, which is where
+// it becomes load-bearing): a box whose payload face is a value has no
+// table — the word at 16 is the null T5 wrote — so a call through it is
+// not emitted at all. The face a value carries says which slots it would
+// be dispatched at, never that a table is there to read, and a jump
+// through the null would be the wrong answer rather than a missing one.
+//
+// `Celsius` is the carrier of exactly that shape: a newtype boxed behind
+// a face whose one slot `describe` is a method it implements. What the
+// test above dispatches, this one declines, and the payload face is the
+// whole of the difference.
+func TestDispatchIsEmittedOnlyWhereATableWas(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", `pub type AppError = Failed(String)
+
+interface Describe {
+    fn describe(self) -> String
+}
+
+newtype Celsius(Int64)
+
+impl Describe for Celsius {
+    fn describe(self) -> String {
+        "c"
+    }
+}
+
+pub fn main() -> Result<(), AppError> {
+    let d = Dyn<Describe>(Celsius(1))
+    let s = d.describe()
+    return Ok(())
+}
+`)
+	_, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni == nil {
+		t.Fatal("a call through a box whose payload is a value emitted")
+	}
+}
+
+// TestDispatchOnAGcPayloadBoxIsEmitted is the same program as the pin
+// above with the one difference that decides it — the payload is a record,
+// so the table was emitted and the call resolves through it. The two are
+// one predicate apart, which is what keeps the boundary from being a
+// coincidence of the source shape.
+func TestDispatchOnAGcPayloadBoxIsEmitted(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", `pub type AppError = Failed(String)
+
+interface Describe {
+    fn describe(self) -> String
+}
+
+record Point {
+    x: Int64,
+}
+
+impl Describe for Point {
+    fn describe(self) -> String {
+        "p"
+    }
+}
+
+pub fn main() -> Result<(), AppError> {
+    let d = Dyn<Describe>(Point { x: 1 })
+    let s = d.describe()
+    return Ok(())
+}
+`)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantIR(t, ir, "@.vt.main.Describe.main.Point", "the table of a gc payload box")
+	if slot, face := wantDispatch(t, ir); face != "{ ptr, i64 }" || slot != "0" {
+		t.Fatalf("the call is emitted at %q out of slot %s, want the slot's own String face", face, slot)
+	}
+}
+
+// TestDispatchTakesTheSlotAtItsOwnIndex pins that the slot read is indexed
+// by the member's place in the table and not by the face's declaration
+// order: `name` has a body of its own and so holds no slot, which makes
+// `sides` the interface's third declaration and the table's second entry.
+// A call that read the first word, or read at the declaration's index,
+// would reach `area`'s thunk — or past the array — and the offset is the
+// only thing in the IR that tells them apart.
+func TestDispatchTakesTheSlotAtItsOwnIndex(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", `import std.io
+
+pub type AppError = Failed(String)
+
+interface Shape {
+    fn area(self) -> Int64
+    fn name(self) -> String { "shape" }
+    fn sides(self) -> Int64
+}
+
+record Square { s: Int64 }
+
+impl Shape for Square {
+    fn area(self) -> Int64 {
+        4
+    }
+    fn sides(self) -> Int64 {
+        5
+    }
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let d = Dyn<Shape>(Square { s: 1 })
+    let n = d.sides()
+    io.println("${n}")
+    return Ok(())
+}
+`)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	// The table is where the index means something: `sides` is its second
+	// entry, so a call reading the second word reaches the head's own
+	// `sides` and nothing else.
+	wantIR(t, ir,
+		"@.vt.main.Shape.main.Square = private unnamed_addr constant [2 x ptr] "+
+			"[ptr @.vt.main.Shape.main.Square.area, ptr @.vt.main.Shape.main.Square.sides]",
+		"the table the index is read against")
+	if slot, face := wantDispatch(t, ir); slot != "8" || face != "i64" {
+		t.Fatalf("the call reads slot offset %s at face %q, want the second slot at i64", slot, face)
+	}
 }
 
 // TestVtableIsEmittedWhereABoxIsBuilt: the table is a site's, not an

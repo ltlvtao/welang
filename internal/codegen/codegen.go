@@ -323,6 +323,19 @@ type strBinding struct {
 type gcBinding struct {
 	rec string
 	reg string
+	// dyn is the erased face a box value was built for (design D6), nil
+	// where the value is no box. A box's `rec` is empty — the box is the
+	// one gc value with no record behind it — so what a method call on it
+	// can reach is the face's table and nothing else, and the face is
+	// what names that table's slots.
+	//
+	// It is set only where a table was actually emitted for the box, so a
+	// non-nil face means the table word is a table and not the null every
+	// other payload face leaves there. That is the whole reason the face
+	// rides the value rather than the call: a `Dyn<I>` type says which
+	// face a box is dispatched through, never which payload face it
+	// carries, and only a box built here has its payload known.
+	dyn *typecheck.Shape
 }
 
 // listBinding is one List value's handle (design D6): the carrier pointer
@@ -2258,7 +2271,7 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 		return nil
 	case ckGc:
 		if name != "_" {
-			e.gcEnv[name] = gcBinding{rec: res.recKey, reg: res.gcReg}
+			e.gcEnv[name] = gcBinding{rec: res.recKey, reg: res.gcReg, dyn: res.dyn}
 		}
 		return nil
 	}
@@ -2387,6 +2400,10 @@ type callResult struct {
 	// fn is the carrier a function-valued result holds; kind is ckFn when
 	// it is set.
 	fn fnValue
+	// dyn is the erased face a box result was built for (design D6);
+	// nil at every other result. It rides the value the way gcBinding's
+	// does, and for the same reason.
+	dyn *typecheck.Shape
 }
 
 // isLocalName reports whether name is bound in the current body — locals
@@ -3427,6 +3444,17 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			v := e.value()
 			e.inst(fmt.Sprintf("%%%s = inttoptr i64 %s to ptr", v, op))
 			return e.emitPrimCall("%"+v, fn.Name, call.Args)
+		}
+	}
+	if box, face, ok := e.dynRecvOf(fn.Recv); ok {
+		// A method call on a box (design D6 decision 5): the receiver is a
+		// run-time value, so the only signature the call site has is the
+		// slot's, and the only route to the head's body is the box's own
+		// table. A member the face does not carry as a slot — a defaulted
+		// method, a name no interface method has — leaves the boundary to
+		// the faces below rather than being dispatched to nothing.
+		if res, is, ni := e.emitDynCall(box, face, fn.Name, call.Args); is {
+			return res, ni
 		}
 	}
 	if recvKey, ok := e.recvKeyOf(fn.Recv); ok {
@@ -10198,7 +10226,7 @@ func (e *emitter) emitBox(call *ast.Call, site typecheck.Site) (callResult, *Not
 	// dispatch point reads its method out of. It is written as a pointer,
 	// the shape the thunks read it through, never as a tag (decision 2: no
 	// downcast, so no tag).
-	table, ni := e.boxTable(face, site)
+	table, dispatchable, ni := e.boxTable(face, site)
 	if ni != nil {
 		return callResult{}, ni
 	}
@@ -10206,7 +10234,17 @@ func (e *emitter) emitBox(call *ast.Call, site typecheck.Site) (callResult, *Not
 	if ni := e.emitBoxPayload(reg, call.Args[0], t, face); ni != nil {
 		return callResult{}, ni
 	}
-	return callResult{kind: ckGc, gcReg: reg}, nil
+	res := callResult{kind: ckGc, gcReg: reg}
+	if dispatchable {
+		// The face rides the value as far as the value's own static
+		// knowledge of its payload goes (design D6): a table is emitted
+		// here, so a call on this binding can be dispatched, and a call
+		// on a box from anywhere else — a parameter, a return, a field —
+		// cannot say a table is there to be read.
+		f := site.Ret
+		res.dyn = &f
+	}
+	return res, nil
 }
 
 // boxFace resolves one concrete type to the payload face its box stores it
@@ -10447,26 +10485,30 @@ func (e *emitter) dynMapName(f boxFace) string {
 // would narrow a landed face to guard a path nothing walks. What the
 // table word buys is dispatchability, and the box's own IR is where that
 // stops being free.
-func (e *emitter) boxTable(face boxFace, site typecheck.Site) (string, *NotImplemented) {
+func (e *emitter) boxTable(face boxFace, site typecheck.Site) (string, bool, *NotImplemented) {
 	iface := site.Ret
 	slots, ok := e.ifaceSlots(iface)
 	if !ok {
-		return "", e.bnd()
+		return "", false, e.bnd()
 	}
 	if len(slots) == 0 {
 		// A marker face: no method to dispatch, so no slot to name and no
 		// table to hold one. The word stays null, as it does for every
 		// face without a slot list.
-		return "null", nil
+		return "null", false, nil
 	}
 	if face.kind != abiGc {
-		return "null", nil
+		return "null", false, nil
 	}
 	headKey, ok := e.shapeKey(e.instShape(*site.Boxed))
 	if !ok {
-		return "", e.bnd()
+		return "", false, e.bnd()
 	}
-	return e.vtableFor(iface, slots, headKey)
+	name, ni := e.vtableFor(iface, slots, headKey)
+	if ni != nil {
+		return "", false, ni
+	}
+	return name, true, nil
 }
 
 // ifaceSlots reads one interface face's non-defaulted methods — the
@@ -10623,6 +10665,68 @@ func (e *emitter) emitVtableThunk(name string, abi fnAbi, fd *fnDef) {
 	e.thunks = append(e.thunks, fmt.Sprintf(
 		"define internal %s %s(%s) {\nentry:\n  %%addr = getelementptr i8, ptr %%box, i64 %d\n  %%recv = load ptr, ptr %%addr\n%s}\n",
 		abi.retTyp, name, strings.Join(decl, ", "), dynBoxOff, body))
+}
+
+// dynRecvOf reads the box a receiver expression is, without emitting: the
+// handle and the erased face its table was built for. Only a binding the
+// emitter itself boxed carries the face, so a box arriving as a parameter,
+// a return, or a field is not one of these — its payload face is unknown
+// and its table word may be the null a scalar payload leaves there, and
+// the call is a boundary rather than a jump through it.
+func (e *emitter) dynRecvOf(x ast.Expr) (string, typecheck.Shape, bool) {
+	id, ok := x.(*ast.Ident)
+	if !ok {
+		return "", typecheck.Shape{}, false
+	}
+	g, ok := e.gcEnv[id.Name]
+	if !ok || g.dyn == nil {
+		return "", typecheck.Shape{}, false
+	}
+	return g.reg, *g.dyn, true
+}
+
+// emitDynCall emits one method call whose receiver is a box: the slot's
+// index in the face's table is a compile-time fact (the interface declared
+// the order), so the table word at the box's own offset, the slot at its
+// own index, and the loaded thunk are the whole call — the same load the
+// fn-value call takes out of its carrier, at the same offsets.
+//
+// The words passed are the box itself, not its payload: the thunk is what
+// knows the payload's face, and it is the one that unwraps it. The ABI the
+// call is emitted at is the slot's at the arguments the face was applied
+// at, which is what the thunk was built at — so the two agree by
+// construction and a sum return crosses whole.
+//
+// The second result says whether the name was the face's to dispatch at
+// all; false leaves the caller's other faces to answer, which is where a
+// defaulted method lands: it has no slot to be reached through.
+func (e *emitter) emitDynCall(box string, face typecheck.Shape, name string, args []ast.Expr) (callResult, bool, *NotImplemented) {
+	slots, ok := e.ifaceSlots(face)
+	if !ok {
+		return callResult{}, false, nil
+	}
+	slot := -1
+	for i, s := range slots {
+		if s.Name == name {
+			slot = i
+			break
+		}
+	}
+	if slot < 0 {
+		return callResult{}, false, nil
+	}
+	ifaceArgs := make([]typecheck.Shape, len(face.Args))
+	for i, a := range face.Args {
+		ifaceArgs[i] = e.instShape(a)
+	}
+	abi, ok := e.slotAbi(slots[slot], ifaceArgs)
+	if !ok {
+		return callResult{}, true, e.bnd()
+	}
+	table := e.gepLoadPtr(box, 16)
+	thunk := e.gepLoadPtr(table, 8*slot)
+	res, ni := e.emitCallCore(abi, thunk, []string{"ptr " + box}, args)
+	return res, true, ni
 }
 
 // emitFieldStore writes one field of a record under construction (or one

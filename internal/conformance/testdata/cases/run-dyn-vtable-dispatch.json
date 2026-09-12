@@ -1,0 +1,16 @@
+{
+  "name": "run-dyn-vtable-dispatch",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord CountIter { n: Int64, hi: Int64 }\n\nimpl Iterator<Int64> for CountIter {\n    fn next(mut self) -> Option<Int64> {\n        if self.n >= self.hi {\n            return None\n        }\n        let v = self.n\n        self.n = self.n + 1\n        return Some(v)\n    }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let d = Dyn<Iterator<Int64> >(CountIter { n: 10, hi: 12 })\n    let a = d.next()\n    match a {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let b = d.next()\n    match b {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let c = d.next()\n    match c {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "10\n11\nnone\n",
+  "stderr": ""
+}
