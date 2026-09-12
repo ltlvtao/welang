@@ -318,6 +318,32 @@ func (e *emitter) refOfShape(s typecheck.Shape) ast.TypeRef {
 			e.instFail("a shape this build cannot name")
 			return nil
 		}
+		if s.Kind == typecheck.ShapeNominal && s.Decl.Name != "" {
+			// A declaration with no source — a builtin face or a builtin
+			// collection, which is declKey's own reading of a named
+			// declaration — is spelled the way a written signature spells
+			// it: the declaration's name, with its arguments. The key is
+			// the tables' name for the application, and it is not a name
+			// the classifier reads back: `Option$Int64` is not `Option`, so
+			// a prelude sum reached through a substitution classified as
+			// nothing at all — and a substitution is the only way an
+			// `Iterator<Int64>`'s one slot, which returns `Option<Int64>`,
+			// ever reaches the classifier. The name changes, the identity
+			// does not: the key still travels with the node (namedKey) and
+			// the shape with the reference (substShape), so every table
+			// lookup is the one it was.
+			args := make([]ast.TypeRef, len(s.Args))
+			for i, a := range s.Args {
+				args[i] = e.refOfShape(a)
+			}
+			n := e.refForName(s.Decl.Name, s)
+			n.Args = args
+			if e.subst == nil {
+				e.subst = make(map[*ast.NamedType]string)
+			}
+			e.subst[n] = key
+			return n
+		}
 		n := e.refForName(key, s)
 		if e.subst == nil {
 			e.subst = make(map[*ast.NamedType]string)

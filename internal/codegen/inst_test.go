@@ -554,6 +554,71 @@ func TestShapeKeyRoundTripsThroughTheProjection(t *testing.T) {
 	}
 }
 
+// A declaration with no source projects to its own spelling, not to its
+// key: `Option` at `Int64` renders as the reference a source signature
+// writes it as, because `Option$Int64` is the tables' name for the
+// application and no table the classifier reads holds it — it is not
+// `Option`, and a prelude sum reached through a substitution is reached
+// with no other spelling to go by. The identity does not move: the key
+// still travels with the node (namedKey) and the shape with the reference
+// (substShape), so both the key and the shape read back exactly.
+func TestBuiltinHeadProjectsToItsOwnSpelling(t *testing.T) {
+	e := &emitter{}
+	s := typecheck.Shape{
+		Kind: typecheck.ShapeNominal,
+		Decl: typecheck.ShapeDecl{Kind: typecheck.DeclSum, Name: "Option"},
+		Args: []typecheck.Shape{{Kind: typecheck.ShapeBase, Name: "Int64"}},
+	}
+	ref, ok := e.refOfShape(s).(*ast.NamedType)
+	if !ok {
+		t.Fatal("a source-less nominal shape rendered no named reference")
+	}
+	if ref.Name != "Option" || len(ref.Args) != 1 {
+		t.Fatalf("the reference reads %q at %d arguments, want Option at 1", ref.Name, len(ref.Args))
+	}
+	if got, want := e.namedKey("main", ref), "Option$Int64"; got != want {
+		t.Fatalf("namedKey = %q, want %q — the identity is the mangled key", got, want)
+	}
+	back, ok := e.shapeOfRef(ref)
+	if !ok {
+		t.Fatal("the rendered reference did not project back")
+	}
+	if back.Decl.Name != "Option" || len(back.Args) != 1 || back.Args[0].Name != "Int64" {
+		t.Fatalf("the shape projected back as %s at %+v", back.Decl.Name, back.Args)
+	}
+	if got, ok := e.shapeKey(back); !ok || got != "Option$Int64" {
+		t.Fatalf("shapeKey(shapeOfRef(refOfShape(s))) = %q, %v; want Option$Int64", got, ok)
+	}
+}
+
+// The consequence, end to end: a generic fn's body resolves a type
+// parameter to a reference the substitution renders, and the reference a
+// prelude sum renders as is what the classifier reads — so a call that
+// applies a declaration at `Option<Int64>` emits, and the instantiation's
+// own define names the sum's three-word ABI. The written spelling of the
+// same application never stopped; the inferred one had no path to the
+// classifier at all.
+func TestSubstitutedPreludeSumReachesTheClassifier(t *testing.T) {
+	f, sh := checkShapes(t, "main.we", `pub type AppError = Failed(String)
+
+fn first<T>(x: T) -> Int64 {
+    1
+}
+
+pub fn main() -> Result<(), AppError> {
+    let a: Option<Int64> = Some(1)
+    let n = first(a)
+    return Ok(())
+}
+`)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
+	}
+	wantIR(t, ir, "define i64 @main.first$Option$Int64(i64 %x0, i64 %x1, i64 %x2)",
+		"the instantiation at a prelude sum, crossed as the sum's own three words")
+}
+
 // genericImplDecl builds `impl<T…> Head<T…> { methods }` — the template
 // spelling, whose head's arguments are the declaration's own parameters.
 func genericImplDecl(head string, params []*ast.TypeParam, methods ...*ast.FnDecl) *ast.ImplDecl {
