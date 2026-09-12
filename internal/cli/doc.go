@@ -50,7 +50,7 @@ type docModule struct {
 // module plus the root graph's non-std modules (the build face's own
 // filter — std.* documents nothing of the project).
 func (e *env) runDocProject(dir string) int {
-	manifest, file, _, mods, depRoots, code := e.loadProject(dir, false)
+	manifest, file, _, mods, depRoots, _, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
 	}
@@ -77,7 +77,7 @@ func (e *env) runDocProject(dir string) int {
 // promote), then the page under the file's directory's docs/ — the
 // design's disclosed default root.
 func (e *env) runDocSingle(path string) int {
-	file, code := e.loadFile(path)
+	file, _, code := e.loadFile(path)
 	if file == nil {
 		return code
 	}

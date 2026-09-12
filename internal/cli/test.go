@@ -231,7 +231,7 @@ func (e *env) runTestProject(dir string) int {
 			}
 			return code
 		}
-		td, tni, _ := typecheck.CheckTestRoot(f.File, rootPath, key, deps)
+		td, tni, sh := typecheck.CheckTestRoot(f.File, rootPath, key, deps)
 		if td != nil {
 			e.report(*td)
 			return exitCompileFailure
@@ -251,11 +251,11 @@ func (e *env) runTestProject(dir string) int {
 				continue // one define per module across the test roots
 			}
 			depSeen[m.Key] = true
-			prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File})
+			prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File, Shapes: sh})
 		}
 		// The test module's ID carries the manifest name: the program
 		// this run builds is the project's own.
-		prog = append(prog, codegen.ProgModule{Key: key, ID: name, Path: f.Path, File: f.File})
+		prog = append(prog, codegen.ProgModule{Key: key, ID: name, Path: f.Path, File: f.File, Shapes: sh})
 	}
 	if promoted, _ := e.advise(manifestKeys, advisories); promoted {
 		return exitCompileFailure
@@ -289,7 +289,7 @@ func (e *env) runTestProject(dir string) int {
 // harness builds in a throwaway directory a single-file run deletes on
 // the way out — it owns no build/ (there is no manifest to name one).
 func (e *env) runTestSingle(path string) int {
-	file, code := e.loadFile(path)
+	file, sh, code := e.loadFile(path)
 	if file == nil {
 		if code == exitDiagnostic {
 			return exitCompileFailure
@@ -306,10 +306,11 @@ func (e *env) runTestSingle(path string) int {
 	e.advise(nil, typecheck.Advisories(files[0].File, path, typecheck.SingleFile))
 	base := strings.TrimSuffix(filepath.Base(path), ".we")
 	prog := []codegen.ProgModule{{
-		Key:  "main", // the single-file face's module key (Emit's own)
-		ID:   base,
-		Path: filepath.ToSlash(path),
-		File: files[0].File,
+		Key:    "main", // the single-file face's module key (Emit's own)
+		ID:     base,
+		Path:   filepath.ToSlash(path),
+		File:   files[0].File,
+		Shapes: sh,
 	}}
 	ir, ni := codegen.EmitProgram(codegen.ModeTest, prog)
 	if ni != nil {

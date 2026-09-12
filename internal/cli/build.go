@@ -30,7 +30,7 @@ func (e *env) runBuild(path string, info os.FileInfo) int {
 		return code
 	}
 	if !info.IsDir() {
-		if file, code := e.loadFile(path); file == nil {
+		if file, _, code := e.loadFile(path); file == nil {
 			return code
 		}
 		// A single-file build has no manifest and so no artifact name —
@@ -51,7 +51,7 @@ func (e *env) runRun(path string, info os.FileInfo) int {
 		return code
 	}
 	if !info.IsDir() {
-		if file, code := e.loadFile(path); file == nil {
+		if file, _, code := e.loadFile(path); file == nil {
 			return code
 		}
 		return e.boundary(whatSingleFileBuild)
@@ -206,7 +206,7 @@ func checkClangVersion(path string) error {
 // inspection. On success it returns the artifact path and prints the
 // success faces; a failure is already reported, with its exit code.
 func (e *env) buildProject(dir string) (string, int) {
-	manifest, file, name, mods, depRoots, code := e.loadProject(dir, true)
+	manifest, file, name, mods, depRoots, sh, code := e.loadProject(dir, true)
 	if file == nil {
 		return "", code
 	}
@@ -223,8 +223,10 @@ func (e *env) buildProject(dir string) (string, int) {
 	// The program face of design D1: dependency modules in graph order,
 	// the root last. The std modules drop out here — their call faces
 	// ride the emitter's own std table, their module bodies are the
-	// check stage's material, never IR.
-	prog := append(e.programModules(mods), codegen.ProgModule{Key: "main", ID: name, File: file})
+	// check stage's material, never IR. The check's registry rides along:
+	// one check walked the whole graph, so every module of the program
+	// reads the same one.
+	prog := append(e.programModules(mods, sh), codegen.ProgModule{Key: "main", ID: name, File: file, Shapes: sh})
 	ir, ni := codegen.EmitProgram(codegen.ModeBuild, prog)
 	if ni != nil {
 		return "", e.boundary(ni.What)
@@ -360,14 +362,15 @@ func (e *env) nativeObjects(dir, buildDir string, mods []typecheck.Module, prog 
 
 // programModules lifts the loader's modules into the program face
 // buildProject assembles — the non-std dependency modules in graph
-// order. The root module joins at the call site, keyed "main".
-func (e *env) programModules(mods []typecheck.Module) []codegen.ProgModule {
+// order, each carrying the check's registry (one check walked them all).
+// The root module joins at the call site, keyed "main".
+func (e *env) programModules(mods []typecheck.Module, sh *typecheck.Shapes) []codegen.ProgModule {
 	prog := make([]codegen.ProgModule, 0, len(mods))
 	for _, m := range mods {
 		if m.Key == "std" || strings.HasPrefix(m.Key, "std.") {
 			continue
 		}
-		prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File})
+		prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File, Shapes: sh})
 	}
 	return prog
 }

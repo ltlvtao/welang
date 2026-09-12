@@ -452,6 +452,39 @@ func (e *emitter) namedKey(modKey string, n *ast.NamedType) string {
 	return modKey + "." + n.Name
 }
 
+// newtypeKey names the wrapper one newtype construction denotes, resolving
+// an application the same way constructKey does for a record (design D3):
+// a generic newtype's construction is an application like any other, and
+// the instantiation is what its erasure reads — `Tagged<Int64>(1)` is a
+// value of `main.Tagged$Int64`, whose underlying type the table holds.
+//
+// The constructor's call carries the arguments where they were written and
+// the registry's site otherwise, so both spellings resolve here. The
+// erasure itself is emitNewtypeCtor's; what this returns is only the key
+// the wrapper's underlying type is filed under.
+func (e *emitter) newtypeKey(name string, call *ast.Call) (string, bool) {
+	key := e.curKey + "." + name
+	if d, ok := e.declOfKey(e.curKey, name); ok && len(declTypeParams(d)) != 0 {
+		if args, ok := e.siteArgs(call, len(declTypeParams(d))); ok {
+			return e.instDecl(d, e.mangleApply(key, args), args)
+		}
+		if len(call.TypeArgs) == 0 {
+			return "", false
+		}
+		app := &ast.NamedType{Name: name, Args: e.resolveRefs(call.TypeArgs),
+			Line: call.Line, Col: call.Col}
+		n, is := e.applyRef(app, app.Args).(*ast.NamedType)
+		if !is {
+			return "", false
+		}
+		return e.namedKey(e.curKey, n), true
+	}
+	if _, ok := e.newtypes[key]; !ok {
+		return "", false
+	}
+	return key, true
+}
+
 // constructKey names the record one construction denotes, resolving an
 // explicit application to its instantiation (design D3) and asking nothing
 // beyond the declaration tables. It emits nothing — the synthesis an
@@ -470,23 +503,66 @@ func (e *emitter) constructKey(c *ast.Construct) (string, bool) {
 		}
 	}
 	head := key + "." + c.Name
-	if len(c.TypeArgs) != 0 {
-		args := make([]ast.TypeRef, len(c.TypeArgs))
-		for i, a := range c.TypeArgs {
-			args[i] = e.resolveRef(a)
+	// An application of a generic declaration — written out or left to
+	// inference, both are one site to the check stage (design D1), so
+	// both take the same path here. A declaration the head does not name
+	// (an ordinary record, a builtin collection) has no site and keeps
+	// the plain key it always had.
+	if d, ok := e.declOfKey(key, c.Name); ok && len(declTypeParams(d)) != 0 {
+		args, ok := e.siteArgs(c, len(declTypeParams(d)))
+		if !ok {
+			if len(c.TypeArgs) == 0 {
+				return "", false
+			}
+			// No registry reached this emitter (a hand-built one): the
+			// written references are the only word on the arguments there
+			// is, and they are the same word the check would have given.
+			app := &ast.NamedType{Qual: c.Qual, Name: c.Name, Args: e.resolveRefs(c.TypeArgs), Line: c.Line, Col: c.Col}
+			n, is := e.applyRef(app, app.Args).(*ast.NamedType)
+			if !is {
+				return "", false
+			}
+			head = e.namedKey(key, n)
+		} else {
+			k, ok := e.instDecl(d, e.mangleApply(head, args), args)
+			if !ok {
+				return "", false
+			}
+			head = k
 		}
-		app := &ast.NamedType{Qual: c.Qual, Name: c.Name, Args: args, Line: c.Line, Col: c.Col}
-		n, is := e.applyRef(app, args).(*ast.NamedType)
-		if !is {
-			return "", false
-		}
-		head = e.namedKey(key, n)
 	}
 	rec, ok := e.records[head]
 	if !ok || len(rec.TypeParams) != 0 {
 		return "", false
 	}
 	return key + "." + rec.Name, true
+}
+
+// resolveRefs maps a written reference list through the substitution in
+// one step — the shape a construction's own type-argument list takes
+// before it is resolved as an application.
+func (e *emitter) resolveRefs(ts []ast.TypeRef) []ast.TypeRef {
+	out := make([]ast.TypeRef, len(ts))
+	for i, t := range ts {
+		out[i] = e.resolveRef(t)
+	}
+	return out
+}
+
+// declOfKey is the ShapeDecl one named declaration of a module stands for
+// — the node the tables hold, under the kind the check's own projection
+// gives it. A name no declaration carries (a builtin collection, an
+// import alias that resolved to nothing) has none.
+func (e *emitter) declOfKey(modKey, name string) (typecheck.ShapeDecl, bool) {
+	node, ok := e.declOfName(modKey, name)
+	if !ok {
+		return typecheck.ShapeDecl{}, false
+	}
+	kind, ok := declKindOf(node)
+	if !ok {
+		return typecheck.ShapeDecl{}, false
+	}
+	return typecheck.ShapeDecl{Kind: kind, Node: node, Name: name}, true
 }
 
 // genericFn returns the template one key names, where the program declares
@@ -498,14 +574,76 @@ func (e *emitter) genericFn(key string) (*ast.FnDecl, bool) {
 	return d, ok
 }
 
+// siteOf reads the check stage's verdict at one application node (B1b
+// T4). The registries are small (one per check) and the nodes unique
+// across them, so the scan is a handful of probes and the answer does not
+// depend on which one holds the key.
+func (e *emitter) siteOf(n ast.Expr) (typecheck.Site, bool) {
+	if n == nil {
+		return typecheck.Site{}, false
+	}
+	for _, reg := range e.shapes {
+		if site, ok := reg.At(n); ok {
+			return site, true
+		}
+	}
+	return typecheck.Site{}, false
+}
+
+// siteArgs turns one site's clause bindings into the argument list an
+// instantiation takes, in the declaration's own parameter order. A site
+// that names fewer positions than the declaration declares is not a
+// determined application — the caller stops at the boundary rather than
+// filling the gap with a guess, which is the one thing D1 forbids.
+func (e *emitter) siteArgs(n ast.Expr, params int) ([]typecheck.Shape, bool) {
+	return e.siteArgsFrom(n, 0, params)
+}
+
+// siteArgsFrom reads one site's bindings with the clause's leading
+// positions skipped. A method's site is recorded against the *whole*
+// clause the receiver's view holds — its head's parameters occupy the
+// first positions, in declaration order — so a generic method's own
+// arguments begin after them. A free fn has no head, and the offset is
+// zero. Positions in neither range are not this application's, and a
+// position the site left unfilled is not a determined application — the
+// caller stops at the boundary rather than filling the gap with a guess,
+// which is the one thing D1 forbids.
+func (e *emitter) siteArgsFrom(n ast.Expr, off, params int) ([]typecheck.Shape, bool) {
+	site, ok := e.siteOf(n)
+	if !ok {
+		return nil, false
+	}
+	args := make([]typecheck.Shape, params)
+	filled := make([]bool, params)
+	for _, a := range site.Args {
+		p := a.Pos - off
+		if p < 0 || p >= params {
+			return nil, false
+		}
+		args[p] = a.Shape
+		filled[p] = true
+	}
+	for _, ok := range filled {
+		if !ok {
+			return nil, false
+		}
+	}
+	return args, true
+}
+
 // instCallee resolves one call's callee to the definition to emit: a
 // program fn's own def, or — for a generic fn — the instantiation the
-// call's written type arguments name. A generic callee whose arguments the
-// call leaves unwritten is not drivable here: the arguments are the check
-// stage's inference (design D1) and the site that reads its verdict lands
-// with the next task, so this one stops at the generic boundary rather
-// than guessing them.
-func (e *emitter) instCallee(modKey, name string, targs []ast.TypeRef) (*fnDef, bool, *NotImplemented) {
+// call applies it at.
+//
+// The arguments come from the check stage's site when it recorded one
+// (design D1): the call's own node is the key, and what it carries covers
+// both spellings — a call that wrote its type arguments and a call that
+// left them to inference resolve to the same site, so reading it is one
+// path rather than two. The written references answer only where no
+// registry reached the emitter at all (the hand-built emitters the
+// package's own tests drive); a call with neither is not a determined
+// application and stops at the generic boundary rather than guessing.
+func (e *emitter) instCallee(modKey, name string, call *ast.Call) (*fnDef, bool, *NotImplemented) {
 	key := modKey + "." + name
 	if fd, ok := e.fnTable[key]; ok {
 		return fd, true, nil
@@ -514,11 +652,14 @@ func (e *emitter) instCallee(modKey, name string, targs []ast.TypeRef) (*fnDef, 
 	if !ok {
 		return nil, false, nil
 	}
-	if len(targs) == 0 {
+	if args, ok := e.siteArgs(call, len(tmpl.TypeParams)); ok {
+		return e.instFn(modKey, name, tmpl, args), true, nil
+	}
+	if len(call.TypeArgs) == 0 {
 		return nil, true, bndGeneric()
 	}
-	args := make([]typecheck.Shape, len(targs))
-	for i, t := range targs {
+	args := make([]typecheck.Shape, len(call.TypeArgs))
+	for i, t := range call.TypeArgs {
 		s, ok := e.shapeOfRef(e.resolveRef(t))
 		if !ok {
 			return nil, true, bndGeneric()
@@ -560,10 +701,20 @@ func (e *emitter) instFn(modKey, name string, d *ast.FnDecl, args []typecheck.Sh
 func (e *emitter) enterFnInst(fd *fnDef) func() {
 	savedInst, savedMemo := e.instEnv, e.instMemo
 	if len(fd.instArgs) != 0 {
-		e.instEnv = &instCtx{params: typeParamNames(fd.decl.TypeParams), args: fd.instArgs}
+		e.instEnv = &instCtx{params: fd.instParamNames(), args: fd.instArgs}
 		e.instMemo = make(map[ast.TypeRef]ast.TypeRef)
 	}
 	return func() { e.instEnv, e.instMemo = savedInst, savedMemo }
+}
+
+// instParamNames lists the type-parameter names a def's instantiation
+// binds: what the def carries where the head supplied it, and the
+// declaration's own otherwise.
+func (fd *fnDef) instParamNames() []string {
+	if len(fd.instParams) != 0 {
+		return fd.instParams
+	}
+	return typeParamNames(fd.decl.TypeParams)
 }
 
 // instDecl instantiates one generic declaration at the given arguments and
@@ -572,6 +723,14 @@ func (e *emitter) enterFnInst(fd *fnDef) func() {
 // shared.
 func (e *emitter) instDecl(d typecheck.ShapeDecl, key string, args []typecheck.Shape) (string, bool) {
 	e.instDepthCheck(len(declTypeParams(d)), key, args)
+	// An impl over this declaration's template emits per instantiation of
+	// it: the methods land under the key just synthesized, carrying the
+	// arguments the head was instantiated at, so a receiver of this
+	// instantiation's type resolves them off its own key. The
+	// registration runs on the way in — before the fields substitute —
+	// for the same reason the key is: a method a field's type reaches
+	// must already be there, not registered twice.
+	e.registerImpls(e.declKeys[d.Node], key, args)
 	switch node := d.Node.(type) {
 	case *ast.RecordDecl:
 		return e.instRecord(key, node, args)
@@ -583,6 +742,49 @@ func (e *emitter) instDecl(d typecheck.ShapeDecl, key string, args []typecheck.S
 	// An interface instantiation emits no layout of its own: a boxed
 	// value's face is read from the declaration, never from a table.
 	return key, true
+}
+
+// instMethod instantiates one generic method at the arguments the call
+// site determined, and returns its def — the method table's half of what
+// instCallee does for the fn table. The receiver names the head; the
+// method's own template is what the key holds, and the site is what
+// completes it. Three answers, the same three instCallee gives: a def,
+// "no such method here" for the caller's other faces, and a boundary for
+// a method this is that the site left undetermined — a template the call
+// does not pin is not an application this stage may guess at (design D1).
+func (e *emitter) instMethod(recvKey, name string, call *ast.Call) (*fnDef, bool, *NotImplemented) {
+	tmpl, ok := e.genericMethods[recvKey+"."+name]
+	if !ok {
+		return nil, false, nil
+	}
+	args, ok := e.siteArgsFrom(call, len(tmpl.headParams), len(tmpl.decl.TypeParams))
+	if !ok {
+		return nil, true, bndGeneric()
+	}
+	return e.instMethodAt(tmpl, args), true, nil
+}
+
+// instMethodAt registers one generic method's instantiation at the given
+// arguments and returns its def, memoized on the suffixed key so two
+// sites that determined the same arguments share one define.
+func (e *emitter) instMethodAt(tmpl *methodTmpl, args []typecheck.Shape) *fnDef {
+	suffix := e.mangleSuffix(args)
+	key := tmpl.headKey + "." + tmpl.decl.Name + suffix
+	if fd, ok := e.methods[key]; ok {
+		return fd
+	}
+	e.instDepthCheck(len(tmpl.decl.TypeParams), tmpl.headKey+"."+tmpl.decl.Name, args)
+	fd := &fnDef{key: tmpl.modKey, name: tmpl.decl.Name, recvKey: tmpl.headKey,
+		decl: tmpl.decl, suffix: suffix, instArgs: args}
+	if len(tmpl.headArgs) != 0 {
+		// The head's instantiation is the outer scope: it binds first, and
+		// the method's own arguments follow in declaration order.
+		fd.instArgs = append(append([]typecheck.Shape{}, tmpl.headArgs...), args...)
+		fd.instParams = append(append([]string{}, tmpl.headParams...), typeParamNames(tmpl.decl.TypeParams)...)
+	}
+	e.methods[key] = fd
+	e.methodsOrd = append(e.methodsOrd, key)
+	return fd
 }
 
 // instRecord synthesizes one generic record's instantiation: a concrete

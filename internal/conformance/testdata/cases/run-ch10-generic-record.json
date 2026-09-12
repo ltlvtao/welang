@@ -1,0 +1,16 @@
+{
+  "name": "run-ch10-generic-record",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\nrecord Pair<A, B> { first: A, second: B }\npub type AppError = Failed(String)\npub fn main() effect io -> Result<(), AppError> {\n    let p1 = Pair { first: 1, second: \"a\" }\n    let p2 = Pair<Int64, String> { first: 2, second: \"b\" }\n    io.println(\"${p1.first}${p1.second}${p2.first}${p2.second}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "1a2b\n",
+  "stderr": ""
+}

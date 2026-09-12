@@ -1,0 +1,16 @@
+{
+  "name": "run-ch10-where",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\ninterface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"a user\"\n    }\n}\nfn show<T>(x: T) -> String where T: Describable {\n    x.describe()\n}\npub type AppError = Failed(String)\npub fn main() effect io -> Result<(), AppError> {\n    let u = User { name: \"a\" }\n    io.println(show(u))\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "a user\n",
+  "stderr": ""
+}

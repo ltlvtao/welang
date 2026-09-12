@@ -18,7 +18,7 @@ import (
 // ignored — stdout is the protocol stream, not a report face.
 func (e *env) runLsp() int {
 	srv := lsp.NewServer(func(path, src string) lsp.CheckResult {
-		file, ds, boundary := checkSrc(path, []byte(src))
+		file, ds, boundary, _ := checkSrc(path, []byte(src))
 		if boundary != "" {
 			return lsp.CheckResult{Boundary: boundary}
 		}

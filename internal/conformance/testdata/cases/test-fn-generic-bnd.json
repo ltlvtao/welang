@@ -10,7 +10,7 @@
       "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
     }
   },
-  "exit": 70,
-  "stdout": "",
-  "stderr": "we: generic functions in code generation (monomorphization is the B-track codegen-full widening) are not implemented in this reference build yet\n"
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: generic (0ms)\ntotal 1, passed 1, failed 0 (0ms)\n",
+  "stderr": ""
 }

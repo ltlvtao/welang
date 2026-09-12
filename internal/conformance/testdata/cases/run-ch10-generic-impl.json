@@ -1,0 +1,16 @@
+{
+  "name": "run-ch10-generic-impl",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\ninterface Holder {\n    fn held(self) -> Int64\n}\nrecord Wrap<T> { value: T }\nimpl<T> Holder for Wrap<T> {\n    fn held(self) -> Int64 {\n        return 0\n    }\n}\npub type AppError = Failed(String)\npub fn main() effect io -> Result<(), AppError> {\n    let w = Wrap { value: 1 }\n    let n = w.held()\n    io.println(\"${w.value}${n}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "10\n",
+  "stderr": ""
+}

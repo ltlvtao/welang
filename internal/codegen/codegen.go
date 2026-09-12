@@ -209,11 +209,22 @@ var declareLines = []struct{ sym, line string }{
 // project builds), the parsed file itself, and — for a test module — the
 // source path the report lines name (the driver's file face; the key's
 // dots cannot invert to slashes without it, T5).
+//
+// Shapes is the registry the check that walked this module handed over
+// (design D1): the type arguments it determined at each application site,
+// keyed by the site's own node — the node this module's tree carries, so
+// holding the tree is holding the keys. It rides per module rather than
+// per program because a test run checks each test module as its own root
+// (D5): one registry per check, and a program may be assembled from
+// several checks. A module whose check recorded nothing (the single-file
+// face's synthetic root, a caller with no registry at hand) leaves it nil,
+// and every lookup through it answers "not a site".
 type ProgModule struct {
-	Key  string
-	ID   string
-	Path string
-	File *ast.File
+	Key    string
+	ID     string
+	Path   string
+	File   *ast.File
+	Shapes *typecheck.Shapes
 }
 
 // ProgramMode selects the entry's owner: ModeBuild makes the root
@@ -487,6 +498,7 @@ type emitter struct {
 	modConc    map[string]map[string]bool   // module key -> concurrent alias set
 	stdQuals   map[string]string            // the walked module's qualifier -> std key
 	fns        []fnDef                      // program fns, module order then source order
+	fnEmitted  int                          // how many of fns have their define (drainFns)
 	fnTable    map[string]*fnDef            // "<key>.<name>" -> def
 	declKeys   map[ast.Item]string          // declaration node -> its "<module>.<Name>" key (mangle.go)
 	// B1b T3: the instantiation in flight (design D3). instEnv holds the
@@ -504,6 +516,15 @@ type emitter struct {
 	// what reaches the records/sums/newtypes tables is the synthesized
 	// concrete declaration, never the template.
 	generics map[string]ast.Item
+	// shapes carries the site registries the checks handed over (design
+	// D1, B1b T4): the type arguments each check determined, by the
+	// application node it determined them at. It is the emitter's only
+	// source for an application the program did not write its arguments
+	// out at — the emitter reads the check's verdict, it never re-infers.
+	// A program assembled from several checks (a test run roots each test
+	// module) carries one registry per check, in program order; the nodes
+	// are unique across them, so the order decides nothing.
+	shapes []*typecheck.Shapes
 	// insts is the program's instantiation registry (design D2): the one
 	// place a {declaration, arguments} pair becomes a symbol, and the one
 	// place a symbol met twice under different arguments is caught.
@@ -538,6 +559,24 @@ type emitter struct {
 	// never does). methodsOrd keeps the define order deterministic.
 	methods    map[string]*fnDef
 	methodsOrd []string
+	// methodsEmitted counts the method defines the group has already
+	// emitted (drainMethods), the fn group's fnEmitted one table over.
+	methodsEmitted int
+	// The generic half of the method table (B1b T4). A method that
+	// declares type parameters of its own is a template: it emits no
+	// define, and each call site that determines its arguments
+	// instantiates it under the suffixed key, exactly as a generic fn
+	// does. genericMethods holds those templates, keyed like the concrete
+	// table — receiver key plus method name — where the receiver key is
+	// whatever head the call site resolves.
+	genericMethods map[string]*methodTmpl
+	// implTmpl holds the impls whose head is generic (`impl<T> Box<T>`),
+	// keyed by the head's declaration node: their methods instantiate per
+	// instantiation of the head, and instDecl registers them as it
+	// synthesizes one. The node is the key because the head's
+	// instantiated keys are exactly what does not exist yet at collect
+	// time.
+	implTmpl map[string]*implTemplate
 	// newtypes maps a newtype's key to its underlying type (design D4):
 	// a value of the newtype IS a value of the underlying, at every
 	// position, so the table answers `classType` and the `.value` read
@@ -600,29 +639,127 @@ type emitter struct {
 	drives []driveStep
 }
 
+// methodTmpl is one generic method's template (B1b T4): the declaration,
+// the head it hangs on, and the module whose import faces its body reads.
+// It is the fn template's method-side twin, and the call site's site is
+// what instantiates it — a method whose arguments the call leaves to
+// inference resolves through the same registry a generic fn call does.
+type methodTmpl struct {
+	modKey  string
+	headKey string
+	decl    *ast.FnDecl
+	// headParams and headArgs carry the enclosing impl's instantiation when
+	// the method sits in a generic one, so the body's two scopes stack: the
+	// head's parameters bind first, the method's own after. On a generic
+	// method of a monomorphic impl both are empty.
+	headParams []string
+	headArgs   []typecheck.Shape
+}
+
+// implTemplate is one generic impl (`impl<T> Box<T>`) before the head has
+// any instantiation: the methods it contributes, and the head's template
+// key. instDecl reads it every time it synthesizes one of the head's
+// instantiations, so the methods land under the instantiated key and
+// carry the same arguments the head was instantiated at.
+type implTemplate struct {
+	modKey  string
+	params  []*ast.TypeParam
+	methods []*ast.FnDecl
+}
+
+// registerImpls enters the methods of one generic impl's methods over the
+// declaration instDecl just synthesized, under the instantiation's key.
+// The head's template key is what the impl was collected under, and the
+// arguments are the head's own — a method of `impl<T> Box<T>` is written
+// once and emitted per instantiation, which is the whole of what makes
+// the head's methods exist at that instantiation.
+//
+// A method with type parameters of its own stops at the template table
+// instead: it is generic twice over, and its own call site is what
+// completes it.
+func (e *emitter) registerImpls(tmplKey, instKey string, args []typecheck.Shape) {
+	tmpl, ok := e.implTmpl[tmplKey]
+	if !ok {
+		return
+	}
+	for _, md := range tmpl.methods {
+		key := instKey + "." + md.Name
+		if _, seen := e.genericMethods[key]; seen {
+			continue
+		}
+		if _, seen := e.methods[key]; seen {
+			continue
+		}
+		if len(md.TypeParams) != 0 {
+			e.genericMethods[key] = &methodTmpl{modKey: tmpl.modKey, headKey: instKey, decl: md,
+				headParams: typeParamNames(tmpl.params), headArgs: args}
+			continue
+		}
+		e.methods[key] = &fnDef{key: tmpl.modKey, name: md.Name,
+			recvKey: instKey, decl: md, instArgs: args,
+			instParams: typeParamNames(tmpl.params)}
+		e.methodsOrd = append(e.methodsOrd, key)
+	}
+}
+
 // collectImpl enters one impl block's methods into the method table
 // (design D4). The head names the table's key, so `impl Greeter for User`
 // and `impl User` land in the same place — which is what lets a default
-// body's `self.greet()` resolve. A generic impl is B1b's (its methods
-// instantiate per type argument); a non-nominal head has no key to hang a
+// body's `self.greet()` resolve. A non-nominal head has no key to hang a
 // method on. An interface impl also records the head under its interface,
 // the pairing collectDefaults instantiates from.
+//
+// The two generic shapes (B1b T4) are templates rather than entries, and
+// which template depends on what the head contributes:
+//
+//   - `impl<T> Box<T>` — the *head* is generic, so the methods emit per
+//     instantiation of Box. There is no key to hang them on until one is
+//     synthesized, so the whole impl goes to implTmpl keyed by the head's
+//     declaration node, and instDecl registers the methods each time it
+//     synthesizes the head's instantiation. The dispatch then reads the
+//     receiver's own instantiated key, which is what recvKeyOf already
+//     produces — no call site needs to name the impl.
+//   - `fn tag<U>(self, x: U) -> U` inside an otherwise monomorphic impl —
+//     the *method* is generic. Its call site is a site like any other
+//     (the check stage records what the call determined), so the template
+//     waits in genericMethods under the head's key and the call site's
+//     site instantiates it.
+//
+// The head's arguments are what separates the two spellings. A generic
+// impl writes the *template* spelling — `impl<T> Box<T>` — so its head's
+// arguments are its own parameters, in order. Any other argument list
+// names one instantiation (`impl Box<Int64>`), a legal head the check
+// stage's E0811 admits ("or a generic application of one") and this build
+// does not emit: an impl is written over the template here, and one
+// naming an instantiation would need its methods served at that
+// instantiation alone. The refusal is the generic word's — the form is a
+// generic declaration's, not a body's.
 func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
-	if len(d.TypeParams) != 0 {
-		return bndGeneric()
-	}
 	head, ok := d.Head.(*ast.NamedType)
-	if !ok || head.Qual != "" || len(head.Args) != 0 {
+	if !ok || head.Qual != "" {
 		return e.bnd()
 	}
+	if !paramsInOrder(head.Args, d.TypeParams) {
+		return bndGeneric()
+	}
 	headKey := modKey + "." + head.Name
+	if len(d.TypeParams) != 0 {
+		e.implTmpl[headKey] = &implTemplate{modKey: modKey, params: d.TypeParams, methods: d.Methods}
+		return nil
+	}
 	for _, md := range d.Methods {
-		if len(md.TypeParams) != 0 {
-			return bndGeneric()
-		}
 		key := headKey + "." + md.Name
+		if _, seen := e.genericMethods[key]; seen {
+			continue
+		}
 		if _, seen := e.methods[key]; seen {
-			continue // the first definition wins; a duplicate is the check stage's (E0807)
+			// the first definition wins; a duplicate is the check stage's
+			// (E0814 member collision, E0809 a second impl for one head)
+			continue
+		}
+		if len(md.TypeParams) != 0 {
+			e.genericMethods[key] = &methodTmpl{modKey: modKey, headKey: headKey, decl: md}
+			continue
 		}
 		e.methods[key] = &fnDef{key: modKey, name: md.Name, recvKey: headKey, decl: md}
 		e.methodsOrd = append(e.methodsOrd, key)
@@ -638,6 +775,24 @@ func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
 		}
 	}
 	return nil
+}
+
+// paramsInOrder reports whether a head's argument list is exactly the
+// enclosing declaration's own type parameters — the template spelling
+// `impl<T, U> Pair<T, U>`, and the only argument list an impl may carry.
+// The empty-list case falls out of the same rule: a head with no
+// arguments and a declaration with no parameters agree.
+func paramsInOrder(args []ast.TypeRef, params []*ast.TypeParam) bool {
+	if len(args) != len(params) {
+		return false
+	}
+	for i, a := range args {
+		n, ok := a.(*ast.NamedType)
+		if !ok || n.Qual != "" || len(n.Args) != 0 || n.Name != params[i].Name {
+			return false
+		}
+	}
+	return true
 }
 
 // collectDefaults instantiates every interface default body once per
@@ -761,6 +916,13 @@ type fnDef struct {
 	// template's body substitutes once per instantiation and the same
 	// definition serves every site that names it.
 	instArgs []typecheck.Shape
+	// instParams names the parameters instArgs bind. On a generic fn they
+	// are the declaration's own; on a method of a generic impl they are the
+	// head's, because that is where the method's `T` comes from — the
+	// method declares none of its own. The two are not interchangeable, and
+	// a def that carries arguments without the names to bind them leaves
+	// its body's type references unresolved.
+	instParams []string
 }
 
 // sym renders one fn's IR symbol: `<module>.<name>` for a plain fn,
@@ -1086,42 +1248,44 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		return "", bndMain() // defensive: an empty program
 	}
 	e := &emitter{
-		sums:        make(map[string]map[string][]ast.TypeRef),
-		sumsOrd:     make(map[string][]string),
-		sumDecls:    make(map[string]*ast.SumDecl),
-		records:     make(map[string]*ast.RecordDecl),
-		strEnv:      make(map[string]strBinding),
-		gcEnv:       make(map[string]gcBinding),
-		listEnv:     make(map[string]listBinding),
-		tupEnv:      make(map[string]tupBinding),
-		ntEnv:       make(map[string]string),
-		newtypes:    make(map[string]ast.TypeRef),
-		strPool:     make(map[string]string),
-		usedRecs:    make(map[string]bool),
-		declUsed:    make(map[string]bool),
-		ctx:         ctxMain,
-		exit:        &exitSite{kind: exitMain},
-		assigned:    make(map[string]bool),
-		scalars:     make(map[string]scalarSlot),
-		sums2:       make(map[string]sumSlot),
-		prims:       make(map[string]string),
-		fnEnv:       make(map[string]fnValue),
-		modKeys:     make(map[string]bool),
-		modImports:  make(map[string]map[string]string),
-		modStd:      make(map[string]map[string]string),
-		modConc:     make(map[string]map[string]bool),
-		fnTable:     make(map[string]*fnDef),
-		generics:    make(map[string]ast.Item),
-		declKeys:    declIndex(mods),
-		slotSeen:    make(map[string]bool),
-		topSlots:    make(map[string]topSlot),
-		initEmitted: make(map[string]bool),
-		opaques:     make(map[string]bool),
-		methods:     make(map[string]*fnDef),
-		ifaceDefs:   make(map[string]*ast.InterfaceDecl),
-		ifaceHeads:  make(map[string][]string),
-		ifaceSeen:   make(map[string]map[string]bool),
-		mode:        mode,
+		sums:           make(map[string]map[string][]ast.TypeRef),
+		sumsOrd:        make(map[string][]string),
+		sumDecls:       make(map[string]*ast.SumDecl),
+		records:        make(map[string]*ast.RecordDecl),
+		strEnv:         make(map[string]strBinding),
+		gcEnv:          make(map[string]gcBinding),
+		listEnv:        make(map[string]listBinding),
+		tupEnv:         make(map[string]tupBinding),
+		ntEnv:          make(map[string]string),
+		newtypes:       make(map[string]ast.TypeRef),
+		strPool:        make(map[string]string),
+		usedRecs:       make(map[string]bool),
+		declUsed:       make(map[string]bool),
+		ctx:            ctxMain,
+		exit:           &exitSite{kind: exitMain},
+		assigned:       make(map[string]bool),
+		scalars:        make(map[string]scalarSlot),
+		sums2:          make(map[string]sumSlot),
+		prims:          make(map[string]string),
+		fnEnv:          make(map[string]fnValue),
+		modKeys:        make(map[string]bool),
+		modImports:     make(map[string]map[string]string),
+		modStd:         make(map[string]map[string]string),
+		modConc:        make(map[string]map[string]bool),
+		fnTable:        make(map[string]*fnDef),
+		generics:       make(map[string]ast.Item),
+		declKeys:       declIndex(mods),
+		slotSeen:       make(map[string]bool),
+		topSlots:       make(map[string]topSlot),
+		initEmitted:    make(map[string]bool),
+		opaques:        make(map[string]bool),
+		methods:        make(map[string]*fnDef),
+		genericMethods: make(map[string]*methodTmpl),
+		implTmpl:       make(map[string]*implTemplate),
+		ifaceDefs:      make(map[string]*ast.InterfaceDecl),
+		ifaceHeads:     make(map[string][]string),
+		ifaceSeen:      make(map[string]map[string]bool),
+		mode:           mode,
 	}
 	root := mods[len(mods)-1]
 	e.rootKey, e.rootID = root.Key, root.ID
@@ -1135,6 +1299,14 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		e.modStd[m.Key] = make(map[string]string)
 		e.modConc[m.Key] = make(map[string]bool)
 		e.modKeys[m.Key] = true
+		// The registry the check that walked this module handed over. A
+		// registry a program already carries is the same check's — one
+		// check per program in a build, one per test module in a run —
+		// so a repeated pointer is skipped and the order stays the
+		// modules' order.
+		if m.Shapes != nil && (len(e.shapes) == 0 || e.shapes[len(e.shapes)-1] != m.Shapes) {
+			e.shapes = append(e.shapes, m.Shapes)
+		}
 		e.enterModule(m.Key)
 		for _, it := range m.File.Items {
 			switch d := it.(type) {
@@ -1342,10 +1514,8 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 	// The fn group drains to a fixpoint (design D3): an instantiation a
 	// body registers appends here, so the loop emits every define the
 	// program reaches, in registration order.
-	for i := 0; i < len(e.fns); i++ {
-		if ni := e.emitFnDefine(&e.fns[i]); ni != nil {
-			return "", ni
-		}
+	if ni := e.drainFns(); ni != nil {
+		return "", ni
 	}
 	// The module inits (T8-1) ride the fn group ahead of __we_main: they
 	// emit after the entry so the entry's value numbering is the entry's
@@ -1356,10 +1526,8 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 	// The method table's defines (design D4), in collection order: an
 	// impl's own methods first, then the defaults an interface contributes
 	// to the heads that left them unsaid.
-	for _, key := range e.methodsOrd {
-		if ni := e.emitFnDefine(e.methods[key]); ni != nil {
-			return "", ni
-		}
+	if ni := e.drainMethods(); ni != nil {
+		return "", ni
 	}
 	if mode == ModeTest {
 		// The test tower (design D5): the test and mock defines ride
@@ -1367,6 +1535,31 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		// body render emits as __we_main.
 		if ni := e.emitTestTower(); ni != nil {
 			return "", ni
+		}
+	}
+	// The drains above stop before every phase that emits a body, and a
+	// body registers: the module inits, the method table, and the test
+	// tower all instantiate the generic applications they call. The
+	// groups drain once more before the module closes, so an
+	// instantiation any of them registered gets its define too — the
+	// fixpoint covers the whole emission, not just each group's own
+	// round. A program whose later phases registered nothing appends
+	// nothing here and renders the bytes it always did.
+	//
+	// The two groups drain together because either can feed the other: a
+	// fn's body calls a generic method and a method's body calls a
+	// generic fn, so draining one to its end can leave the other with
+	// work again. The loop ends when a full round appends to neither.
+	for {
+		nf, nm := len(e.fns), len(e.methodsOrd)
+		if ni := e.drainFns(); ni != nil {
+			return "", ni
+		}
+		if ni := e.drainMethods(); ni != nil {
+			return "", ni
+		}
+		if len(e.fns) == nf && len(e.methodsOrd) == nm {
+			break
 		}
 	}
 	return e.render(e.rootID), nil
@@ -3018,7 +3211,7 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		// costs nothing and shows nowhere — design D4's erasure means the
 		// result simply IS the inner expression's value, at the underlying
 		// family's own face.
-		if key, ok := e.newtypeOf(&ast.NamedType{Name: id.Name}); ok {
+		if key, ok := e.newtypeKey(id.Name, call); ok {
 			if len(call.Args) != 1 {
 				return callResult{}, e.bnd()
 			}
@@ -3057,7 +3250,7 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		}
 		// A program fn of the walked module, through its slot — or, for a
 		// generic one, the instantiation the call's type arguments name.
-		if fd, is, ni := e.instCallee(e.curKey, id.Name, call.TypeArgs); is {
+		if fd, is, ni := e.instCallee(e.curKey, id.Name, call); is {
 			if ni != nil {
 				return callResult{}, ni
 			}
@@ -3105,6 +3298,17 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		if fd, is := e.methods[recvKey+"."+fn.Name]; is {
 			return e.emitMethodCall(fd, fn.Recv, call.Args)
 		}
+		// A generic method resolves the same way before it exists: the
+		// head's key finds the template, and the call's own site is what
+		// instantiates it (B1b T4). The instantiation then lands in the
+		// same table under its suffixed key, so the second call site of
+		// the same arguments takes the branch above.
+		if fd, is, ni := e.instMethod(recvKey, fn.Name, call); is {
+			if ni != nil {
+				return callResult{}, ni
+			}
+			return e.emitMethodCall(fd, fn.Recv, call.Args)
+		}
 	}
 	if e.valueKind(fn.Recv) == skStr {
 		// A chapter 17 String member over a String receiver (T4). The
@@ -3117,7 +3321,7 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		// module's imports first, then by the module's own key (the
 		// no-import form of a cross-module call resolves by key).
 		if k := e.resolveQual(recv.Name); k != "" {
-			fd, is, ni := e.instCallee(k, fn.Name, call.TypeArgs)
+			fd, is, ni := e.instCallee(k, fn.Name, call)
 			if !is {
 				return callResult{}, e.bnd()
 			}
@@ -9278,11 +9482,20 @@ func (e *emitter) arithKind(l, r ast.Expr) strKind {
 // the declaration does not fix one.
 func (e *emitter) callStrKind(call *ast.Call) strKind {
 	if id, ok := call.Fn.(*ast.Ident); ok {
-		fd, ok := e.fnTable[e.curKey+"."+id.Name]
-		if !ok {
-			return skNone
+		if fd, ok := e.fnTable[e.curKey+"."+id.Name]; ok {
+			return e.fnRetKind(fd)
 		}
-		return e.fnRetKind(fd)
+		// A generic callee is a template, not a fn table entry: the family
+		// is the one its instantiation returns, so the classifier asks the
+		// driver for the instantiation the call site named — the read every
+		// other consumer makes, and one registration, so whichever face
+		// asks first, the other finds it. An application the site leaves
+		// open answers skNone, which is this classifier's own "not
+		// determined": no family is guessed, and the consumer stops.
+		if fd, is, _ := e.instCallee(e.curKey, id.Name, call); is && fd != nil {
+			return e.fnRetKind(fd)
+		}
+		return skNone
 	}
 	fn, ok := call.Fn.(*ast.Member)
 	if !ok {
@@ -10593,8 +10806,11 @@ func (e *emitter) bindTupleParams(abi *fnAbi, params []ast.Param) (fnAbi, bool) 
 		if !ok {
 			return *abi, false
 		}
+		// The name is the resolved one, as at the return position: inside
+		// an instantiation the declared spelling is a type parameter, and
+		// the binding's domain is the argument it was applied at.
 		abi.params = append(abi.params, fnParamAbi{kind: k, key: key, decl: p.Type,
-			typ: baseTypeName(e.derefNewtype(p.Type))})
+			typ: baseTypeName(e.derefNewtype(e.resolveRef(p.Type)))})
 	}
 	return *abi, true
 }
@@ -10609,7 +10825,7 @@ func (e *emitter) tupleShapeOf(t *ast.TupleType) ([]tupleElem, bool) {
 		if !ok {
 			return nil, false
 		}
-		el := tupleElem{kind: k, key: key, typ: baseTypeName(e.derefNewtype(et)), off: off}
+		el := tupleElem{kind: k, key: key, typ: baseTypeName(e.derefNewtype(e.resolveRef(et))), off: off}
 		switch k {
 		case abiI64:
 			el.words = []string{"i64"}
@@ -11077,6 +11293,41 @@ func (e *emitter) emitBodyCore(items []ast.Stmt, abi fnAbi, implicitTail bool) (
 		e.inst("call void @__we_root_pop()")
 	}
 	return e.bodyText(), ret, false, nil
+}
+
+// drainFns emits the define of every program fn the group holds and has
+// not emitted yet, resuming where the last call stopped. The group is a
+// fixpoint (design D3): emitting a body registers the instantiations
+// that body reaches, appending them to the same group, so a drain begun
+// at one index runs to the group's end and the next call picks up what
+// the phases in between registered. The count of emitted defines is what
+// carries across the calls.
+func (e *emitter) drainFns() *NotImplemented {
+	for ; e.fnEmitted < len(e.fns); e.fnEmitted++ {
+		if ni := e.emitFnDefine(&e.fns[e.fnEmitted]); ni != nil {
+			return ni
+		}
+	}
+	return nil
+}
+
+// drainMethods is drainFns one table over: it emits the define of every
+// method the table holds and has not emitted yet, resuming where the last
+// call stopped. The table is a fixpoint for the same reason the fn group
+// is — a generic method's instantiation is appended by the call site that
+// determined it, and that site can be inside a body this very loop is
+// emitting — and its own count carries across the calls.
+//
+// The interface defaults collectDefaults appends ride the same list, so
+// the define order stays the collection order: an impl's own methods
+// first, then the defaults each head left unsaid.
+func (e *emitter) drainMethods() *NotImplemented {
+	for ; e.methodsEmitted < len(e.methodsOrd); e.methodsEmitted++ {
+		if ni := e.emitFnDefine(e.methods[e.methodsOrd[e.methodsEmitted]]); ni != nil {
+			return ni
+		}
+	}
+	return nil
 }
 
 // emitFnDefine emits one program fn: the define under its

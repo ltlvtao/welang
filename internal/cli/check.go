@@ -28,7 +28,7 @@ func (e *env) runCheck(path string, info os.FileInfo) int {
 	if !strings.HasSuffix(path, ".we") {
 		return e.usageErr("check wants a .we file, got %q", path)
 	}
-	file, code := e.loadFile(path)
+	file, _, code := e.loadFile(path)
 	if file == nil {
 		return code
 	}
@@ -45,7 +45,7 @@ func (e *env) runCheck(path string, info os.FileInfo) int {
 // layer after the clean check (M11 design D5): warnings report and the
 // check still passes; a promoted finding stops exactly as an error does.
 func (e *env) runCheckProject(dir string) int {
-	manifest, file, _, mods, depRoots, code := e.loadProject(dir, false)
+	manifest, file, _, mods, depRoots, _, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
 	}
@@ -60,23 +60,25 @@ func (e *env) runCheckProject(dir string) int {
 }
 
 // loadFile runs the single-file pipeline: read, parse, and the type stage
-// in single-file mode. A nil file means the failure is already reported,
-// with its exit code. check and build/run share it; where a clean file
-// goes next is each subcommand's own business.
-func (e *env) loadFile(path string) (*ast.File, int) {
+// in single-file mode, handing back the check's instantiation registry
+// beside the file — the code stage's input, which the faces that stop at
+// the type stage ignore. A nil file means the failure is already
+// reported, with its exit code. check and build/run share it; where a
+// clean file goes next is each subcommand's own business.
+func (e *env) loadFile(path string) (*ast.File, *typecheck.Shapes, int) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, e.fsError(err)
+		return nil, nil, e.fsError(err)
 	}
-	file, ds, boundary := checkSrc(path, src)
+	file, ds, boundary, sh := checkSrc(path, src)
 	if len(ds) > 0 {
 		e.report(ds[0])
-		return nil, exitDiagnostic
+		return nil, nil, exitDiagnostic
 	}
 	if boundary != "" {
-		return nil, e.boundary(boundary)
+		return nil, nil, e.boundary(boundary)
 	}
-	return file, exitOK
+	return file, sh, exitOK
 }
 
 // checkSrc runs the single-file pipeline's shared core over in-memory
@@ -86,24 +88,26 @@ func (e *env) loadFile(path string) (*ast.File, int) {
 // verdict on either face. It returns the file on a clean run, at most the
 // one diagnostic the pipeline stopped at, or a non-empty boundary string
 // for a ratified-but-unimplemented form — reporting is the caller's face.
-func checkSrc(path string, src []byte) (*ast.File, []diag.Diagnostic, string) {
+//
+// The instantiation registry rides back with the file (design D1): it is
+// the code stage's input, and the faces that never reach code generation
+// ignore it.
+func checkSrc(path string, src []byte) (*ast.File, []diag.Diagnostic, string, *typecheck.Shapes) {
 	file, d, ni := parser.Parse(path, src)
 	if d != nil {
-		return nil, []diag.Diagnostic{*d}, ""
+		return nil, []diag.Diagnostic{*d}, "", nil
 	}
 	if ni != nil {
-		return nil, nil, ni.What
+		return nil, nil, ni.What, nil
 	}
-	// The instantiation registry is the code stage's input (design D1);
-	// the type-stage-only faces drop it.
-	td, tni, _ := typecheck.Check(file, path, typecheck.SingleFile)
+	td, tni, sh := typecheck.Check(file, path, typecheck.SingleFile)
 	if td != nil {
-		return nil, []diag.Diagnostic{*td}, ""
+		return nil, []diag.Diagnostic{*td}, "", nil
 	}
 	if tni != nil {
-		return nil, nil, tni.What
+		return nil, nil, tni.What, nil
 	}
-	return file, nil, ""
+	return file, nil, "", sh
 }
 
 // loadProject runs the project pipeline up through the type stage
@@ -128,10 +132,14 @@ func checkSrc(path string, src []byte) (*ast.File, []diag.Diagnostic, string) {
 // pipeline command alike (chapter 22 R5) and fires first when both are
 // present. The dependency roots (package name -> acquired cache
 // directory) come back for the advisory layer's own graph walks.
-func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.File, string, []typecheck.Module, map[string]string, int) {
+//
+// The check's instantiation registry rides back with the modules (design
+// D1): one check walks the whole graph, so one registry covers every
+// module of it.
+func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.File, string, []typecheck.Module, map[string]string, *typecheck.Shapes, int) {
 	manifest, table, code := e.loadManifest(dir, artifact)
 	if code != exitOK {
-		return nil, nil, "", nil, nil, code
+		return nil, nil, "", nil, nil, nil, code
 	}
 	// The dependency face (chapter 22 R5): every pipeline command resolves
 	// and acquires after the manifest's validations and before any source
@@ -139,7 +147,7 @@ func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.Fi
 	// form but never resolves (design D6), clean reads no manifest.
 	depRoots, code := e.prepareDeps(dir, table)
 	if code != exitOK {
-		return nil, nil, "", nil, nil, code
+		return nil, nil, "", nil, nil, nil, code
 	}
 	root := filepath.Join(dir, "src", "main.we")
 	src, err := os.ReadFile(root)
@@ -147,31 +155,31 @@ func (e *env) loadProject(dir string, artifact bool) (map[string]string, *ast.Fi
 		e.report(diag.Error("E1305", "main function signature violation — the root module "+root+" does not exist; declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type").
 			At(root, 1, 1).
 			WithHelp("Declare exactly one pub fn main() -> Result<(), E> in src/main.we with E a named sum type."))
-		return nil, nil, "", nil, nil, exitDiagnostic
+		return nil, nil, "", nil, nil, nil, exitDiagnostic
 	}
 	file, d, ni := parser.Parse(root, src)
 	if d != nil {
 		e.report(*d)
-		return nil, nil, "", nil, nil, exitDiagnostic
+		return nil, nil, "", nil, nil, nil, exitDiagnostic
 	}
 	if ni != nil {
-		return nil, nil, "", nil, nil, e.boundary(ni.What)
+		return nil, nil, "", nil, nil, nil, e.boundary(ni.What)
 	}
 	// The module graph from the root (chapter 15): depth-first over the
 	// imports in source order, then the post-order the type stage takes.
 	mods, code := e.loadGraph(dir, "main", root, file, depRoots)
 	if code != exitOK {
-		return nil, nil, "", nil, nil, code
+		return nil, nil, "", nil, nil, nil, code
 	}
-	td, tni, _ := typecheck.CheckProject(file, root, mods)
+	td, tni, sh := typecheck.CheckProject(file, root, mods)
 	if td != nil {
 		e.report(*td)
-		return nil, nil, "", nil, nil, exitDiagnostic
+		return nil, nil, "", nil, nil, nil, exitDiagnostic
 	}
 	if tni != nil {
-		return nil, nil, "", nil, nil, e.boundary(tni.What)
+		return nil, nil, "", nil, nil, nil, e.boundary(tni.What)
 	}
-	return manifest, file, manifest["name"], mods, depRoots, exitOK
+	return manifest, file, manifest["name"], mods, depRoots, sh, exitOK
 }
 
 // loadManifest reads and validates the project manifest (design D2's

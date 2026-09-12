@@ -1,0 +1,16 @@
+{
+  "name": "run-ch10-generic-newtype",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\nnewtype Tagged<T>(T)\npub type AppError = Failed(String)\npub fn main() effect io -> Result<(), AppError> {\n    let t = Tagged<Int64>(1)\n    let v = t.value\n    io.println(\"${v}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "1\n",
+  "stderr": ""
+}

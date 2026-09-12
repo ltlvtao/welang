@@ -39,15 +39,23 @@ func TestBlackboxBucketParity(t *testing.T) {
 		// The string-equality decline that replaced it retired with T4,
 		// and the mutable String binding that replaced THAT retired with
 		// T9-4 (the two-word slot emits now, so that mutant runs and lands
-		// latent — traps_test.go carries it there). The live carrier is the
-		// generic-fn boundary: a generic declaration is ratified chapter 10
-		// and checks clean, and the test stage declines its code generation
-		// until B1b monomorphization lands. It is the last stop word this
-		// build owns, so the bucket stays calibrated on a real boundary
-		// rather than on a semantic mutation.
+		// latent — traps_test.go carries it there). The generic-fn
+		// boundary that replaced THAT retired with B1b T4: monomorphization
+		// drives the applications the check stage determined, so `echo<T>`
+		// is an ordinary clean program now and both faces agreed on the
+		// clean bucket — which is what failed this table, not the shape.
+		//
+		// Every boundary carrier retires the moment the widening that owns
+		// it lands, and the two that stood here are exactly that history.
+		// The carrier is a semantic one instead: the prompt fixes the
+		// public signatures as contracts, so a submission that renames the
+		// function its own tests call checks clean (its source is
+		// self-consistent) and the test stage reports the unresolved name
+		// (E1304, exit 2) when it compiles the test module against it. What
+		// retires that is a spec change to name resolution, not a widening.
 		{"test-malformed", "control-03", attemptFiles(t, "control-03", func(src string) string {
 			return strings.Replace(src, `pub fn echo(s: String) -> String {`,
-				`pub fn echo<T>(s: T) -> T {`, 1)
+				`pub fn echo2(s: String) -> String {`, 1)
 		})},
 	}
 

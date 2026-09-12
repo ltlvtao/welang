@@ -1,0 +1,16 @@
+{
+  "name": "run-ch10-generic-fn",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\nfn identity<T>(x: T) -> T {\n    return x\n}\n\nfn pair2<A, B>(a: A, b: B) -> (A, B) {\n    return (a, b)\n}\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = identity(3)\n    let b = identity<Float64>(1.5)\n    let c = pair2(1, \"x\")\n    let (n, s) = c\n    io.println(\"${a} ${b} ${n}${s}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "3 1.5 1x\n",
+  "stderr": ""
+}

@@ -89,9 +89,14 @@ func TestTrapCalibration(t *testing.T) {
 		// case's mutable String binding followed the same route in T9-4:
 		// the two-word slot is what T4 did not carry, and its arrival is
 		// the calibration traps.md predicted, so the mutant is latent now.
-		// control-03 thereby calibrates no test-malformed shape at all; the
-		// bucket's live carrier is the generic-fn boundary, exercised in
-		// blackbox_test.go.
+		// The generic-fn boundary that carried the test-malformed bucket
+		// after those three retired itself with B1b T4 (monomorphization),
+		// so the bucket is calibrated here on the signature-contract
+		// mutant the prompt names instead — see blackbox_test.go for the
+		// same shape through the subprocess face.
+		{"control-03", "renamed-echo-e1304", BucketTestMalformed, func(s string) string {
+			return rep(s, "pub fn echo(s: String) -> String {", "pub fn echo2(s: String) -> String {")
+		}},
 		{"control-03", "concatenation-latent", BucketLatent, func(s string) string {
 			return rep(s, "    return s", `    return s + "x"`)
 		}},

@@ -26,7 +26,7 @@ func (e *env) runVet(path string, info os.FileInfo) int {
 	if !strings.HasSuffix(path, ".we") {
 		return e.usageErr("vet wants a .we file, got %q", path)
 	}
-	file, code := e.loadFile(path)
+	file, _, code := e.loadFile(path)
 	if file == nil {
 		return code
 	}
@@ -41,7 +41,7 @@ func (e *env) runVet(path string, info os.FileInfo) int {
 // whole advisory surface — the source graph's root, then every test
 // module — under the manifest's postures.
 func (e *env) runVetProject(dir string) int {
-	manifest, file, _, mods, depRoots, code := e.loadProject(dir, false)
+	manifest, file, _, mods, depRoots, _, code := e.loadProject(dir, false)
 	if code != exitOK {
 		return code
 	}

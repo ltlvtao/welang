@@ -1,0 +1,16 @@
+{
+  "name": "run-ch10-generic-sum",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\ntype Opt2<T> = Some2(T) | None2\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a: Opt2<Int64> = Some2(2)\n    match a {\n        Some2(v) => { io.println(\"${v}\") }\n        None2 => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "2\n",
+  "stderr": ""
+}
