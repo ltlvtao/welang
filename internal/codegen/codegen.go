@@ -2296,6 +2296,16 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 		return nil
 	case ckGc:
 		if name != "_" {
+			// A carrier binds into the list environment rather than the
+			// record one (T8-1): the pointer is what a walk spends, and
+			// the element face — which only a carrier's own building site
+			// knows — is what says how. A record's result is the other
+			// way round, and a result that is neither (a box, a fn
+			// carrier) carries no record key for gcEnv to hold.
+			if res.list != nil {
+				e.listEnv[name] = listBinding{reg: res.gcReg, elem: *res.list}
+				return nil
+			}
 			e.gcEnv[name] = gcBinding{rec: res.recKey, reg: res.gcReg, dyn: res.dyn}
 		}
 		return nil
@@ -2429,6 +2439,13 @@ type callResult struct {
 	// nil at every other result. It rides the value the way gcBinding's
 	// does, and for the same reason.
 	dyn *typecheck.Shape
+	// list is the element face a List-valued result carries (T8-1); nil
+	// at every other result, kind is ckGc where it is set. A carrier's
+	// pointer does not say what a walk over it may bind into — the face
+	// is fixed where the carrier is built, and a collect is a second
+	// place one is built, so the fact has to ride the result the way a
+	// literal's rides its own binding site.
+	list *listElem
 }
 
 // isLocalName reports whether name is bound in the current body — locals
@@ -2914,6 +2931,15 @@ func (e *emitter) loadNum(slot string, isFloat bool) string {
 	}
 	v := e.value()
 	e.inst(fmt.Sprintf("%%%s = load %s, ptr %s", v, typ, slot))
+	return "%" + v
+}
+
+// loadPtr reads one pointer slot: a gc handle crossing a loop's back edge
+// travels in an alloca, the same way fold's accumulator and the sums'
+// words do, so the load is its own face rather than loadNum's i64.
+func (e *emitter) loadPtr(slot string) string {
+	v := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", v, slot))
 	return "%" + v
 }
 
@@ -6200,16 +6226,24 @@ func (e *emitter) recordKeyOf(x ast.Expr) (string, bool) {
 	return "", false
 }
 
-// --- T7-3: the six acute combinators (design D6) ---------------------------
+// --- T7-3/T8-1: the seven acute combinators (design D6, D8 decision 1) -----
 //
-// fold, reduce, count, any, all and find are methods on Iterator<T> whose
-// bodies the standard library writes in We, and the check stage walks
-// those bodies on every check. The emission face takes the other path
-// design D6 chose: the call form is recognized and the loop the body
-// describes is emitted directly — no std module fn body, no generic
-// instantiation, and none of the library machinery this build does not
-// have. The chapter text is the semantics either way; the conformance
-// goldens pin the behaviour.
+// fold, reduce, count, any, all, find and collect are methods on
+// Iterator<T> whose bodies the standard library writes in We, and the
+// check stage walks those bodies on every check. The emission face takes
+// the other path design D6 chose: the call form is recognized and the
+// loop the body describes is emitted directly — no std module fn body, no
+// generic instantiation, and none of the library machinery this build
+// does not have. The chapter text is the semantics either way; the
+// conformance goldens pin the behaviour.
+//
+// The family is split by what a call answers, not by what its body does
+// (design D8 decision 1): the eager seven answer a value — a scalar, a
+// sum, or collect's List — and the lazy four answer a Dyn<Iterator<U>>
+// whose elements are still to be produced. collect sits with the eager
+// seven for that reason and for no other: the chapter declares it
+// `-> List<T>`, so its result is the carrier a literal builds, and no
+// box is built on its way out.
 //
 // The recognized form is `<list>.iterator().<name>(args)`. The receiver's
 // face comes from a List binding or a literal — the same environment the
@@ -6219,20 +6253,20 @@ func (e *emitter) recordKeyOf(x ast.Expr) (string, bool) {
 // stay in the word domain the combinator's own declaration supports; a
 // face the sum pair cannot carry stops at the body boundary.
 
-// acuteCombinator names the six eager combinators — the ones whose
-// results are values, as against the five lazy ones (map/filter/take/
-// skip/collect) whose Dyn<Iterator<U>> results belong to B1b's vtable
-// face (design D6).
+// acuteCombinator names the seven eager combinators — the ones whose
+// results are values, as against the four lazy ones (map/filter/take/
+// skip) whose Dyn<Iterator<U>> results belong to the vtable face the
+// lazy handles carry (design D8 decision 1).
 func acuteCombinator(name string) bool {
 	switch name {
-	case "fold", "reduce", "count", "any", "all", "find":
+	case "fold", "reduce", "count", "any", "all", "find", "collect":
 		return true
 	}
 	return false
 }
 
 // emitAcute recognizes and emits one combinator call. The bool says the
-// form is this face at all — the name is one of the six AND the receiver
+// form is this face at all — the name is one of the seven AND the receiver
 // is a source's own iterator, a List's or a user Iterable's — so a
 // failure past that point is a boundary of this face rather than a
 // fall-through to another one. A receiver that is neither (a String's
@@ -6572,18 +6606,20 @@ func accKindOf(k fnAbiKind) strKind {
 	return skI64
 }
 
-// emitAcuteLoop dispatches the six. Every one of them shares the walk;
+// emitAcuteLoop dispatches the seven. Every one of them shares the walk;
 // what differs is the accumulator (fold, reduce), the short circuit (any,
 // all, find), and the result (the sum pair for reduce and find, a scalar
-// for the rest).
+// for fold/count/any/all, and the carrier collect builds).
 func (e *emitter) emitAcuteLoop(name string, s walkSrc, face listElem, args []ast.Expr) (callResult, *NotImplemented) {
-	want := map[string]int{"fold": 2, "reduce": 1, "count": 0, "any": 1, "all": 1, "find": 1}[name]
+	want := map[string]int{"fold": 2, "reduce": 1, "count": 0, "any": 1, "all": 1, "find": 1, "collect": 0}[name]
 	if len(args) != want {
 		return callResult{}, e.bnd()
 	}
 	switch name {
 	case "count":
 		return e.emitCount(s)
+	case "collect":
+		return e.emitCollect(s, face)
 	case "fold":
 		return e.emitFold(s, face, args)
 	case "reduce":
@@ -6613,6 +6649,84 @@ func (e *emitter) emitCount(s walkSrc) (callResult, *NotImplemented) {
 	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", v, n))
 	e.closeListWalk(w)
 	return callResult{kind: ckI64, i64: e.loadNum(n, false), typeName: "Int64"}, nil
+}
+
+// emitCollect is `collect()`: the walk builds a List<T> rather than
+// folding the elements into one word, which is the whole of what makes it
+// the seventh acute combinator's own emission (design D8 decision 1). Its
+// result is the carrier a list literal builds, holding the element face
+// the walk worked in — so a later `for`, element read or combinator reads
+// it through the same vocabulary, and nothing about the call mentions the
+// Dyn face.
+//
+// The element word is pushed as the carrier holds it: the raw word, not
+// the callback operand listElemWord builds. That is the layout contract
+// the literal's own elements are stored under — a Float64's bit pattern
+// and a gc handle's pointer are words like any other — so a collected
+// list and a written-out one are the same object shape, and the face the
+// result carries is what says how to read either.
+//
+// The root is the one thing a collection has that a literal does not. A
+// literal carves its carrier at its exact element count, so no push ever
+// moves it; here the count is the walk's to discover, and __we_list_push
+// answers the list's *new* identity whenever it grows (list.c). The
+// shadow stack holds pointer values rather than addresses (gc.c: no
+// conservative stack scan), so the move is tracked by replacing the root
+// rather than by writing through it: after the push that may have moved
+// it, the old root is popped and the returned pointer pushed in its
+// place. The pair is always emitted together and no allocation sits
+// between them, so the depth the body's exit already accounts for is
+// unchanged, and the block a pass is walking is rooted across the whole
+// of that pass — which the protocol walk needs, `next` being a call into
+// code that may allocate.
+//
+// A traced element takes one root more, per pass: the growth allocation
+// inside push can sweep the very handle this pass is storing, which no
+// standing root covers — the collector traces blocks, not registers. The
+// element is pushed as a root for exactly that call and popped after it,
+// the same lifetime discipline the header of gc.c states for every gc
+// reference; a scalar element is data and takes nothing.
+func (e *emitter) emitCollect(s walkSrc, face listElem) (callResult, *NotImplemented) {
+	e.use("__we_list_new")
+	e.use("__we_list_push")
+	e.use("__we_root_push")
+	e.use("__we_root_pop")
+	e.pushes++
+	traced := 0
+	if face.gc {
+		traced = 1
+	}
+	lst := e.slot("ptr")
+	first := e.value()
+	e.inst(fmt.Sprintf("%%%s = call ptr @__we_list_new(i64 0, i64 %d)", first, traced))
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", first))
+	e.inst(fmt.Sprintf("store ptr %%%s, ptr %s", first, lst))
+	w, ni := e.openWalk(s, 0)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	if face.gc {
+		// The growth push is the first emitted path whose push may move
+		// the carrier (list.c doubles): the copy's allocation can fire a
+		// collection while this pass's element — a handle the walk just
+		// answered, still sitting in a register — is on no root. A
+		// literal's elements never face this, their carrier being carved
+		// at the exact count so push never grows there; a collecting walk
+		// discovers its count as it goes, so the element is rooted for
+		// exactly the one call that may sweep it. The pair nets the
+		// shadow stack even, so the exit's accounting needs no word.
+		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", e.wordPtr(w.word)))
+	}
+	r := e.value()
+	e.inst(fmt.Sprintf("%%%s = call ptr @__we_list_push(ptr %s, i64 %s)", r, e.loadPtr(lst), w.word))
+	if face.gc {
+		e.inst("call void @__we_root_pop()")
+	}
+	e.inst("call void @__we_root_pop()")
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", r))
+	e.inst(fmt.Sprintf("store ptr %%%s, ptr %s", r, lst))
+	e.closeListWalk(w)
+	return callResult{kind: ckGc, gcReg: e.loadPtr(lst), list: &face}, nil
 }
 
 // emitFold is `fold(init, f)`: the accumulator starts at init and each

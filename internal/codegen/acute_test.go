@@ -9,10 +9,10 @@ import (
 	"github.com/ltlvtao/welang/internal/ast"
 )
 
-// T7-3 the six acute combinators (design D6, chapter 11). The standard
-// library writes their bodies in We over Iterator<T>; the emission face
-// takes the loop the body describes and emits it directly, so the emitted
-// spellings are:
+// T7-3/T8-1 the seven acute combinators (design D6, D8 decision 1,
+// chapter 11). The standard library writes their bodies in We over
+// Iterator<T>; the emission face takes the loop the body describes and
+// emits it directly, so the emitted spellings are:
 //
 //   - the call form is `<list>.iterator().<name>(args)` — the receiver's
 //     face comes from the same environment a for statement's source does,
@@ -25,6 +25,10 @@ import (
 //   - fold and reduce carry an accumulator in a slot (it crosses the back
 //     edge), count carries the count, and any/all/find branch out of the
 //     loop at the element that decides them;
+//   - collect answers the carrier a list literal builds — an empty list
+//     opened before the walk, one push per pass — so the result is a
+//     List<T> the element vocabulary reads directly, and no box is built
+//     on its way out (T8-1);
 //   - reduce and find answer Option<E> — the sum pair, None 0 and Some 1 —
 //     and stop where the payload word cannot be the value a match arm
 //     would bind.
@@ -149,6 +153,77 @@ func TestAcuteCountCountsThePasses(t *testing.T) {
 	}
 	if strings.Contains(ir, "@__we_alloc") {
 		t.Fatalf("count builds no callback:\n%s", ir)
+	}
+}
+
+// TestAcuteCollectBuildsTheCarrierWhileWalking: collect's answer is the
+// carrier a list literal builds, so the call opens an empty list before
+// the walk and pushes every element the walk answers. Each push reads
+// the carrier back out of its slot — a growing push answers a new
+// identity (list.c) and the slot is what carries it across the back
+// edge — and the answer replaces the root in the same breath, the move
+// being tracked by replacing the pushed pointer rather than writing
+// through it (the shadow stack holds values, not addresses).
+func TestAcuteCollectBuildsTheCarrierWhileWalking(t *testing.T) {
+	ir := assertClean(t, acuteModule("collect"))
+	m := regexp.MustCompile(`(%v\d+) = call ptr @__we_list_new\(i64 0, i64 0\)\n\s+call void @__we_root_push\(ptr %v\d+\)\n\s+store ptr %v\d+, ptr (%v\d+)\n\s+%v\d+ = call ptr @__we_list_snap`).FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("the carrier is opened empty and rooted before the walk:\n%s", ir)
+	}
+	lst := regexp.QuoteMeta(m[2])
+	if !regexp.MustCompile(`cbody\d+:\n\s+%v\d+ = call i64 @__we_list_get\(ptr %v\d+, i64 %v\d+\)\n\s+%v\d+ = load ptr, ptr ` + lst + `\n\s+%v\d+ = call ptr @__we_list_push\(ptr %v\d+, i64 %v\d+\)\n\s+call void @__we_root_pop\(\)\n\s+call void @__we_root_push\(ptr %v\d+\)\n\s+store ptr %v\d+, ptr ` + lst).MatchString(ir) {
+		t.Fatalf("each pass pushes the element and replaces the carrier's root:\n%s", ir)
+	}
+	if !regexp.MustCompile(`cexit\d+:\n\s+%v\d+ = load ptr, ptr ` + lst).MatchString(ir) {
+		t.Fatalf("the result is the carrier read after the exit:\n%s", ir)
+	}
+	if !strings.Contains(ir, "declare ptr @__we_list_new(i64, i64)") {
+		t.Fatalf("the carrier comes from the list family's own carving:\n%s", ir)
+	}
+}
+
+// TestAcuteCollectTracesTheGcElement: a traced face's growth push is the
+// first emitted push that may move — the copy's allocation can fire a
+// collection with this pass's element still in a register — so the
+// element handle is rooted for exactly that call and popped right after
+// it, the discipline gc.c's header states for every gc reference. The
+// carrier opens traced, which is what makes its own descriptor cover the
+// pushed words.
+func TestAcuteCollectTracesTheGcElement(t *testing.T) {
+	ir := assertClean(t, listModule(
+		[]ast.Item{recDecl("Cell", "gc", fld("n", "Int64"))},
+		letBind("cs", &ast.ListLit{Elems: []ast.Expr{construct("Cell", init1("n", intLit("1"))),
+			construct("Cell", init1("n", intLit("2")))}}),
+		letBind("ys", acute(ident("cs"), "collect")),
+		okReturn(),
+	))
+	if !strings.Contains(ir, "call ptr @__we_list_new(i64 0, i64 1)") {
+		t.Fatalf("a traced face opens a traced carrier:\n%s", ir)
+	}
+	if !regexp.MustCompile(`cbody\d+:\n\s+%v\d+ = call i64 @__we_list_get\(ptr %v\d+, i64 %v\d+\)\n\s+%v\d+ = inttoptr i64 %v\d+ to ptr\n\s+call void @__we_root_push\(ptr %v\d+\)\n\s+%v\d+ = load ptr, ptr %v\d+\n\s+%v\d+ = call ptr @__we_list_push\(ptr %v\d+, i64 %v\d+\)\n\s+call void @__we_root_pop\(\)\n\s+call void @__we_root_pop\(\)`).MatchString(ir) {
+		t.Fatalf("the element is rooted around the push and popped right after it:\n%s", ir)
+	}
+}
+
+// TestAcuteCollectResultWalksAgain: the answer registers in the same
+// environment a list literal's binding does, so the next combinator (or
+// for statement) walks it through that vocabulary — the exit's read of
+// the carrier slot is the very register the second walk snapshots.
+func TestAcuteCollectResultWalksAgain(t *testing.T) {
+	ir := assertClean(t, listModule(nil,
+		listBind("xs", intLit("1"), intLit("2")),
+		letBind("ys", acute(ident("xs"), "collect")),
+		letBind("n", acute(ident("ys"), "count")),
+		ioCall("io", "println", interpLit([]string{"", ""}, ident("n"))),
+		okReturn(),
+	))
+	m := regexp.MustCompile(`cexit\d+:\n\s+(%v\d+) = load ptr, ptr %v\d+\n`).FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("the collect's exit reads its carrier out of the slot:\n%s", ir)
+	}
+	snap := strings.LastIndex(ir, fmt.Sprintf("@__we_list_snap(ptr %s)", m[1]))
+	if snap < 0 || snap < strings.Index(ir, m[0]) {
+		t.Fatalf("the second walk snapshots the collected carrier:\n%s", ir)
 	}
 }
 
@@ -683,6 +758,20 @@ func TestAcuteOutsideTheSixStops(t *testing.T) {
 		listBind("xs", intLit("1")),
 		letBind("n", acute(ident("xs"), "filter",
 			lam(binOp(">", ident("x"), intLit("0")), "x"))),
+		okReturn(),
+	), "demo")
+	if ni == nil || ni.What != bndMainBody {
+		t.Fatalf("want %q, got %+v", bndMainBody, ni)
+	}
+}
+
+// TestAcuteCollectTakesNoArgument: the call form is `collect()` — a
+// with-argument spelling is no form this family recognises, so it stops
+// on the body word rather than being quietly reinterpreted.
+func TestAcuteCollectTakesNoArgument(t *testing.T) {
+	_, ni := Emit(listModule(nil,
+		listBind("xs", intLit("1")),
+		letBind("n", acute(ident("xs"), "collect", intLit("1"))),
 		okReturn(),
 	), "demo")
 	if ni == nil || ni.What != bndMainBody {

@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-collect-gc-crossing",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\n\nrecord CellIter { i: Int64, hi: Int64 }\n\nimpl Iterator<Cell> for CellIter {\n    pub fn next(mut self) -> Option<Cell> {\n        if self.i >= self.hi { return None }\n        let c = Cell { n: self.i }\n        self.i = self.i + 1\n        return Some(c)\n    }\n}\n\nrecord Gen { hi: Int64 }\n\nimpl Iterable<Cell> for Gen {\n    type Iter = CellIter\n    pub fn iterator(self) -> CellIter { return CellIter { i: 0, hi: self.hi } }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let g = Gen { hi: 8 }\n    let ds = g.iterator().collect()\n\n    var i: Int64 = 0\n    while i < 120000 {\n        let pad = Cell { n: 999999 }\n        i = i + 1\n    }\n\n    for d in ds { io.println(\"${d.n}\") }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "0\n1\n2\n3\n4\n5\n6\n7\n",
+  "stderr": ""
+}

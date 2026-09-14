@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-collect",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3, 4]\n    let ys = xs.iterator().collect()\n    for x in ys { io.println(\"e ${x}\") }\n\n    let n = ys.iterator().count()\n    if n == 4 { io.println(\"count-ok\") } else { io.println(\"count-bad\") }\n\n    let s = ys.iterator().fold(0, |acc, x| acc + x)\n    if s == 10 { io.println(\"fold-ok\") } else { io.println(\"fold-bad\") }\n\n    let zs = ys.iterator().collect()\n    let f = zs.iterator().find(|x| x > 3)\n    match f {\n        Some(v) => { if v == 4 { io.println(\"refind-ok\") } else { io.println(\"refind-bad\") } }\n        None => { io.println(\"refind-none\") }\n    }\n\n    let es: List<Int64> = []\n    let ws = es.iterator().collect()\n    let n3 = ws.iterator().count()\n    if n3 == 0 { io.println(\"empty-ok\") } else { io.println(\"empty-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "e 1\ne 2\ne 3\ne 4\ncount-ok\nfold-ok\nrefind-ok\nempty-ok\n",
+  "stderr": ""
+}

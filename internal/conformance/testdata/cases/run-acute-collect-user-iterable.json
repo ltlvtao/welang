@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-collect-user-iterable",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord CountIter { i: Int64, hi: Int64 }\n\nimpl Iterator<Int64> for CountIter {\n    pub fn next(mut self) -> Option<Int64> {\n        if self.i >= self.hi { return None }\n        let v = self.i\n        self.i = self.i + 1\n        return Some(v)\n    }\n}\n\nrecord Gen { hi: Int64 }\n\nimpl Iterable<Int64> for Gen {\n    type Iter = CountIter\n    pub fn iterator(self) -> CountIter { return CountIter { i: 0, hi: self.hi } }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let small = Gen { hi: 5 }\n    let ss = small.iterator().collect()\n    for x in ss { io.println(\"e ${x}\") }\n\n    let g = Gen { hi: 100000 }\n    let ys = g.iterator().collect()\n    let n = ys.iterator().count()\n    if n == 100000 { io.println(\"count-ok\") } else { io.println(\"count-bad\") }\n\n    let s = ys.iterator().fold(0, |acc, x| acc + x)\n    if s == 4999950000 { io.println(\"sum-ok\") } else { io.println(\"sum-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "e 0\ne 1\ne 2\ne 3\ne 4\ncount-ok\nsum-ok\n",
+  "stderr": ""
+}
