@@ -329,3 +329,98 @@ pub fn main() effect io -> Result<(), AppError> {
 // a Float64 count stops at E0501 — so the emission's one-argument guard
 // is defense in depth, unreachable through the checked pipeline the other
 // pins run through.
+
+// T8-3 the bound form (design D8 decision 2's closing half): the receiver
+// of an acute call may NAME a box — a `let` binding holding the
+// Dyn<Iterator<U>> a chain answered or a builtin source's explicitly boxed
+// iterator — rather than be that chain inline. The binding carries the box
+// with its face (bindResult's gc arm), so the walk the acute loop takes is
+// the same one the inline form takes: the box's own table, one next per
+// pass. Only the Iterator face is claimed by name: a binding of any other
+// erased face keeps its call to the generic dispatch below, which answers
+// the names that face's table actually holds.
+
+// TestLazyAcuteWalksABoundChainsBox: the chain's result crosses a `let`
+// and the acute call still walks THE box the chain answered — the walk
+// head's table load reads the very register the box's own +16 store wrote
+// through, and the chain was built once, at its own call, not again at the
+// read. The count answers over the walked box, never a carrier snapshot.
+func TestLazyAcuteWalksABoundChainsBox(t *testing.T) {
+	ir := emitLazySrc(t, lazyBody("    let it = xs.iterator().map(|x| x * 2)\n    let n = it.count()\n"))
+	h := blockAt(ir, walkLabel(t, ir, "chead"))
+	m := regexp.MustCompile(`getelementptr i8, ptr (%v\d+), i64 16`).FindStringSubmatch(h)
+	if m == nil {
+		t.Fatalf("the walk head loads the box's table word:\n%s", h)
+	}
+	if box := objectAfter(t, ir, "@.vt.Iterator$Int64.MapIter$Int64$Int64"); m[1] != box {
+		t.Fatalf("the walked box is the chain's result box %s, not %s:\n%s", box, m[1], ir)
+	}
+	if got := strings.Count(ir, "@.vt.Iterator$Int64.MapIter$Int64$Int64 = "); got != 1 {
+		t.Fatalf("the chain was built once, got %d tables:\n%s", got, ir)
+	}
+	if got := strings.Count(ir, "@__we_list_snap"); got != 0 {
+		t.Fatalf("a bound box walks no carrier snapshot, got %d:\n%s", got, ir)
+	}
+}
+
+// TestLazyAcuteWalksABoundBuiltinBox: an explicitly boxed builtin iterator
+// (T7-4's object inside a Dyn of the Iterator face) crosses a `let` the
+// same way — the walk dispatches through the bound box's own table, and
+// the object's next is the thunk the table's one slot holds.
+func TestLazyAcuteWalksABoundBuiltinBox(t *testing.T) {
+	ir := emitLazySrc(t, lazyBody("    let b = Dyn<Iterator<Int64> >(xs.iterator())\n    let n = b.count()\n"))
+	h := blockAt(ir, walkLabel(t, ir, "chead"))
+	m := regexp.MustCompile(`getelementptr i8, ptr (%v\d+), i64 16`).FindStringSubmatch(h)
+	if m == nil {
+		t.Fatalf("the walk head loads the box's table word:\n%s", h)
+	}
+	if box := objectAfter(t, ir, "@.vt.Iterator$Int64.ListIter$Int64"); m[1] != box {
+		t.Fatalf("the walked box is the bound builtin box %s, not %s:\n%s", box, m[1], ir)
+	}
+	if !strings.Contains(ir, "define internal { i64, i64, i64 } @ListIter$Int64.next(ptr %self)") {
+		t.Fatalf("the object's own next is defined:\n%s", ir)
+	}
+}
+
+// TestAcuteOverAUserFacesOwnCountDispatches: the name check is the whole
+// boundary — a user interface whose own slot is NAMED `count` (one of the
+// seven) is not the Iterator face, so a binding of its box must dispatch
+// through ITS table to the user's method, not be walked as an iterator.
+// The walk would be the wrong program: it would spin the box's payload as
+// a cursor the user never declared.
+func TestAcuteOverAUserFacesOwnCountDispatches(t *testing.T) {
+	ir := emitLazySrc(t, `import std.io
+
+pub type AppError = Failed(String)
+
+interface Box {
+    fn count(mut self) -> Int64
+}
+
+record Held {
+    n: Int64
+}
+
+impl Box for Held {
+    fn count(mut self) -> Int64 {
+        return self.n
+    }
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let d = Dyn<Box>(Held { n: 7 })
+    let n = d.count()
+    io.println("${n}")
+    return Ok(())
+}
+`)
+	if !strings.Contains(ir, "@.vt.main.Box.main.Held") {
+		t.Fatalf("the user face's own table is built:\n%s", ir)
+	}
+	if !strings.Contains(ir, "@main.Held.count") {
+		t.Fatalf("the user's count is the slot's target:\n%s", ir)
+	}
+	if strings.Contains(ir, "chead") || strings.Contains(ir, "@.vt.Iterator") {
+		t.Fatalf("a user count slot dispatches; no iterator walk was claimed:\n%s", ir)
+	}
+}

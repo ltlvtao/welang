@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-bound-any",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let it = xs.iterator().map(|x| x * 2)\n    let jt = xs.iterator().map(|x| x * 2)\n    let a = it.any(|x| x > 4)\n    if a { io.println(\"any-ok\") } else { io.println(\"any-bad\") }\n\n    let n = jt.any(|x| x > 9)\n    if n { io.println(\"any-miss-bad\") } else { io.println(\"any-miss-ok\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "any-ok\nany-miss-ok\n",
+  "stderr": ""
+}

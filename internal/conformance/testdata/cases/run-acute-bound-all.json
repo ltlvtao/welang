@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-bound-all",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let it = xs.iterator().map(|x| x * 2)\n    let jt = xs.iterator().map(|x| x * 2)\n    let b = it.all(|x| x > 0)\n    if b { io.println(\"all-ok\") } else { io.println(\"all-bad\") }\n\n    let n = jt.all(|x| x > 2)\n    if n { io.println(\"all-miss-bad\") } else { io.println(\"all-miss-ok\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "all-ok\nall-miss-ok\n",
+  "stderr": ""
+}

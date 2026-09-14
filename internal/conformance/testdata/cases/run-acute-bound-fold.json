@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-bound-fold",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let it = xs.iterator().map(|x| x * 2)\n    let s = it.fold(100, |acc, x| acc + x)\n    if s == 112 { io.println(\"fold-ok\") } else { io.println(\"fold-bad\") }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "fold-ok\n",
+  "stderr": ""
+}

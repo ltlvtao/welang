@@ -6284,14 +6284,30 @@ func lazyCombinator(name string) bool {
 
 // emitAcute recognizes and emits one combinator call. The bool says the
 // form is this face at all — the name is one of the seven AND the receiver
-// is a source's own iterator, a List's or a user Iterable's — so a
-// failure past that point is a boundary of this face rather than a
-// fall-through to another one. A receiver that is neither (a String's
-// iterator, say) is not this face and leaves the call to the faces below,
-// which stop it as they did before.
+// is a source's own iterator, a List's, a user Iterable's, or a binding
+// holding a Dyn<Iterator<U>> box this body built — so a failure past that
+// point is a boundary of this face rather than a fall-through to another
+// one. A receiver that is neither (a String's iterator, say) is not this
+// face and leaves the call to the faces below, which stop it as they did
+// before.
 func (e *emitter) emitAcute(fn *ast.Member, call *ast.Call) (callResult, bool, *NotImplemented) {
 	if !acuteCombinator(fn.Name) {
 		return callResult{}, false, nil
+	}
+	// A bound box (design D8 decision 2's bound form): the receiver names a
+	// `let` that holds a Dyn<Iterator<U>> this same body built — an inline
+	// chain's result, a builtin source's boxed iterator — so the seven walk
+	// it through the box's own table, the same openBoxWalk the inline chain
+	// arm below takes. Only the Iterator face itself is claimed: a binding
+	// of any other erased face keeps its call to the faces below, where the
+	// generic box dispatch answers the names its table actually holds.
+	if box, face, ok := e.dynRecvOf(fn.Recv); ok && face.Kind == typecheck.ShapeDyn && face.Decl.Name == "Iterator" && len(face.Args) == 1 {
+		elem, ok := elemOfShape(e.instShape(face.Args[0]))
+		if !ok {
+			return callResult{}, true, e.bnd()
+		}
+		out, ni := e.emitAcuteLoop(fn.Name, walkSrc{box: &boxSrc{reg: box, face: face}}, elem, call.Args)
+		return out, true, ni
 	}
 	it, ok := fn.Recv.(*ast.Call)
 	if !ok {
