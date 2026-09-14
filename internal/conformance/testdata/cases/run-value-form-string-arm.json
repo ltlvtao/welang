@@ -1,7 +1,7 @@
 {
-  "name": "build-bnd-value-form-string-arm",
+  "name": "run-value-form-string-arm",
   "args": [
-    "build",
+    "run",
     "."
   ],
   "setup": {
@@ -11,6 +11,6 @@
     }
   },
   "exit": 0,
-  "stdout": "",
+  "stdout": "a\n",
   "stderr": ""
 }

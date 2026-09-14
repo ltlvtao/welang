@@ -404,15 +404,13 @@ func TestInterpolationOverMemberChain(t *testing.T) {
 	}
 }
 
-// TestHoleOutsideTheDomainStops: the ruled domain is the base types and
+// TestHoleRendersAStringValuedForm: the ruled domain is the base types and
 // String, and a hole renders its value through the value-to-string family.
-// A value-position control form whose arms answer String is outside that
-// set — the form's result slot is the numeric one (valueForm.put takes only
-// ckI64), so the join has no domain to classify and the hole stops at the
-// body boundary rather than guessing a converter. The control form itself
-// is classified (TestValueFormStringFaceRenders); it is its String arms
-// that stay out.
-func TestHoleOutsideTheDomainStops(t *testing.T) {
+// A value-position control form whose arms all answer String is inside that
+// set — the form's sink carries the String pair (a ptr word and a length
+// word), the arms join on it, and the hole renders the form as itself: a
+// String needs no converter, so the IR carries no str_of call at all.
+func TestHoleRendersAStringValuedForm(t *testing.T) {
 	f := m9bModule(
 		&ast.Binding{Kw: "let", Name: "m", Init: interpLit([]string{"", ""},
 			&ast.If{
@@ -423,21 +421,22 @@ func TestHoleOutsideTheDomainStops(t *testing.T) {
 		ioCall("io", "println", ident("m")),
 		okReturn(),
 	)
-	_, ni := Emit(f, "demo")
-	if ni == nil || ni.What != bndMainBody {
-		t.Fatalf("expected the body boundary, got %v", ni)
+	ir := assertClean(t, f)
+	if strings.Contains(ir, "__we_str_of_") {
+		t.Fatalf("a String-valued form is the identity:\n%s", ir)
 	}
 }
 
-// TestValueFormDeclinesABlockThatBinds: the block arm declines a block that
-// binds a name before its tail, because the classifier reads the frame the
-// block is classified in and the emission has already restored it. The
-// program below is well typed — the block's `b` is its own, the checker
-// scopes it per block exactly as the emitter does — and answering skBool
-// from the outer `b` would render the inner 5 through the bool converter
-// and print "true". Every integer family is one i64 word, so nothing
-// downstream could tell; the boundary is the answer.
-func TestValueFormDeclinesABlockThatBinds(t *testing.T) {
+// TestValueFormClassifiesInTheBlocksOwnFrame: the block arm answers in the
+// block's own frame — blockKind installs it — rather than the outer one the
+// classifier happens to run in. The program below is well typed — the
+// block's `b` is its own, the checker scopes it per block exactly as the
+// emitter does — and reading the outer frame instead would classify the
+// tail as skBool, rendering the inner 5 through the bool converter and
+// printing "true". Every integer family is one i64 word, so nothing
+// downstream could tell; the converter the rendering actually names is the
+// pin.
+func TestValueFormClassifiesInTheBlocksOwnFrame(t *testing.T) {
 	f := m9bModule(
 		&ast.Binding{Kw: "let", Name: "b", Init: boolLit("true")},
 		&ast.Binding{Kw: "let", Name: "k", Init: blockOf(
@@ -447,9 +446,35 @@ func TestValueFormDeclinesABlockThatBinds(t *testing.T) {
 		ioCall("io", "println", ident("s")),
 		okReturn(),
 	)
-	_, ni := Emit(f, "demo")
-	if ni == nil || ni.What != bndMainBody {
-		t.Fatalf("expected the body boundary, got %v", ni)
+	ir := assertClean(t, f, "= call %struct.we_str @__we_str_of_i64(")
+	if strings.Contains(ir, "__we_str_of_bool") {
+		t.Fatalf("the inner b is an Int64:\n%s", ir)
+	}
+}
+
+// TestBlockKindLeavesTheOuterFrameAlone: the other half of the frame rule.
+// Installing the block's faces must not touch the bindings the block is
+// nested in — the frame blockKind opens is the block's own, and the outer
+// `b` keeps its bool face after the block is classified. A classifier that
+// wrote into the outer frame would flip the second rendering to the i64
+// converter, and the program would print the inner 5 twice.
+func TestBlockKindLeavesTheOuterFrameAlone(t *testing.T) {
+	f := m9bModule(
+		&ast.Binding{Kw: "let", Name: "b", Init: boolLit("true")},
+		&ast.Binding{Kw: "let", Name: "k", Init: blockOf(
+			&ast.Binding{Kw: "let", Name: "b", Typ: &ast.NamedType{Name: "Int64"}, Init: intLit("5")},
+			&ast.ExprStmt{Expr: ident("b")})},
+		&ast.Binding{Kw: "let", Name: "s", Init: interpLit([]string{"", ""}, ident("k"))},
+		&ast.Binding{Kw: "let", Name: "t", Init: interpLit([]string{"", ""}, ident("b"))},
+		ioCall("io", "println", ident("s")),
+		ioCall("io", "println", ident("t")),
+		okReturn(),
+	)
+	ir := assertClean(t, f,
+		"= call %struct.we_str @__we_str_of_i64(",
+		"= call %struct.we_str @__we_str_of_bool(")
+	if n := countCall(ir, "%struct.we_str", "__we_str_of_bool"); n != 1 {
+		t.Fatalf("the outer b renders once as a bool, got %d:\n%s", n, ir)
 	}
 }
 
@@ -473,6 +498,144 @@ func TestValueFormStringFaceRenders(t *testing.T) {
 	), "= call %struct.we_str @__we_str_of_i64(")
 	if n := countCall(ir, "%struct.we_str", "__we_str_of_i64"); n != 1 {
 		t.Fatalf("expected one converter at the binding, got %d:\n%s", n, ir)
+	}
+}
+
+// TestJoinKindCarriesAStringPair: the form's sink carries two faces now —
+// a numeric word or a String pair — and the join admits a pair of String
+// arms alongside the numeric families it always admitted. Mixed faces
+// still answer nothing: no single slot can hold both, and the checker has
+// already declined the program the mix would spell.
+func TestJoinKindCarriesAStringPair(t *testing.T) {
+	if k := joinKind(skStr, skStr); k != skStr {
+		t.Fatalf("two String arms join, got %v", k)
+	}
+	if k := joinKind(skI64, skStr); k != skNone {
+		t.Fatalf("a mixed pair answers nothing, got %v", k)
+	}
+	if k := joinKind(skStr, skI64); k != skNone {
+		t.Fatalf("a mixed pair answers nothing, got %v", k)
+	}
+	if k := joinKind(skF64, skF64); k != skF64 {
+		t.Fatalf("the numeric families join as before, got %v", k)
+	}
+}
+
+// TestValueFormMixedArmsStillStop: a control form whose arms answer
+// different faces still stops at the body boundary. The checker rejects
+// the program first (E0501 at the arms); this pins the emission's own
+// join — the classifier built straight from the AST never sees the
+// checker, and the join is where it answers the mix.
+func TestValueFormMixedArmsStillStop(t *testing.T) {
+	f := m9bModule(
+		&ast.Binding{Kw: "let", Name: "m", Init: interpLit([]string{"", ""},
+			&ast.If{
+				Cond: binOp(">", intLit("1"), intLit("0")),
+				Then: ast.Block{Items: []ast.Stmt{&ast.ExprStmt{Expr: intLit("1")}}},
+				Else: blockOf(&ast.ExprStmt{Expr: strLit(`"a"`)}),
+			})},
+		ioCall("io", "println", ident("m")),
+		okReturn(),
+	)
+	_, ni := Emit(f, "demo")
+	if ni == nil || ni.What != bndMainBody {
+		t.Fatalf("expected the body boundary, got %v", ni)
+	}
+}
+
+// TestBlockKindPoisonsNamesItCannotFace: a block binding whose face the
+// classifier cannot install — a pattern binding, or a plain binding whose
+// initializer answers no single kind — poisons the name for the block's
+// own classification rather than letting the outer binding leak through.
+// The tail that reads such a name declines, so the form stops instead of
+// rendering the outer face: a wrong value is the failure poisoning
+// prevents.
+func TestBlockKindPoisonsNamesItCannotFace(t *testing.T) {
+	shapes := []struct {
+		name string
+		bind ast.Stmt
+		tail ast.Expr
+	}{
+		{"pattern", &ast.Binding{Kw: "let", Pat: &ast.PatTuple{Elems: []ast.Pattern{
+			&ast.PatBinding{Name: "x"}, &ast.PatBinding{Name: "y"},
+		}}, Init: &ast.Tuple{Elems: []ast.Expr{intLit("1"), intLit("2")}}}, ident("x")},
+		{"sum init", &ast.Binding{Kw: "let", Name: "v", Init: &ast.Call{Fn: ident("Some"), Args: []ast.Expr{intLit("1")}}}, ident("v")},
+	}
+	for _, s := range shapes {
+		f := m9bModule(
+			&ast.Binding{Kw: "let", Name: "x", Init: boolLit("true")},
+			&ast.Binding{Kw: "let", Name: "k", Init: &ast.BlockExpr{Block: ast.Block{Items: []ast.Stmt{
+				s.bind, &ast.ExprStmt{Expr: s.tail},
+			}}}},
+			&ast.Binding{Kw: "let", Name: "s", Init: interpLit([]string{"", ""}, ident("k"))},
+			ioCall("io", "println", ident("s")),
+			okReturn(),
+		)
+		_, ni := Emit(f, "demo")
+		if ni == nil || ni.What != bndMainBody {
+			t.Fatalf("%s: expected the body boundary, got %v", s.name, ni)
+		}
+	}
+}
+
+// TestCallStrKindAnswersAFnValueByName: a fn value bound under the callee
+// name answers from the signature its binding saw — the classifier reads
+// the same fnEnv the emission's call path dispatches through, so the
+// value-string and operand positions classify together. A value whose
+// signature the emitter never saw answers nothing, exactly as its emission
+// does.
+func TestCallStrKindAnswersAFnValueByName(t *testing.T) {
+	e := &emitter{}
+	e.fnEnv = map[string]fnValue{
+		"seen":   {typed: true, abi: fnAbi{retName: "Int64"}},
+		"unseen": {typed: false},
+	}
+	if k := e.callStrKind(&ast.Call{Fn: ident("seen")}); k != skI64 {
+		t.Fatalf("a seen signature answers its return's family, got %v", k)
+	}
+	if k := e.callStrKind(&ast.Call{Fn: ident("unseen")}); k != skNone {
+		t.Fatalf("an unseen signature answers nothing, got %v", k)
+	}
+}
+
+// TestVarWithAnUnannotatedInitializerBinds: a var the annotation does not
+// name takes its face from the initializer's own classification — the
+// storage is laid for the face the init answered, and the assignment
+// stores through it. The program prints the assigned value, not the
+// initializer's.
+func TestVarWithAnUnannotatedInitializerBinds(t *testing.T) {
+	f := m9bModule(
+		&ast.Binding{Kw: "var", Name: "s", Init: strLit(`"a"`)},
+		&ast.Assign{Name: "s", Value: strLit(`"b"`)},
+		ioCall("io", "println", ident("s")),
+		okReturn(),
+	)
+	assertClean(t, f)
+}
+
+// TestTupleValueRendersIntoAStringPosition: a tuple value read into a
+// String position renders as its whole shape — each element loads out of
+// the aggregate at its own offset and renders in its own face, the parts
+// joined with the interned separator. The rendering is the element
+// converters the IR actually names: one i64 call, no bool call, and the
+// separator constant the join interned.
+func TestTupleValueRendersIntoAStringPosition(t *testing.T) {
+	f := m9bModule(
+		&ast.Binding{Kw: "let", Name: "t", Init: &ast.Tuple{
+			Elems: []ast.Expr{intLit("1"), intLit("2")}}},
+		&ast.Binding{Kw: "let", Name: "s", Init: interpLit([]string{"", ""}, ident("t"))},
+		ioCall("io", "println", ident("s")),
+		okReturn(),
+	)
+	ir := assertClean(t, f)
+	if n := countCall(ir, "%struct.we_str", "__we_str_of_i64"); n != 2 {
+		t.Fatalf("each i64 element renders through its own converter, got %d:\n%s", n, ir)
+	}
+	if strings.Contains(ir, "__we_str_of_bool") {
+		t.Fatalf("no element is a bool:\n%s", ir)
+	}
+	if !strings.Contains(ir, `c", "`) {
+		t.Fatalf("the join interns the two-character separator:\n%s", ir)
 	}
 }
 

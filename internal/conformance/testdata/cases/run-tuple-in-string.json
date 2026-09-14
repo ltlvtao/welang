@@ -1,0 +1,16 @@
+{
+  "name": "run-tuple-in-string",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let t = (1, 1.5, true, \"a\")\n    io.println(\"${t}\")\n    io.println(\"${(2, \"b\")}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "(1, 1.5, true, a)\n(2, b)\n",
+  "stderr": ""
+}

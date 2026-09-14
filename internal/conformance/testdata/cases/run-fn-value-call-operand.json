@@ -1,0 +1,16 @@
+{
+  "name": "run-fn-value-call-operand",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let f: fn(Int64) -> Int64 = |v| v + 1\n    let r = f(1) + 1\n    io.println(\"${r}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "3\n",
+  "stderr": ""
+}

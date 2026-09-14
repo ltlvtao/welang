@@ -1,0 +1,16 @@
+{
+  "name": "check-e0501-if-arm-disagreement",
+  "args": [
+    "check",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let k = if 1 > 0 { \"a\" } else { 1 }\n    io.println(\"${k}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "src/main.we:6:13: error[E0501]: mixed types — the if arms are String and Int64; no coercion is ever inserted\n"
+}

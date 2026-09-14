@@ -3156,11 +3156,49 @@ func (e *emitter) emitLogic(b *ast.Binary) (string, bool, *NotImplemented) {
 	return "%" + v, false, nil
 }
 
-// emitVarBinding emits a numeric var: the alloca is the name's storage,
-// assignment stores into it. The narrow int widths ride the i64 domain
-// (sign-extended values) and the annotation is the width their arithmetic
-// is checked against (T11-3).
+// emitVarBinding emits a var: the alloca (or the String pair) is the
+// name's storage, assignment stores into it. The narrow int widths ride
+// the i64 domain (sign-extended values) and the width their arithmetic is
+// checked against is the annotation's, or — for a var the annotation does
+// not name — the initializer's own face (the same classification a `let`
+// reads; the face is asked first so the initializer emits once, into the
+// storage the face chose). A var whose initializer names no face keeps
+// stopping: a var is a name the body assigns, and an assignment needs a
+// storage shape to store through.
 func (e *emitter) emitVarBinding(s *ast.Binding) *NotImplemented {
+	if s.Typ == nil {
+		switch k := e.valueKind(s.Init); k {
+		case skStr:
+			if s.Name == "_" {
+				_, _, ni := e.emitStringExpr(s.Init)
+				return ni
+			}
+			p, l, ni := e.emitStringExpr(s.Init)
+			if ni != nil {
+				return ni
+			}
+			e.bindStringSlot(s.Name, p, l)
+			return nil
+		case skI64, skU64, skBool, skRune, skF64:
+			res, ni := e.emitNumericValue(s.Init)
+			if ni != nil {
+				return ni
+			}
+			if res.kind != ckI64 || res.isFloat != (k == skF64) {
+				return e.bnd()
+			}
+			if s.Name == "_" {
+				return nil
+			}
+			num := res.num
+			if num == "" {
+				num = annNarrow(nil, s.Init)
+			}
+			e.bindScalarSlot(s.Name, res.i64, res.isFloat, k, num)
+			return nil
+		}
+		return e.bnd()
+	}
 	t, ok := s.Typ.(*ast.NamedType)
 	if !ok || t.Qual != "" || len(t.Args) != 0 {
 		return e.bnd()
@@ -4943,16 +4981,25 @@ func (e *emitter) popEnv() {
 // no value at all is unit and reserves nothing; one that mixes valued and
 // valueless arms has no single value to load (a mismatch the check face
 // rules out) and stops at the body word.
+//
+// The sink carries the value's own face: one i64/double word for the
+// numeric set, or the (ptr, len) pair for String arms — a String is two
+// words (design D3), so its join reserves two slots where a scalar's
+// reserves one. The two faces are exclusive: a form whose arms mix them
+// has no single value to load and stops.
 type valueForm struct {
 	slot    string
 	isFloat bool
 	unit    bool
+	strSlot string // the String face's data word ("" until a String arm)
+	lenSlot string // the String face's length word
 }
 
 // emitValueForm emits one value-position expression and returns its value:
 // the if/match/block forms whose arms produce i64- or double-domain
-// values. The load lands after the form's join — the outermost join for a
-// chain — which is exactly where the consumption site reads it.
+// values, or String pairs. The load lands after the form's join — the
+// outermost join for a chain — which is exactly where the consumption
+// site reads it.
 func (e *emitter) emitValueForm(x ast.Expr) (callResult, *NotImplemented) {
 	vf := &valueForm{}
 	var ni *NotImplemented
@@ -4969,11 +5016,16 @@ func (e *emitter) emitValueForm(x ast.Expr) (callResult, *NotImplemented) {
 	if ni != nil {
 		return callResult{}, ni
 	}
-	if vf.slot == "" {
+	if vf.slot == "" && vf.strSlot == "" {
 		return callResult{kind: ckVoid}, nil
 	}
 	if vf.unit {
 		return callResult{}, e.bnd()
+	}
+	if vf.strSlot != "" {
+		p := e.loadPtr(vf.strSlot)
+		l := e.loadNum(vf.lenSlot, false)
+		return callResult{kind: ckStr, strBind: strBinding{dataOp: p, lenOp: l}}, nil
 	}
 	return callResult{kind: ckI64, i64: e.loadNum(vf.slot, vf.isFloat), isFloat: vf.isFloat}, nil
 }
@@ -4981,11 +5033,23 @@ func (e *emitter) emitValueForm(x ast.Expr) (callResult, *NotImplemented) {
 // put writes one arm's value into the form's result slot, reserving the
 // slot the first time. An arm whose expression carries no value — a
 // valueless call, an io call — leaves the sink untouched and marks the
-// form unit.
+// form unit. A String arm reserves the two words of its pair instead; a
+// form that mixes a String arm with a numeric one has no single value to
+// load and stops.
 func (vf *valueForm) put(e *emitter, res callResult) *NotImplemented {
 	switch res.kind {
 	case ckVoid, ckIo:
 		vf.unit = true
+		return nil
+	case ckStr:
+		if vf.slot != "" {
+			return e.bnd()
+		}
+		if vf.strSlot == "" {
+			vf.strSlot, vf.lenSlot = e.slot("ptr"), e.slot("i64")
+		}
+		e.inst(fmt.Sprintf("store ptr %s, ptr %s", res.strBind.dataOp, vf.strSlot))
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", res.strBind.lenOp, vf.lenSlot))
 		return nil
 	case ckI64:
 		typ := "i64"
@@ -4993,6 +5057,9 @@ func (vf *valueForm) put(e *emitter, res callResult) *NotImplemented {
 			typ = "double"
 		}
 		if vf.slot == "" {
+			if vf.strSlot != "" {
+				return e.bnd()
+			}
 			vf.slot, vf.isFloat = e.slot(typ), res.isFloat
 		} else if vf.isFloat != res.isFloat {
 			return e.bnd()
@@ -5000,8 +5067,8 @@ func (vf *valueForm) put(e *emitter, res callResult) *NotImplemented {
 		e.inst(fmt.Sprintf("store %s %s, ptr %s", typ, res.i64, vf.slot))
 		return nil
 	}
-	// Strings, records, and sums have value forms of their own (design
-	// D3/D4/D8); the result-slot join is the numeric set's.
+	// Records and sums have value forms of their own (design D4/D8); the
+	// result-slot join is the scalar-and-String set's.
 	return e.bnd()
 }
 
@@ -5045,9 +5112,12 @@ func (e *emitter) emitArmBlock(items []ast.Stmt, vf *valueForm) *NotImplemented 
 }
 
 // storeValue computes one value-position expression into the form's sink:
-// a nested control form joins through the same sink, and anything else is
-// the numeric set's own operand (which reaches the operand-position call
-// and the unary family in turn).
+// a nested control form joins through the same sink, a call puts whatever
+// it returned, and anything else is the scalar or String face its own
+// classification names (the emission re-checks the domain the value
+// landed in, exactly as a hole does). The arm's block frame is installed
+// by the time this runs, so the classification reads the block's own
+// bindings.
 func (e *emitter) storeValue(x ast.Expr, vf *valueForm) *NotImplemented {
 	switch v := x.(type) {
 	case *ast.If:
@@ -5062,6 +5132,13 @@ func (e *emitter) storeValue(x ast.Expr, vf *valueForm) *NotImplemented {
 			return ni
 		}
 		return vf.put(e, res)
+	}
+	if e.valueKind(x) == skStr {
+		p, l, ni := e.emitStringExpr(x)
+		if ni != nil {
+			return ni
+		}
+		return vf.put(e, callResult{kind: ckStr, strBind: strBinding{dataOp: p, lenOp: l}})
 	}
 	op, isF, ni := e.emitNumExpr(x)
 	if ni != nil {
@@ -9458,6 +9535,20 @@ func (e *emitter) emitStringExpr(x ast.Expr) (string, string, *NotImplemented) {
 		// The chain read resolves a qualified module-level binding itself
 		// (emitMemberValue's T8-1 hook), so the String face is here already.
 		return e.emitFieldChainString(v)
+	case *ast.If, *ast.Match, *ast.BlockExpr:
+		// A value-position control form whose arms agree on String joins
+		// through its sink's two words (design D2's String face); the form
+		// re-checks the domain its arms landed in, so a form that emitted
+		// no String pair stops here rather than spelling a number's bits
+		// as a pointer.
+		res, ni := e.emitValueForm(x)
+		if ni != nil {
+			return "", "", ni
+		}
+		if res.kind != ckStr {
+			return "", "", e.bnd()
+		}
+		return res.strBind.dataOp, res.strBind.lenOp, nil
 	default:
 		return "", "", e.bnd()
 	}
@@ -10152,19 +10243,20 @@ func narrowDomain(l, r string) string {
 // static: a literal's own kind, a binding whose site fixed its type
 // (scalarSlot.kind), a String binding or field chain, a callee's declared
 // return type, the operators over those, and a value-position control form
-// whose arms all answer the same non-String kind and whose blocks bind no
-// name their tail could read. Everything else — a match arm's payload (its
-// type is fixed by the arm's own binding, which happens at emission), a
-// block that binds before its tail, a foreign result, a form whose arms
+// whose arms all answer the same kind — String arms included, the form's
+// sink carrying the pair — with each block classified in its own frame
+// (blockKind installs the bindings the emission will make). Everything
+// else — a match arm's payload (its type is fixed by the arm's own
+// binding, which happens at emission), a foreign result, a form whose arms
 // disagree — is skNone and stops the hole at the boundary: design D3 names
 // the base family and String, and the composite traversal is D4's (T5).
 //
-// The answer is about the name the emission resolves, so a form declines
-// wherever its own frame could have rebound the tail — blockKind says why.
-// Elsewhere the re-check is real and a wrong answer costs a boundary: the
-// hole is the one consumer whose re-check is floatness alone, which is
-// exactly why the tower must answer about the right frame rather than lean
-// on the emission to catch it.
+// The answer is about the name the emission resolves, so a block answers
+// in its own frame — blockKind installs it — rather than the outer one the
+// classifier happens to run in. Elsewhere the re-check is real and a wrong
+// answer costs a boundary: the hole is the one consumer whose re-check is
+// floatness alone, which is exactly why the tower must answer about the
+// right frame rather than lean on the emission to catch it.
 func (e *emitter) valueKind(x ast.Expr) strKind {
 	switch v := x.(type) {
 	case *ast.Literal:
@@ -10245,15 +10337,21 @@ func (e *emitter) valueKind(x ast.Expr) strKind {
 // in a statement or a return answers skNone exactly where the emission
 // would store nothing.
 //
-// A block that binds a name before its tail is declined. The classifier
-// reads the environment the block is classified in — the outer one, since
-// emitArmBlock has already popped the block's frame by the time anyone
-// asks — while the tail's value may be the block's own binding: under an
-// outer `b: Bool`, `{ let b: Int64 = 5  b }` would answer skBool and render
-// 5 through the bool converter, because every integer family is one i64
-// word and the hole's only re-check is floatness (emitHole). Declining
-// costs the capability of a block whose tail ignores its own bindings; that
-// is a boundary, and a boundary is the price the tower pays.
+// The tail is classified in the block's own frame. The classifier is asked
+// after emitArmBlock has already popped that frame — the emission is done
+// by then — so the frame is re-installed here for the length of the
+// question: each top-level binding contributes the face the emission will
+// give it (the annotation's where it names a base type, the initializer's
+// otherwise), in source order so a later binding classifies through the
+// earlier ones. A binding whose face cannot be named — a record, a closure,
+// a pattern's payload — poisons its name with skNone rather than letting an
+// outer same-name binding leak through: under an outer `b: Bool`, the tail
+// of `{ let r = Point{...}  b }` must not answer skBool from the outer b
+// the block never rebound... and the tail of `{ let b: Int64 = 5  b }` must
+// answer skI64 from the block's own b, which is what the frame is for (the
+// emission renders it through the i64 converter; every integer family is
+// one i64 word, so nothing downstream could tell if the tower guessed
+// wrong — the boundary answers, not the guess).
 func (e *emitter) blockKind(items []ast.Stmt) strKind {
 	n := len(items)
 	if n == 0 {
@@ -10263,21 +10361,100 @@ func (e *emitter) blockKind(items []ast.Stmt) strKind {
 	if !ok {
 		return skNone
 	}
+	e.pushEnv()
 	for _, st := range items[:n-1] {
-		if _, binds := st.(*ast.Binding); binds {
-			return skNone
+		b, ok := st.(*ast.Binding)
+		if !ok {
+			continue
 		}
+		if b.Pat != nil {
+			for _, name := range patBoundNames(b.Pat) {
+				e.poisonName(name)
+			}
+			continue
+		}
+		e.installBlockFace(b)
 	}
-	return e.valueKind(es.Expr)
+	k := e.valueKind(es.Expr)
+	e.popEnv()
+	return k
 }
 
-// joinKind is the domain two arms of a value form share. Strings are out
-// whatever the arms say: the form's result slot is the numeric set's
-// (valueForm.put takes only ckI64), so a String-valued if has no join to
-// classify and keeps stopping where the emission stops. An arm that
-// disagrees with its sibling leaves the form with no single answer.
+// installBlockFace installs one block binding's face into the frame
+// blockKind opened: String faces claim the strEnv name, everything else
+// claims the scalars name with the face it classified to — including
+// skNone, the poison that keeps an outer name from answering.
+func (e *emitter) installBlockFace(b *ast.Binding) {
+	if b.Name == "_" {
+		return
+	}
+	if t, ok := b.Typ.(*ast.NamedType); ok && t.Qual == "" && len(t.Args) == 0 && baseStrKind(t.Name) != skNone {
+		if baseStrKind(t.Name) == skStr {
+			delete(e.scalars, b.Name)
+			e.strEnv[b.Name] = strBinding{}
+			return
+		}
+		delete(e.strEnv, b.Name)
+		e.scalars[b.Name] = scalarSlot{kind: baseStrKind(t.Name)}
+		return
+	}
+	k := e.valueKind(b.Init)
+	if k == skStr {
+		delete(e.scalars, b.Name)
+		e.strEnv[b.Name] = strBinding{}
+		return
+	}
+	delete(e.strEnv, b.Name)
+	e.scalars[b.Name] = scalarSlot{kind: k}
+}
+
+// poisonName answers skNone for a name the frame cannot classify: a
+// pattern's payload, an unnameable initializer. Both environment faces are
+// cleared so neither an outer scalar nor an outer String answers.
+func (e *emitter) poisonName(name string) {
+	if name == "" || name == "_" {
+		return
+	}
+	delete(e.strEnv, name)
+	e.scalars[name] = scalarSlot{kind: skNone}
+}
+
+// patBoundNames collects every name a pattern binds.
+func patBoundNames(p ast.Pattern) []string {
+	switch v := p.(type) {
+	case *ast.PatBinding:
+		return []string{v.Name}
+	case *ast.PatOr:
+		var out []string
+		for _, s := range v.Branches {
+			out = append(out, patBoundNames(s)...)
+		}
+		return out
+	case *ast.PatTuple:
+		var out []string
+		for _, el := range v.Elems {
+			out = append(out, patBoundNames(el)...)
+		}
+		return out
+	case *ast.PatVariant:
+		var out []string
+		for _, el := range v.Args {
+			out = append(out, patBoundNames(el)...)
+		}
+		return out
+	}
+	return nil
+}
+
+// joinKind is the domain two arms of a value form share. The form's sink
+// carries either face — one word for the numeric set, two for a String
+// pair (valueForm.put takes ckI64 and ckStr) — so arms that agree on
+// String join as String. An arm that disagrees with its sibling leaves the
+// form with no single answer; a mixed String/numeric pair never reaches
+// this tower (the check face rules arm agreement out first), and put
+// re-refuses it besides.
 func joinKind(a, b strKind) strKind {
-	if a == b && a != skStr {
+	if a == b {
 		return a
 	}
 	return skNone
@@ -10339,6 +10516,20 @@ func (e *emitter) callStrKind(call *ast.Call) strKind {
 		// determined": no family is guessed, and the consumer stops.
 		if fd, is, _ := e.instCallee(e.curKey, id.Name, call); is && fd != nil {
 			return e.fnRetKind(fd)
+		}
+		// A fn value bound under the name answers from the signature its
+		// binding saw: the emission's own call path dispatches through
+		// fnEnv before it ever consults the program fn rows, so the
+		// classification that shadows it leaves the String position
+		// stopping where the operand position already stopped — the
+		// boundary was in the position's classifier, not in the call. A
+		// value whose signature the emitter did not see (typed=false)
+		// answers nothing, exactly as its emission does.
+		if fv, ok := e.fnEnv[id.Name]; ok {
+			if !fv.typed {
+				return skNone
+			}
+			return baseStrKind(fv.abi.retName)
 		}
 		return skNone
 	}
@@ -10492,6 +10683,24 @@ func (e *emitter) concatStr(ap, al, bp, bl string) (string, string, *NotImplemen
 // integer whose operand turns out to be a double stops rather than
 // rendering the register's bits as a number.
 func (e *emitter) emitHole(x ast.Expr) (callResult, *NotImplemented) {
+	// A tuple value renders as its whole shape, `(e0, e1, ...)`: the ruled
+	// domain has no single converter for a tuple, but the aggregate names
+	// every element's face, and the rendering is those faces joined
+	// (renderTuple; design D4's layout is the readable one). The domain
+	// walk below never sees a tuple — a tuple binding classifies to no
+	// single kind — so this arm owns the face entire.
+	if id, ok := x.(*ast.Ident); ok {
+		if tb, is := e.tupEnv[id.Name]; is {
+			return e.renderTuple(tb)
+		}
+	}
+	if t, ok := x.(*ast.Tuple); ok {
+		ptr, elems, ni := e.emitTupleAgg(t)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		return e.renderTuple(tupBinding{ptr: ptr, elems: elems})
+	}
 	k := e.valueKind(x)
 	if k == skNone {
 		return callResult{}, e.bnd()
@@ -10517,12 +10726,11 @@ func (e *emitter) emitHole(x ast.Expr) (callResult, *NotImplemented) {
 		if isF {
 			return callResult{}, e.bnd()
 		}
-		sym = map[strKind]string{
-			skI64:  "__we_str_of_i64",
-			skU64:  "__we_str_of_u64",
-			skBool: "__we_str_of_bool",
-			skRune: "__we_str_of_rune",
-		}[k]
+		var ok bool
+		sym, ok = strOfSyms[k]
+		if !ok {
+			return callResult{}, e.bnd()
+		}
 		arg = "i64 " + op
 	}
 	p, l, ni := e.strCall(sym, arg)
@@ -10530,6 +10738,70 @@ func (e *emitter) emitHole(x ast.Expr) (callResult, *NotImplemented) {
 		return callResult{}, ni
 	}
 	return callResult{kind: ckStr, strBind: strBinding{dataOp: p, lenOp: l}}, nil
+}
+
+// strOfSyms names the value-to-String converter for each single-word
+// interpolation domain: the i64/u64/bool/rune families each have their
+// own (a Float64 has its own call site — its word is a double).
+var strOfSyms = map[strKind]string{
+	skI64:  "__we_str_of_i64",
+	skU64:  "__we_str_of_u64",
+	skBool: "__we_str_of_bool",
+	skRune: "__we_str_of_rune",
+}
+
+// renderTuple renders one tuple value into its interpolation form,
+// `(e0, e1, ...)`: each element loads out of the aggregate at its own
+// offset (design D4's layout) and renders in its own face — a scalar word
+// through its converter, a Float64 word through the float's, a String
+// element as itself (the pair stored there is already the rendering) —
+// while a gc or sum element stops: an element face the ruled domain does
+// not name is an honest boundary, not a guessed rendering.
+func (e *emitter) renderTuple(tb tupBinding) (callResult, *NotImplemented) {
+	type part struct{ p, l string }
+	parts := make([]part, 0, 2*len(tb.elems)+1)
+	parts = append(parts, part{e.intern("("), "1"})
+	for i, el := range tb.elems {
+		if i > 0 {
+			parts = append(parts, part{e.intern(", "), "2"})
+		}
+		switch el.kind {
+		case abiStr:
+			parts = append(parts, part{e.gepLoadPtr(tb.ptr, el.off), e.gepLoadI64(tb.ptr, el.off+8)})
+			continue
+		case abiDouble:
+			op := e.gepLoadDouble(tb.ptr, el.off)
+			p, l, ni := e.strCall("__we_str_of_f64", "double "+op)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			parts = append(parts, part{p, l})
+			continue
+		case abiI64:
+			sym, ok := strOfSyms[baseStrKind(el.typ)]
+			if !ok {
+				return callResult{}, e.bnd()
+			}
+			op := e.gepLoadI64(tb.ptr, el.off)
+			p, l, ni := e.strCall(sym, "i64 "+op)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			parts = append(parts, part{p, l})
+			continue
+		}
+		return callResult{}, e.bnd()
+	}
+	parts = append(parts, part{e.intern(")"), "1"})
+	acc := parts[0]
+	for _, p := range parts[1:] {
+		d, l, ni := e.concatStr(acc.p, acc.l, p.p, p.l)
+		if ni != nil {
+			return callResult{}, ni
+		}
+		acc = part{d, l}
+	}
+	return callResult{kind: ckStr, strBind: strBinding{dataOp: acc.p, lenOp: acc.l}}, nil
 }
 
 // emitInterp emits one interpolated literal (chapter 1's `${ … }` regions):

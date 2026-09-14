@@ -1,0 +1,16 @@
+{
+  "name": "run-value-form-shadowed-block",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let b = true\n    let k = {\n        let b: Int64 = 5\n        b\n    }\n    io.println(\"${k}\")\n    io.println(\"${b}\")\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "5\ntrue\n",
+  "stderr": ""
+}
