@@ -388,9 +388,11 @@ func TestAcuteOverANonIteratorReceiverStops(t *testing.T) {
 }
 
 // TestAcuteOverAUserIterableStops: a user impl of Iterable is not this
-// face either — its element face is a fact the environment does not carry
-// — so the walk stops at the body boundary as it does for a for statement
-// over the same source.
+// face either — the acute walk reads a List carrier, and this receiver
+// resolves to no List — so the walk stops at the body boundary. A for
+// statement over the same source is a different face and does iterate
+// (T7-3); what is missing here is this face's own widening, not the
+// protocol.
 func TestAcuteOverAUserIterableStops(t *testing.T) {
 	_, ni := Emit(listModule(
 		[]ast.Item{recDecl("Range2", "gc", fld("n", "Int64"))},

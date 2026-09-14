@@ -228,16 +228,36 @@ func TestListLiteralOutsideABindingStops(t *testing.T) {
 	}
 }
 
-// TestListWalkOverAUserIterableStops: the three builtin sources are this
-// build's; a user impl of Iterable — whose protocol runs through the
-// interface's own machinery — stops at the body word.
-func TestListWalkOverAUserIterableStops(t *testing.T) {
-	_, ni := Emit(listModule(
-		[]ast.Item{recDecl("Range2", "gc", fld("n", "Int64"))},
+// TestListWalkYieldsToTheProtocolFace: the three builtin sources are this
+// build's own inline forms, and a record declaring no List face is not one
+// of them — so a `for` over it is the protocol's walk, not a carrier walk.
+// The pin is the dispatch, and it is a safety pin as much as a feature
+// one: reading this record as a List would walk whatever happens to sit at
+// the carrier's offsets and answer silently, so the IR must carry the
+// handle's own calls and no carrier verb at all.
+func TestListWalkYieldsToTheProtocolFace(t *testing.T) {
+	next := &ast.FnDecl{Name: "next", Recv: ast.RecvMutSelf, Ret: optionOf(named("Int64")),
+		Body: ast.Block{Items: []ast.Stmt{retValue(ident("None"))}}}
+	iterable := &ast.ImplDecl{
+		Iface: named("Iterable"), Head: named("Range2"),
+		Assocs: []*ast.AssocBinding{{Name: "Iter", Type: named("CountIter")}},
+		Methods: []*ast.FnDecl{method("iterator", ast.RecvSelf, "CountIter",
+			retValue(construct("CountIter", init1("n", intLit("0")))))},
+	}
+	ir := assertClean(t, listModule(
+		[]ast.Item{
+			recDecl("CountIter", "gc", fld("n", "Int64")),
+			recDecl("Range2", "gc", fld("n", "Int64")),
+			implDecl("Iterator<Int64>", "CountIter", next),
+			iterable,
+		},
 		letBind("r", construct("Range2", init1("n", intLit("0")))),
 		walk("x", ident("r")),
-	), "demo")
-	if ni == nil || ni.What != bndMainBody {
-		t.Fatalf("want %q, got %+v", bndMainBody, ni)
+	),
+		"call ptr @main.Range2.iterator(ptr",
+		"call { i64, i64, i64 } @main.CountIter.next(ptr",
+	)
+	if strings.Contains(ir, "__we_list_") {
+		t.Fatalf("a record that is no List takes no carrier verb:\n%s", ir)
 	}
 }

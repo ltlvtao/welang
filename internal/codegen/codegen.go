@@ -609,6 +609,16 @@ type emitter struct {
 	// own key and no tree.
 	ifacePairs map[string]*ifacePair
 	ifaceOrd   []string // pairing keys, impl order
+	// iterAssoc is the `Iterable` association table (design D7): one
+	// implementing head's key, with the association's own name, to the
+	// record key its `type Iter = …` binding names. It is the iterator
+	// handle's authority rather than the `iterator` method's declared
+	// return spelling, because the checker admits both — an impl may write
+	// `-> Iter`, which names no record the emission can key on — while the
+	// association binding always names the concrete head. The impl tree the
+	// association is read off is the same one collectImpl already walks, so
+	// the table adds no second source.
+	iterAssoc map[string]string
 
 	// M12 foreign state (design D4/D5). Opaque records live in their own
 	// table — no layout, no constructor, no records/order entry (E1707
@@ -775,6 +785,20 @@ func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
 		e.implTmpl[headKey] = &implTemplate{modKey: modKey, params: d.TypeParams, methods: d.Methods}
 		return nil
 	}
+	// An association binding names the head's concrete iterator (design D7).
+	// A binding whose right side is not a bare name of this module — a
+	// qualified one, a tuple, a generic application — leaves no key to file
+	// it under and is simply not recorded: the protocol face then reads the
+	// head as one it does not know, which is the boundary rather than a
+	// guess. The same table is what resolves a method whose signature
+	// spells the association instead of the type.
+	assocs := make(map[string]*ast.NamedType)
+	for _, a := range d.Assocs {
+		if nt, ok := a.Type.(*ast.NamedType); ok && nt.Qual == "" && len(nt.Args) == 0 {
+			e.iterAssoc[headKey+"."+a.Name] = modKey + "." + nt.Name
+			assocs[a.Name] = nt
+		}
+	}
 	for _, md := range d.Methods {
 		key := headKey + "." + md.Name
 		if _, seen := e.genericMethods[key]; seen {
@@ -789,7 +813,7 @@ func (e *emitter) collectImpl(modKey string, d *ast.ImplDecl) *NotImplemented {
 			e.genericMethods[key] = &methodTmpl{modKey: modKey, headKey: headKey, decl: md}
 			continue
 		}
-		e.methods[key] = &fnDef{key: modKey, name: md.Name, recvKey: headKey, decl: md}
+		e.methods[key] = &fnDef{key: modKey, name: md.Name, recvKey: headKey, decl: assocRet(md, assocs)}
 		e.methodsOrd = append(e.methodsOrd, key)
 	}
 	if ik, declKey, args, ok := e.ifacePairKey(modKey, d.Iface); ok {
@@ -1414,6 +1438,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		implTmpl:       make(map[string]*implTemplate),
 		ifaceDefs:      make(map[string]*ast.InterfaceDecl),
 		ifacePairs:     make(map[string]*ifacePair),
+		iterAssoc:      make(map[string]string),
 		vtSeen:         make(map[string]bool),
 		mode:           mode,
 	}
@@ -5475,8 +5500,14 @@ func (e *emitter) emitLoop(s *ast.Loop) *NotImplemented {
 // Range (see for_test.go's header for the argument), and the counted loop
 // needs neither the collection carrier nor a heap. The String source
 // walks its code points (T4-3). The List source walks its carrier's
-// snapshot (T7-2); every other source — a Set, a Map, a user impl, a bare
-// iterator — stops at this build's body boundary.
+// snapshot (T7-2). Every other source a user Iterable reaches — a record
+// whose impl binds `type Iter = …` — takes the protocol form (T7-2, design
+// D7 decision 2); a Set, a Map and a bare iterator have no such impl and
+// stop at this build's body boundary.
+//
+// The three inline forms come first and are byte-for-byte what they were:
+// each is one concrete type's specialization of the protocol, and the
+// protocol arm is for the sources they do not name (design D7 decision 1).
 func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
 	if rng, ok := s.Iter.(*ast.Binary); ok && rng.Op == ".." {
 		return e.emitForRange(s, rng)
@@ -5487,7 +5518,205 @@ func (e *emitter) emitFor(s *ast.ForStmt) *NotImplemented {
 	if _, ok := e.listFaceOf(s.Iter); ok {
 		return e.emitForList(s)
 	}
+	if proto, ok := e.iteratorOf(s.Iter); ok {
+		return e.emitForProtocol(s, proto)
+	}
 	return e.bnd()
+}
+
+// iterProtocol is one user Iterable's emitter face: the two methods the
+// walk calls and the one expression it evaluates. iter builds the handle
+// from the receiver, next advances it, and recv is the source expression
+// itself — held rather than pre-rendered so that exactly one site
+// evaluates it, which is what makes the walk's sequence the one the
+// source denotes.
+type iterProtocol struct {
+	iter *fnDef     // the impl's own `iterator`
+	next *fnDef     // the handle's `next`
+	recv ast.Expr   // the source expression, evaluated once by iter's call
+	pay  fnParamAbi // the Some payload's face, from next's own return table
+}
+
+// assocRet resolves one impl method's declared return when it spells an
+// association the same impl bound (design D7). The checker admits both
+// spellings — `-> CountIter` and `-> Iter` — and the emission reads a
+// signature's return off the tree, where an association's name is no
+// record to key on: without this a method written the second way has no
+// define at all. The declaration is copied rather than rewritten, because
+// the tree belongs to the check stage and other passes walk it too.
+func assocRet(md *ast.FnDecl, assocs map[string]*ast.NamedType) *ast.FnDecl {
+	nt, ok := md.Ret.(*ast.NamedType)
+	if !ok || nt.Qual != "" || len(nt.Args) != 0 {
+		return md
+	}
+	typ, ok := assocs[nt.Name]
+	if !ok {
+		return md
+	}
+	d := *md
+	d.Ret = typ
+	return &d
+}
+
+// iteratorOf resolves the protocol face of a for statement's source
+// without emitting. The source is a user Iterable when its record's impl
+// bound an association — `type Iter = …` — and both the head's
+// `iterator` and the handle's `next` are entered in the method table. A
+// source whose record this build cannot name (a call's result), or whose
+// handle's `next` has a signature the emission cannot carry, reports
+// false and leaves the boundary where it was.
+//
+// The head keys are what make the two lookups the same one a call site
+// makes: the receiver's key comes from the layouts, the association's
+// from the impl the head was collected under.
+func (e *emitter) iteratorOf(x ast.Expr) (iterProtocol, bool) {
+	recKey, ok := e.recvKeyOf(x)
+	if !ok {
+		return iterProtocol{}, false
+	}
+	iterFD, ok := e.methods[recKey+".iterator"]
+	if !ok || len(iterFD.decl.Params) != 0 || len(iterFD.decl.TypeParams) != 0 {
+		return iterProtocol{}, false
+	}
+	handleKey, ok := e.iterAssoc[recKey+".Iter"]
+	if !ok {
+		return iterProtocol{}, false
+	}
+	nextFD, ok := e.methods[handleKey+".next"]
+	if !ok || len(nextFD.decl.Params) != 0 || len(nextFD.decl.TypeParams) != 0 {
+		return iterProtocol{}, false
+	}
+	// The handle has to be a gc object: the walk hands `next` its address,
+	// and a receiver crossing as a value would advance a copy.
+	if abi, ok := e.classify(iterFD); !ok || abi.ret != abiGc {
+		return iterProtocol{}, false
+	}
+	abi, ok := e.classify(nextFD)
+	if !ok || abi.ret != abiSum {
+		return iterProtocol{}, false
+	}
+	some := shapeIndexOf(abi.retShapes, "Some")
+	if some < 0 || len(abi.retShapes[some].pay) != 1 {
+		return iterProtocol{}, false
+	}
+	if !payloadBindable(abi.retShapes[some].pay[0]) {
+		return iterProtocol{}, false
+	}
+	return iterProtocol{iter: iterFD, next: nextFD, recv: x, pay: abi.retShapes[some].pay[0]}, true
+}
+
+// payloadBindable reports whether one declared payload position is a face
+// the element binding can name — the same set a match arm's payload
+// binding covers. A position the three-word slot cannot hold a value of
+// (a nested sum, a tuple, a primitive handle) is no element this build
+// binds, and the source stops rather than binding a name to nothing.
+func payloadBindable(p fnParamAbi) bool {
+	switch p.kind {
+	case abiI64, abiDouble, abiStr, abiGc, abiVoid:
+		return true
+	}
+	return false
+}
+
+// emitForProtocol emits the protocol walk (design D7 decision 2): the
+// handle is built once, before the head — `iterator` runs exactly once
+// per loop, which is the same snapshot discipline `__we_list_snap` takes
+// over a carrier — and every pass calls `next` once and reads the
+// Option's tag. The first tag that is not `Some` leaves the loop, which
+// is the protocol's own termination rule rather than a length the walk
+// could compare against: a handle that never answers `Some` never runs
+// the body, and one that answers `None` early ends the walk early.
+//
+// The dispatch is the match arm's own — slotVariantIndex against the
+// handle's declared table, the payload read through bindArmWord — so a
+// user Iterator whose `Some` is not the first declared variant of its sum
+// still walks, and no second tag convention is introduced beside the one
+// the sums already carry (design D7 decision 4).
+//
+// The handle is a gc object the call rooted, and it stays reachable
+// through the root for the whole walk: a body that allocates enough to
+// collect finds it, and the iterator's own mutable state (a CountIter's
+// cursor) rides in the object, which is why `next(mut self)` advances the
+// walk rather than a copy of it.
+func (e *emitter) emitForProtocol(s *ast.ForStmt, p iterProtocol) *NotImplemented {
+	res, ni := e.emitMethodCall(p.iter, p.recv, nil)
+	if ni != nil {
+		return ni
+	}
+	if res.kind != ckGc {
+		// The handle a walk can advance is a gc object. An Iterable whose
+		// association names something else has no address to hand `next`,
+		// so the source stops here rather than walking a value the mutation
+		// would be lost on.
+		return e.bnd()
+	}
+	it := res.gcReg
+	nextAbi, ok := e.classify(p.next)
+	if !ok {
+		return bndFn()
+	}
+	n := e.blocks
+	e.blocks++
+	head := fmt.Sprintf("forhead%d", n)
+	body := fmt.Sprintf("forbody%d", n)
+	step := fmt.Sprintf("forcont%d", n)
+	exit := fmt.Sprintf("forexit%d", n)
+	e.inst(fmt.Sprintf("br label %%%s", head))
+	e.label(head)
+	o, ni := e.emitCallCore(nextAbi, "@"+p.next.sym(), []string{"ptr " + it}, nil)
+	if ni != nil {
+		return ni
+	}
+	if o.kind != ckSum {
+		return e.bnd()
+	}
+	some := slotVariantIndex(o.sum, "Some")
+	if some < 0 {
+		return e.bnd()
+	}
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %d", c, e.loadNum(o.sum.tag, false), some))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, body, exit))
+	e.label(body)
+	e.pushEnv()
+	defer e.popEnv()
+	if ni := e.bindForIterElem(s.Pat, o.sum, p.pay); ni != nil {
+		return ni
+	}
+	if ni := e.emitLoopBody(s.Body.Items, loopFrame{brk: exit, cont: step, depth: e.nest}); ni != nil {
+		return ni
+	}
+	if !e.diverged {
+		e.inst(fmt.Sprintf("br label %%%s", step))
+	}
+	// The step block is what `continue` lands on. It carries no counter —
+	// the handle holds the walk's state — so the step is only the back
+	// edge, and a continue reaches the next `next` rather than the same
+	// Option twice.
+	e.label(step)
+	e.inst(fmt.Sprintf("br label %%%s", head))
+	e.label(exit)
+	return nil
+}
+
+// bindForIterElem binds one pass's element — the payload the handle's
+// Option carried — under the head pattern. The payload's face is the
+// handle's declaration, so the binding is the match arm's own
+// per-position path. A head this build has no binding for (a tuple head,
+// a variant pattern) stops at the body boundary rather than binding
+// nothing and leaving the body with a name that reads as zero.
+func (e *emitter) bindForIterElem(pat ast.Pattern, slot sumSlot, pay fnParamAbi) *NotImplemented {
+	switch p := pat.(type) {
+	case *ast.PatWildcard:
+		return nil
+	case *ast.PatBinding:
+		if p.Name == "_" {
+			return nil
+		}
+	default:
+		return e.bnd()
+	}
+	return e.bindArmWord(slot, 0, pay, pat)
 }
 
 // emitForRange emits the counted Range loop: both bounds evaluate here, in

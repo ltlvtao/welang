@@ -396,15 +396,16 @@ func TestM10bBndStops(t *testing.T) {
 		t.Fatalf("generic: want %q, got %+v", bndGenericFns, ni)
 	}
 
-	// The fn body pin re-anchored at T7-2: the Range, String, and List
-	// sources are all emitted now — the List literal that anchored this
-	// pin through T4-3 and T6 is the T7-2 widening itself — so the stop
-	// is the source the build still refuses. The listing below is what
-	// that source is at the check face: a user impl of Iterable, whose
-	// protocol runs through the interface's own machinery. At the
-	// emission face the rule the pin states is the one that holds here —
-	// the source is an Ident this build has no List binding for, so the
-	// walk it would need does not exist.
+	// The fn body pin re-anchored at T7-2 and narrowed at T7-3: the
+	// Range, String, and List sources are all emitted now, and T7-3
+	// emitted the `for` protocol face over a user Iterable too, so what
+	// stops here is narrower than the listing below suggests. The pin's
+	// subject is the fn body's boundary word — the module is whatever a
+	// fn body still stops over — and this one stops because its source is
+	// an Ident that names no binding at all: no head is read, so neither
+	// the carrier walk nor the protocol's exists. (Bound, the listing's
+	// impl would stop again one gate later, at the association it does not
+	// bind.)
 	forBody := ProgModule{Key: "main", File: &ast.File{Items: []ast.Item{
 		recDecl("CountIter", "gc", fld("n", "Int64")),
 		recDecl("Range2", "gc", fld("n", "Int64")),
