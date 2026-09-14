@@ -1,0 +1,16 @@
+{
+  "name": "run-builtin-iterator-box-elements",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let fs = [1.5, 2.5]\n    let df = Dyn<Iterator<Float64> >(fs.iterator())\n    let a = df.next()\n    match a {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let b = df.next()\n    match b {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let c = df.next()\n    match c {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let bs = [true, false]\n    let db = Dyn<Iterator<Bool> >(bs.iterator())\n    let p = db.next()\n    match p {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let q = db.next()\n    match q {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let r = db.next()\n    match r {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "1.5\n2.5\nnone\ntrue\nfalse\nnone\n",
+  "stderr": ""
+}

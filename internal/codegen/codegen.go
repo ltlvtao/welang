@@ -10597,6 +10597,18 @@ type boxFace struct {
 // descriptor is a constant beside it — nothing about a box is synthesized
 // at run time (decision 4).
 func (e *emitter) emitBox(call *ast.Call, site typecheck.Site) (callResult, *NotImplemented) {
+	// A builtin source's iterator has an object form of its own (design
+	// D7 decision 3), and it is the one construction whose boxed type is
+	// an interface face rather than a concrete head: the check stage
+	// records what the argument's own static type is, and for
+	// `<list>.iterator()` that is `Iterator<T>` itself — which names no
+	// head for a table to be filed under. So the head is read off the
+	// expression, before the payload face is read off the type.
+	if len(call.Args) == 1 {
+		if it, ok := e.iterSourceOf(call.Args[0]); ok {
+			return e.emitIterBox(it, site)
+		}
+	}
 	boxed := *site.Boxed
 	t := e.refOfShape(e.instShape(boxed))
 	face, ok := e.boxFace(t)
@@ -10604,7 +10616,7 @@ func (e *emitter) emitBox(call *ast.Call, site typecheck.Site) (callResult, *Not
 		return callResult{}, e.bnd()
 	}
 	mapOp := "null"
-	if g := e.dynMapName(face); g != "" {
+	if g := e.dynMapName(face.words, false); g != "" {
 		mapOp = g
 	}
 	reg := e.allocObj(mapOp, dynBoxOff+8*len(face.words))
@@ -10632,6 +10644,213 @@ func (e *emitter) emitBox(call *ast.Call, site typecheck.Site) (callResult, *Not
 		res.dyn = &f
 	}
 	return res, nil
+}
+
+// --- chapter 11: the builtin iterator object (design D7 decision 3) ---------
+//
+// A builtin source's iterator is a value of an interface type the check
+// stage registers but no source declares, and the emitter gives it no
+// inline form of its own: `for` and the six acute combinators walk it in
+// place (T7-2/T7-3), which is design D7 decision 1's zero-cost path and
+// stays byte for byte what it was. What needs an object is the form that
+// has to *hold* one — the Dyn box here, and the lazy four combinators'
+// own handles when they land — because a box's thunk reads its receiver
+// out of the payload's first word (emitVtableThunk): a payload that were
+// the list handle itself would hand `next` the list and nothing else,
+// with the position nowhere to live.
+//
+// So the object is the two words that have to travel together — the
+// handle, which the descriptor traces, and the index, which it does not —
+// and the head is synthetic, since the check stage records such a
+// construction's boxed type as the interface face itself (design D7
+// decision 3's `ListIter$Int64`).
+
+// iterObjSize is the builtin iterator object's whole footprint: the
+// {map, size} header every gc block carries, the list handle at 16, and
+// the index at 24. The handle sits at the offset a box's table pointer
+// does, which is why the two share dynMapName and not a descriptor.
+const iterObjSize = 32
+
+// iterSource is one recognized builtin-iterator construction: the
+// synthetic head its table and its `next` are filed under, the element
+// face its `next` answers at, and the source expression the walk reads.
+type iterSource struct {
+	head string
+	elem listElem
+	recv ast.Expr
+}
+
+// iterSourceOf recognizes `<builtin source>.iterator()` at the argument of
+// a Dyn construction. Nothing here emits: the source is read later, once
+// the form around it is known to be this face.
+//
+// It answers only where one element word carries the element's whole
+// value, which is the set strKindName names — the same set the carrier
+// walks work in. Every other element keeps the boundary the box face took
+// before it: a `List<String>` element is two words and the pair is no
+// payload word this object could hold, and a `List<Cell>` element's
+// `Option<Cell>` is a sum whose words the interface's own slot still
+// classifies the way any other face does.
+func (e *emitter) iterSourceOf(x ast.Expr) (iterSource, bool) {
+	call, ok := x.(*ast.Call)
+	if !ok || len(call.Args) != 0 || len(call.TypeArgs) != 0 {
+		return iterSource{}, false
+	}
+	m, ok := call.Fn.(*ast.Member)
+	if !ok || m.Name != "iterator" {
+		return iterSource{}, false
+	}
+	elem, ok := e.listFaceOf(m.Recv)
+	if !ok || elem.gc {
+		return iterSource{}, false
+	}
+	n := strKindName(elem.kind)
+	if n == "" {
+		return iterSource{}, false
+	}
+	return iterSource{head: "ListIter$" + n, elem: elem, recv: m.Recv}, true
+}
+
+// emitIterBox emits one `Dyn<Iterator<T>>(<builtin source>.iterator())`
+// construction: the object the payload carries, the table and the thunk
+// its one slot dispatches through, and the box itself.
+//
+// The box's payload is one traced pointer — the object — so its own
+// descriptor marks one word at 24, exactly as the box of any other gc
+// handle does. The object's payload is the pair, and that face is the one
+// this construction's other `@.dynmap` is derived from: the handle at the
+// header's own shadow is a gc reference, the index beside it is not.
+//
+// The box is dispatchable by construction: a table is emitted here, so
+// `dyn` rides the value and a call on the binding reads the thunk
+// (design D6 decision 5).
+func (e *emitter) emitIterBox(it iterSource, site typecheck.Site) (callResult, *NotImplemented) {
+	if ni := e.mkIterNext(it.head); ni != nil {
+		return callResult{}, ni
+	}
+	slots, ok := e.ifaceSlots(site.Ret)
+	if !ok || len(slots) == 0 {
+		// No slot list, or a marker face: there is no table to build and
+		// no `next` to reach through one, the same stop boxTable takes.
+		return callResult{}, e.bnd()
+	}
+	table, ni := e.vtableFor(site.Ret, slots, it.head)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	src, _, ni := e.listSource(it.recv)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	obj, ni := e.emitIterObject(src)
+	if ni != nil {
+		return callResult{}, ni
+	}
+	face := boxFace{kind: abiGc, words: []boxWord{{typ: "ptr", traced: true}}}
+	mapOp := "null"
+	if g := e.dynMapName(face.words, false); g != "" {
+		mapOp = g
+	}
+	reg := e.allocObj(mapOp, dynBoxOff+8*len(face.words))
+	e.gepStore(reg, 16, "ptr "+table)
+	e.gepStore(reg, dynBoxOff, "ptr "+obj)
+	f := site.Ret
+	return callResult{kind: ckGc, gcReg: reg, dyn: &f}, nil
+}
+
+// emitIterObject allocates one builtin iterator object: the pair design D7
+// decision 3 names, under the header every gc block here carries.
+//
+// The allocation is allocObj's, so the order is a record's and a box's —
+// the map word lands with the header and the block is rooted before either
+// payload word is written. What makes writing a traced word after the
+// allocation safe is the same fact it is for a box: __we_alloc zeroes the
+// block and the collector skips a null child, so a collection landing
+// between the two stores reads a null handle rather than an
+// uninitialized one.
+func (e *emitter) emitIterObject(src string) (string, *NotImplemented) {
+	mapOp := "null"
+	// The index is the payload's one untraced word; the handle is the
+	// lead, which is what lead=true asks the descriptor to mark.
+	if g := e.dynMapName([]boxWord{{typ: "i64"}}, true); g != "" {
+		mapOp = g
+	}
+	obj := e.allocObj(mapOp, iterObjSize)
+	e.gepStore(obj, 16, "ptr "+src)
+	e.gepStore(obj, 24, "i64 0")
+	return obj, nil
+}
+
+// mkIterNext registers one builtin head's `next` and emits its define,
+// once per head: the emitter's method table is keyed by {head, name}, so
+// the same object kind boxed at two construction points is one method and
+// one define.
+//
+// The fnDef is synthetic in the one way vtableFor reads: its ABI is set
+// rather than classified, because there is no declaration to walk. That is
+// sound only because abiOK short-circuits classify — and it has to be
+// exact, since vtableFor stops the table where the slot's own ABI and the
+// head's disagree. The two agree here because `next` takes no parameter
+// beyond its receiver and returns `Option<T>` for every T this face
+// admits, which is the three-word sum design D8 fixes for every sum.
+func (e *emitter) mkIterNext(head string) *NotImplemented {
+	key := head + ".next"
+	if _, ok := e.methods[key]; ok {
+		return nil
+	}
+	fd := &fnDef{
+		key:     e.curKey,
+		name:    "next",
+		recvKey: head,
+		abi:     fnAbi{ret: abiSum, retTyp: "{ i64, i64, i64 }"},
+		abiOK:   true,
+	}
+	e.methods[key] = fd
+	e.emitIterNext(fd)
+	return nil
+}
+
+// emitIterNext emits one builtin head's `next` define: one step of the
+// walk over a live List carrier.
+//
+// The carrier is read at every call rather than snapshotted the way a `for`
+// walk is (T7-3): the object holds the list itself, which is what design D7
+// decision 3's `{handle, index}` says it holds, and reading the length and
+// the element through the handle each pass is what makes this the carrier's
+// own iterator rather than a copy of one. The tag written is the one
+// Option gives Some in the emitter's own variant table (variantShapes:
+// None 0, Some 1), never a second convention beside it.
+//
+// The result rides an insertvalue chain rather than a constant literal, the
+// register-level face a sum return takes wherever a payload word is a
+// register rather than an immediate — here the word the carrier answered.
+func (e *emitter) emitIterNext(fd *fnDef) {
+	e.use("__we_list_get")
+	e.use("__we_list_len")
+	e.thunks = append(e.thunks, fmt.Sprintf(
+		"define internal %s @%s(ptr %%self) {\n"+
+			"entry:\n"+
+			"  %%hp = getelementptr i8, ptr %%self, i64 16\n"+
+			"  %%list = load ptr, ptr %%hp\n"+
+			"  %%ip = getelementptr i8, ptr %%self, i64 24\n"+
+			"  %%i = load i64, ptr %%ip\n"+
+			"  %%n = call i64 @__we_list_len(ptr %%list)\n"+
+			"  %%more = icmp slt i64 %%i, %%n\n"+
+			"  br i1 %%more, label %%step, label %%none\n"+
+			"step:\n"+
+			"  %%w = call i64 @__we_list_get(ptr %%list, i64 %%i)\n"+
+			"  %%i1 = add i64 %%i, 1\n"+
+			"  store i64 %%i1, ptr %%ip\n"+
+			"  br label %%none\n"+
+			"none:\n"+
+			"  %%tag = phi i64 [ 1, %%step ], [ 0, %%entry ]\n"+
+			"  %%pay = phi i64 [ %%w, %%step ], [ 0, %%entry ]\n"+
+			"  %%r0 = insertvalue { i64, i64, i64 } undef, i64 %%tag, 0\n"+
+			"  %%r1 = insertvalue { i64, i64, i64 } %%r0, i64 %%pay, 1\n"+
+			"  %%r2 = insertvalue { i64, i64, i64 } %%r1, i64 0, 2\n"+
+			"  ret { i64, i64, i64 } %%r2\n"+
+			"}\n",
+		fd.abi.retTyp, fd.sym()))
 }
 
 // boxFace resolves one concrete type to the payload face its box stores it
@@ -10799,31 +11018,46 @@ func (e *emitter) emitBoxPayload(reg string, arg ast.Expr, t ast.TypeRef, f boxF
 	return nil
 }
 
-// dynMapName returns the layout descriptor global one box payload face
+// dynMapName returns the layout descriptor global one gc block's face
 // needs — emitting it into the module's map group on first use — or ""
-// where the payload holds no gc reference at all.
+// where the block holds no gc reference at all.
 //
 // The descriptor is a constant like a record's (design D5 decision 4): the
-// boxed type is static at every construction point, so there is nothing to
-// synthesize at run time the way list.c must. Two payload faces that agree
-// on their trace bits share the one global, since the bits are all a
+// block's face is static at every construction point, so there is nothing
+// to synthesize at run time the way list.c must. Two faces that agree on
+// their trace bits share the one global, since the bits are all a
 // descriptor carries.
 //
-// An all-untraced payload gets no descriptor: the map word is null and the
+// words is the block's payload, laid out from offset 24 the way a box's is;
+// lead says whether the word between the header and the payload — offset
+// 16, slot 0 — is a gc reference too. It is false for a box, whose word
+// there is the table pointer, a private constant the collector must not
+// follow; true for the builtin iterator object (design D7 decision 3),
+// whose word there is the list handle its `next` reads through. The two
+// never share a global, because what separates them is exactly a bit the
+// descriptor would have to carry.
+//
+// An all-untraced face gets no descriptor: the map word is null and the
 // collector skips the block's contents whole (gc.c:174-176), the posture
 // list.c takes for a scalar element. A one-word traced payload's bitmap is
 // bit 1 — the word at 24 — so its descriptor reads [i64 2], the same shape
 // @.fnmap carries for its one traced word at 16: both are a code-or-table
 // pointer in the header's shadow followed by one gc payload word.
-func (e *emitter) dynMapName(f boxFace) string {
-	key := make([]byte, len(f.words))
-	traced := false
-	for i, w := range f.words {
-		key[i] = 's'
+func (e *emitter) dynMapName(words []boxWord, lead bool) string {
+	key := make([]byte, 1, len(words)+1)
+	traced := lead
+	if lead {
+		key[0] = 'g'
+	} else {
+		key[0] = 'x'
+	}
+	for _, w := range words {
 		if w.traced {
-			key[i] = 'g'
+			key = append(key, 'g')
 			traced = true
+			continue
 		}
+		key = append(key, 's')
 	}
 	if !traced {
 		return ""
@@ -10833,20 +11067,24 @@ func (e *emitter) dynMapName(f boxFace) string {
 		return g
 	}
 	var bitmap []uint64
-	for i, w := range f.words {
-		if !w.traced {
-			continue
-		}
-		slot := i + 1 // slot 0 is the table pointer at offset 16
+	set := func(slot int) {
 		for len(bitmap) <= slot/64 {
 			bitmap = append(bitmap, 0)
 		}
 		bitmap[slot/64] |= 1 << (slot % 64)
 	}
+	if lead {
+		set(0)
+	}
+	for i, w := range words {
+		if w.traced {
+			set(i + 1) // payload word i sits at offset 24+8i
+		}
+	}
 	g := fmt.Sprintf("@.dynmap%d", len(e.dynMaps))
 	e.dynMaps[fkey] = g
 	e.envMaps = append(e.envMaps, fmt.Sprintf("%s = private unnamed_addr constant %s",
-		g, mapLiteral(bitmap, len(f.words)+1)))
+		g, mapLiteral(bitmap, len(words)+1)))
 	return g
 }
 

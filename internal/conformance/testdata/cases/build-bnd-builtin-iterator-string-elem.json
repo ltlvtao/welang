@@ -1,0 +1,16 @@
+{
+  "name": "build-bnd-builtin-iterator-string-elem",
+  "args": [
+    "build",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "pub type AppError = Failed(String)\n\npub fn main() -> Result<(), AppError> {\n    let xs = [\"a\", \"b\"]\n    let d = Dyn<Iterator<String> >(xs.iterator())\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 70,
+  "stdout": "",
+  "stderr": "we: main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n"
+}

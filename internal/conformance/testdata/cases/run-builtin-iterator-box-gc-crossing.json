@@ -1,0 +1,16 @@
+{
+  "name": "run-builtin-iterator-box-gc-crossing",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [100, 200, 300]\n    let d = Dyn<Iterator<Int64> >(xs.iterator())\n    var acc: Int64 = 0\n    var i: Int64 = 0\n    while i < 120000 {\n        let c = Cell { n: i }\n        acc = acc + c.n\n        i = i + 1\n    }\n    io.println(\"${acc}\")\n    let a = d.next()\n    match a {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let b = d.next()\n    match b {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let c2 = d.next()\n    match c2 {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    let e = d.next()\n    match e {\n        Some(v) => { io.println(\"${v}\") }\n        None => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "7199940000\n100\n200\n300\nnone\n",
+  "stderr": ""
+}
