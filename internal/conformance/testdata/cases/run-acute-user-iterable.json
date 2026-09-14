@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-user-iterable",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord CountIter { i: Int64, hi: Int64 }\n\nimpl Iterator<Int64> for CountIter {\n    pub fn next(mut self) -> Option<Int64> {\n        if self.i >= self.hi { return None }\n        let v = self.i\n        self.i = self.i + 1\n        return Some(v)\n    }\n}\n\nrecord Range2 { n: Int64 }\n\nimpl Iterable<Int64> for Range2 {\n    type Iter = CountIter\n    pub fn iterator(self) -> CountIter {\n        return CountIter { i: 0, hi: self.n }\n    }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let three = Range2 { n: 3 }\n\n    let c = three.iterator().count()\n    if c == 3 { io.println(\"count-ok\") } else { io.println(\"count-bad\") }\n\n    let s = three.iterator().fold(0, |acc, x| acc + x)\n    if s == 3 { io.println(\"fold-ok\") } else { io.println(\"fold-bad\") }\n\n    let a = three.iterator().any(|x| x > 1)\n    if a { io.println(\"any-ok\") } else { io.println(\"any-bad\") }\n\n    let na = three.iterator().any(|x| x > 9)\n    if na { io.println(\"any-miss-bad\") } else { io.println(\"any-miss-ok\") }\n\n    let b = three.iterator().all(|x| x <= 2)\n    if b { io.println(\"all-ok\") } else { io.println(\"all-bad\") }\n\n    let nb = three.iterator().all(|x| x < 2)\n    if nb { io.println(\"all-miss-bad\") } else { io.println(\"all-miss-ok\") }\n\n    let r = three.iterator().reduce(|p, q| p + q)\n    match r {\n        Some(v) => { if v == 3 { io.println(\"reduce-ok\") } else { io.println(\"reduce-bad\") } }\n        None => { io.println(\"reduce-none\") }\n    }\n\n    let f = three.iterator().find(|x| x > 1)\n    match f {\n        Some(v) => { if v == 2 { io.println(\"find-ok\") } else { io.println(\"find-bad\") } }\n        None => { io.println(\"find-none\") }\n    }\n\n    let g = three.iterator().find(|x| x > 9)\n    match g {\n        Some(v) => { io.println(\"find-miss-bad\") }\n        None => { io.println(\"find-miss-ok\") }\n    }\n\n    let zero = Range2 { n: 0 }\n    let zc = zero.iterator().count()\n    if zc == 0 { io.println(\"empty-count-ok\") } else { io.println(\"empty-count-bad\") }\n\n    let zr = zero.iterator().reduce(|p, q| p + q)\n    match zr {\n        Some(v) => { io.println(\"empty-reduce-some-bad\") }\n        None => { io.println(\"empty-reduce-none-ok\") }\n    }\n\n    let zf = zero.iterator().find(|x| x > 0)\n    match zf {\n        Some(v) => { io.println(\"empty-find-some-bad\") }\n        None => { io.println(\"empty-find-none-ok\") }\n    }\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "count-ok\nfold-ok\nany-ok\nany-miss-ok\nall-ok\nall-miss-ok\nreduce-ok\nfind-ok\nfind-miss-ok\nempty-count-ok\nempty-reduce-none-ok\nempty-find-none-ok\n",
+  "stderr": ""
+}

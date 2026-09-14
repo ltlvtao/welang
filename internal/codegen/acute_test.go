@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -387,13 +388,13 @@ func TestAcuteOverANonIteratorReceiverStops(t *testing.T) {
 	}
 }
 
-// TestAcuteOverAUserIterableStops: a user impl of Iterable is not this
-// face either — the acute walk reads a List carrier, and this receiver
-// resolves to no List — so the walk stops at the body boundary. A for
-// statement over the same source is a different face and does iterate
-// (T7-3); what is missing here is this face's own widening, not the
-// protocol.
-func TestAcuteOverAUserIterableStops(t *testing.T) {
+// TestAcuteOverARecordThatIsNoIterableStops: a record is no source this
+// face walks unless an impl bound the association under it — this fixture
+// carries no impl at all — so the face declines and the call stops below
+// it at the body boundary. The record source that DOES walk is the
+// protocol pins below; what this one keeps is the gate: membership is the
+// association's, not the receiver's shape.
+func TestAcuteOverARecordThatIsNoIterableStops(t *testing.T) {
 	_, ni := Emit(listModule(
 		[]ast.Item{recDecl("Range2", "gc", fld("n", "Int64"))},
 		letBind("r", construct("Range2", init1("n", intLit("0")))),
@@ -402,6 +403,275 @@ func TestAcuteOverAUserIterableStops(t *testing.T) {
 	), "demo")
 	if ni == nil || ni.What != bndMainBody {
 		t.Fatalf("want %q, got %+v", bndMainBody, ni)
+	}
+}
+
+// --- the protocol face over a user Iterable (T7-B) -------------------------
+
+// acuteIterSrc is one program carrying the protocol under the combinators:
+// a handle with a cursor of its own, an Iterable whose association names
+// it, and the body below. A `for` over the same shape is T7-2's; what
+// this pins is that a combinator reads the SAME handle the statement does
+// — one `iterator` call for the whole call, one `next` per pass, the tag
+// ending the walk — so a combinator over a user sequence is no second
+// iteration convention standing beside the statement's.
+const acuteIterSrc = `import std.io
+
+pub type AppError = Failed(String)
+
+record CountIter { i: Int64, hi: Int64 }
+
+impl Iterator<Int64> for CountIter {
+    pub fn next(mut self) -> Option<Int64> {
+        if self.i >= self.hi { return None }
+        let v = self.i
+        self.i = self.i + 1
+        return Some(v)
+    }
+}
+
+record Range2 { n: Int64 }
+
+impl Iterable<Int64> for Range2 {
+    type Iter = CountIter
+    pub fn iterator(self) -> CountIter {
+        return CountIter { i: 0, hi: self.n }
+    }
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let r = Range2 { n: 3 }
+%s    return Ok(())
+}
+`
+
+// emitAcuteIter emits one program whose main body is body, which arrives
+// already indented. src is one of these; a protocol face this build has
+// no word for is a failure of the fixture, not of the test.
+func emitAcuteIter(t *testing.T, body string) string {
+	t.Helper()
+	src := fmt.Sprintf(acuteIterSrc, body)
+	f, sh := checkShapes(t, "main.we", src)
+	ir, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni != nil {
+		t.Fatalf("boundary %q over the user-Iterable acute face:\n%s", ni.What, src)
+	}
+	return ir
+}
+
+// walkLabel reads back one walk's block name. The numbering is the
+// emitter's own — a combinator that builds a callback opens blocks of its
+// own first — so a pin that named a number would pin the wrong thing.
+func walkLabel(t *testing.T, ir, prefix string) string {
+	t.Helper()
+	m := regexp.MustCompile(prefix + `\d+`).FindString(ir)
+	if m == "" {
+		t.Fatalf("no %s block in the walk:\n%s", prefix, ir)
+	}
+	return m
+}
+
+// TestAcuteProtocolBuildsTheHandleOnce: the combinator takes the same
+// snapshot the for statement takes, and takes it the same way —
+// `iterator` runs once for the whole call, before the head opens, and
+// every pass reaches the sequence through that one handle. A walk that
+// called `iterator` per pass would restart the sequence under the
+// callback's own appends, which is chapter 17's fixed-sequence rule.
+func TestAcuteProtocolBuildsTheHandleOnce(t *testing.T) {
+	ir := emitAcuteIter(t, "    let n = r.iterator().count()\n")
+	if got := countCall(ir, "ptr", "main.Range2.iterator"); got != 1 {
+		t.Fatalf("want exactly one iterator call site, got %d:\n%s", got, ir)
+	}
+	head := walkLabel(t, ir, "chead")
+	order(t, ir,
+		"call ptr @main.Range2.iterator(ptr",
+		"call void @__we_root_push(ptr", // the handle outlives every pass
+		"br label %"+head,
+		head+":",
+		"call { i64, i64, i64 } @main.CountIter.next(ptr",
+	)
+	if got := strings.Count(ir, "@main.CountIter.next"); got != 2 {
+		t.Fatalf("want the define plus one static call site, got %d:\n%s", got, ir)
+	}
+	if strings.Contains(ir, "__we_list_") {
+		t.Fatalf("a user Iterable rides no carrier verb:\n%s", ir)
+	}
+}
+
+// TestAcuteProtocolHeadTestsTheTag: the walk ends on the handle's own
+// answer rather than on a length — there is no length to compare against
+// — and the index it tests is `Some`'s in the variant table the callee's
+// signature carries, which is the index the construction inside `next`
+// writes. Nothing here invents a second tag convention.
+func TestAcuteProtocolHeadTestsTheTag(t *testing.T) {
+	ir := emitAcuteIter(t, "    let n = r.iterator().count()\n")
+	head := blockAt(ir, walkLabel(t, ir, "chead"))
+	if head == "" {
+		t.Fatalf("missing the walk's head:\n%s", ir)
+	}
+	if strings.Contains(head, "icmp slt i64") {
+		t.Fatalf("the protocol walk counts nothing against a bound:\n%s", head)
+	}
+	order(t, head, "call { i64, i64, i64 } @main.CountIter.next(ptr",
+		"extractvalue", "store i64", "load i64, ptr", "icmp eq i64", "br i1")
+	if !regexp.MustCompile(`icmp eq i64 %v\d+, 1`).MatchString(head) {
+		t.Fatalf("the test names Some's index in the callee's table:\n%s", head)
+	}
+}
+
+// TestAcuteProtocolFeedsTheCallbackThePayload: the element a callback
+// takes is the Option's payload word — the same word a match arm would
+// bind, read out of the same slot — so an element means one thing down
+// both faces of the protocol. The face is the handle's declaration, which
+// is why an Int64 payload crosses as an i64 with no conversion in between.
+func TestAcuteProtocolFeedsTheCallbackThePayload(t *testing.T) {
+	ir := emitAcuteIter(t, "    let n = r.iterator().fold(0, |acc, x| acc + x)\n")
+	body := blockAt(ir, walkLabel(t, ir, "cbody"))
+	if body == "" {
+		t.Fatalf("missing the walk's body:\n%s", ir)
+	}
+	m := regexp.MustCompile(`(%v\d+) = load i64, ptr`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("the body reads its element:\n%s", body)
+	}
+	if !strings.Contains(ir, "i64 "+m[1]+")") {
+		t.Fatalf("the callback takes the payload word %s itself:\n%s", m[1], ir)
+	}
+}
+
+// TestAcuteProtocolReduceCountsThePasses: reduce reads an ordinal to take
+// the first element as its accumulator rather than as a folded step, and
+// a handle offers none — so the walk keeps a count of its own, opened at
+// zero before the head, read there, and advanced in the step block both
+// forms share.
+func TestAcuteProtocolReduceCountsThePasses(t *testing.T) {
+	ir := emitAcuteIter(t, "    let n = r.iterator().reduce(|acc, x| acc + x)\n")
+	head := walkLabel(t, ir, "chead")
+	m := regexp.MustCompile(`store i64 0, ptr (%v\d+)\n\s+br label %` + head).FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("the pass counter opens at zero before the head:\n%s", ir)
+	}
+	counter := m[1]
+	if !regexp.MustCompile(regexp.QuoteMeta(head) + `:\n\s+%v\d+ = load i64, ptr ` + regexp.QuoteMeta(counter)).MatchString(ir) {
+		t.Fatalf("the head reads the pass count %s:\n%s", counter, ir)
+	}
+	if !regexp.MustCompile(`cbody\d+:\n\s+%v\d+ = load i64, ptr %v\d+\n\s+%v\d+ = icmp eq i64 %v\d+, 0\n\s+br i1 %v\d+, label %rfirst\d+, label %rlater\d+`).MatchString(ir) {
+		t.Fatalf("the first pass is the accumulator, the rest are steps:\n%s", ir)
+	}
+	step := blockAt(ir, walkLabel(t, ir, "cstep"))
+	if step == "" {
+		t.Fatalf("missing the walk's step:\n%s", ir)
+	}
+	order(t, step, "= add i64", "store i64", ", ptr "+counter, "br label %"+head)
+}
+
+// TestAcuteProtocolShortCircuitsToTheWalkExit: the predicate decides, and
+// the element that decides it ends the walk — the hit block branches to
+// the very exit the head's own tag test branches to, so the two sources
+// share one way out and a short circuit here leaves no second exit a
+// later reader could mistake for the answer's.
+func TestAcuteProtocolShortCircuitsToTheWalkExit(t *testing.T) {
+	ir := emitAcuteIter(t, "    let b = r.iterator().any(|x| x > 1)\n")
+	m := regexp.MustCompile(`br i1 %v\d+, label %(cbody\d+), label %(cexit\d+)`).FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("the head tests the tag against its own body and exit:\n%s", ir)
+	}
+	hit := blockAt(ir, walkLabel(t, ir, "qhit"))
+	if hit == "" {
+		t.Fatalf("the predicate's hit is a block of its own:\n%s", ir)
+	}
+	if !strings.Contains(hit, "store i64 1") || !strings.Contains(hit, "br label %"+m[2]) {
+		t.Fatalf("the hit answers true and leaves by %s:\n%s", m[2], hit)
+	}
+	if m[1][len("cbody"):] != m[2][len("cexit"):] {
+		t.Fatalf("the body and exit belong to one walk: %s, %s", m[1], m[2])
+	}
+}
+
+// TestAcuteProtocolStopsOnAStringPayload: a String element is two words —
+// its data and its length — and a pass has one, so no callback here could
+// take it. count reads no element at all and could still answer, and it
+// stops too: the element face is the source's, fixed before the
+// combinator is chosen. That is the carrier face's own reading of a
+// String element — `List<String>` stops under the same source — so the
+// two sources of this walk agree on what they accept, which is the point.
+func TestAcuteProtocolStopsOnAStringPayload(t *testing.T) {
+	const src = `import std.io
+
+pub type AppError = Failed(String)
+
+record WordIter { i: Int64 }
+
+impl Iterator<String> for WordIter {
+    pub fn next(mut self) -> Option<String> { return None }
+}
+
+record Source { n: Int64 }
+
+impl Iterable<String> for Source {
+    type Iter = WordIter
+    pub fn iterator(self) -> WordIter { return WordIter { i: 0 } }
+}
+
+pub fn main() effect io -> Result<(), AppError> {
+    let s = Source { n: 0 }
+%s    return Ok(())
+}
+`
+	for _, c := range []struct{ what, body string }{
+		{"count", "    let n = s.iterator().count()\n"},
+		// The accumulator is the Int64 the callback declares, so the body
+		// type-checks with a String element — the checker admits this
+		// source either way, and what stops it is the emission.
+		{"fold", "    let n = s.iterator().fold(0, |acc, x| acc)\n"},
+	} {
+		f, sh := checkShapes(t, "main.we", fmt.Sprintf(src, c.body))
+		_, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+		if ni == nil || ni.What != bndMainBody {
+			t.Fatalf("%s over a String handle: want %q, got %+v", c.what, bndMainBody, ni)
+		}
+	}
+}
+
+// TestAcuteOverACallSourceStops names a gap rather than a decision: a
+// source's record is read from the forms the layouts name — a binding, a
+// field chain, a construction — so a CALL's result is no head this build
+// can key on and the combinator stops where it stopped before, which is
+// the boundary a for statement over that same source takes (T7-2). The
+// checker admits the source either way (E0901 is satisfied by the
+// callee's return), so the boundary is the emission's alone.
+func TestAcuteOverACallSourceStops(t *testing.T) {
+	const src = `import std.io
+
+pub type AppError = Failed(String)
+
+record CountIter { i: Int64 }
+
+impl Iterator<Int64> for CountIter {
+    pub fn next(mut self) -> Option<Int64> { return None }
+}
+
+record Range2 { n: Int64 }
+
+impl Iterable<Int64> for Range2 {
+    type Iter = CountIter
+    pub fn iterator(self) -> CountIter { return CountIter { i: 0 } }
+}
+
+fn make() -> Range2 { return Range2 { n: 0 } }
+
+pub fn main() effect io -> Result<(), AppError> {
+    let n = make().iterator().count()
+    return Ok(())
+}
+`
+	f, sh := checkShapes(t, "main.we", src)
+	_, ni := EmitProgram(ModeBuild, []ProgModule{{Key: "main", ID: "demo", File: f, Shapes: sh}})
+	if ni == nil {
+		t.Fatal("a call's record result is no head the emission names")
+	}
+	if !strings.Contains(ni.What, "statement set") {
+		t.Fatalf("want the body boundary word, got %q", ni.What)
 	}
 }
 

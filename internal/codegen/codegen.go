@@ -6233,10 +6233,11 @@ func acuteCombinator(name string) bool {
 
 // emitAcute recognizes and emits one combinator call. The bool says the
 // form is this face at all — the name is one of the six AND the receiver
-// is a List's own iterator — so a failure past that point is a boundary
-// of this face rather than a fall-through to another one. A receiver
-// that is not a List (a String's iterator, say) is not this face and
-// leaves the call to the faces below, which stop it as they did before.
+// is a source's own iterator, a List's or a user Iterable's — so a
+// failure past that point is a boundary of this face rather than a
+// fall-through to another one. A receiver that is neither (a String's
+// iterator, say) is not this face and leaves the call to the faces below,
+// which stop it as they did before.
 func (e *emitter) emitAcute(fn *ast.Member, call *ast.Call) (callResult, bool, *NotImplemented) {
 	if !acuteCombinator(fn.Name) {
 		return callResult{}, false, nil
@@ -6249,26 +6250,63 @@ func (e *emitter) emitAcute(fn *ast.Member, call *ast.Call) (callResult, bool, *
 	if !ok || im.Name != "iterator" || len(it.Args) != 0 {
 		return callResult{}, false, nil
 	}
-	if _, ok := e.listFaceOf(im.Recv); !ok {
+	if _, ok := e.listFaceOf(im.Recv); ok {
+		src, face, ni := e.listSource(im.Recv)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		res, ni := e.emitAcuteLoop(fn.Name, walkSrc{src: src}, face, call.Args)
+		return res, true, ni
+	}
+	// A user Iterable (design D7 decision 2): the receiver's impl bound the
+	// association, so the walk is the protocol's — the handle is built from
+	// the source, `next` advances it, and the element's face is the one the
+	// handle's own declaration gives its `Some`, which is the face a for
+	// statement's element binds into. One declaration feeds both faces, so
+	// the two readings of an element cannot drift apart.
+	p, ok := e.iteratorOf(im.Recv)
+	if !ok {
 		return callResult{}, false, nil
 	}
-	src, face, ni := e.listSource(im.Recv)
-	if ni != nil {
-		return callResult{}, true, ni
+	face, ok := protoElemFace(p.pay)
+	if !ok {
+		return callResult{}, true, e.bnd()
 	}
-	res, ni := e.emitAcuteLoop(fn.Name, src, face, call.Args)
+	res, ni := e.emitAcuteLoop(fn.Name, walkSrc{proto: &p}, face, call.Args)
 	return res, true, ni
 }
 
-// listWalk is one combinator loop's live state: the carrier's snapshot,
-// the length it was read with, the pass's index, and the four block names
-// a pass moves through. word is this pass's element — the one word the
-// carrier answered, before any face conversion.
+// listWalk is one combinator loop's live state: the four block names a
+// pass moves through, the counter that says which pass this is, and the
+// word this pass's element arrived in, before any face conversion. The
+// first two fields are the List carrier's alone — a walk over a user
+// Iterable has no snapshot and no length, its handle holding the sequence
+// and the position both, and leaves them empty.
 type listWalk struct {
 	snap, n, cur, word string
 	counter            string
 	head, body         string
 	step, exit         string
+}
+
+// walkSrc is where a combinator's passes come from. Exactly one field is
+// set: a List carrier's pointer, or a user Iterable's protocol face. The
+// two walks differ in their heads alone — a counted index against a
+// snapshot's length, or a tag test on the Option `next` answered — and
+// share both ends, so each of the six combinators below is written once
+// against this pair rather than once per source.
+type walkSrc struct {
+	src   string        // the carrier pointer (the List form)
+	proto *iterProtocol // the handle's protocol (the user Iterable form)
+}
+
+// openWalk opens the pass loop of whichever source this is, the counter
+// starting at from.
+func (e *emitter) openWalk(s walkSrc, from int64) (listWalk, *NotImplemented) {
+	if s.proto != nil {
+		return e.openProtoWalk(s.proto, from)
+	}
+	return e.openListWalk(s.src, from)
 }
 
 // openListWalk emits the snapshot prologue and one pass's head: the copy,
@@ -6311,6 +6349,76 @@ func (e *emitter) openListWalk(src string, from int64) (listWalk, *NotImplemente
 	return w, nil
 }
 
+// openProtoWalk emits the protocol walk's head over a user Iterable: the
+// handle is built here — `iterator` runs exactly once for the whole
+// combinator, which is the snapshot discipline `__we_list_snap` takes
+// over a carrier — and every pass calls `next` once and reads the
+// Option's tag. The first tag that is not `Some` leaves the loop, which
+// is the protocol's own termination rule rather than a length the walk
+// could compare against: a handle that never answers `Some` runs no pass
+// at all, and one that answers `None` early ends the walk early.
+//
+// The dispatch is the match arm's own — slotVariantIndex against the
+// callee's declared table — so a handle whose `Some` is not the first
+// declared variant of its sum still walks, and no second tag convention
+// is introduced beside the one the sums already carry (design D7
+// decision 4). The payload load is the match arm's too: bindArmWord reads
+// an arm's element out of the very slot this reads a pass's element out
+// of, so the two agree on which word an element is.
+//
+// The counter is the pass's own ordinal, kept for the same reason the
+// carrier form keeps one: reduce reads it to take the first element as
+// its accumulator rather than as a folded step, and a handle offers no
+// index to read instead. It advances in the step block, which
+// closeListWalk shares — a back edge that lands on the head's counter
+// load before the head's `next` call.
+func (e *emitter) openProtoWalk(p *iterProtocol, from int64) (listWalk, *NotImplemented) {
+	res, ni := e.emitMethodCall(p.iter, p.recv, nil)
+	if ni != nil {
+		return listWalk{}, ni
+	}
+	if res.kind != ckGc {
+		// The handle a walk can advance is a gc object. An Iterable whose
+		// association names something else has no address to hand `next`,
+		// so the source stops here rather than walking a value the mutation
+		// would be lost on.
+		return listWalk{}, e.bnd()
+	}
+	it := res.gcReg
+	nextAbi, ok := e.classify(p.next)
+	if !ok {
+		return listWalk{}, bndFn()
+	}
+	n := e.blocks
+	e.blocks++
+	w := listWalk{
+		head: fmt.Sprintf("chead%d", n), body: fmt.Sprintf("cbody%d", n),
+		step: fmt.Sprintf("cstep%d", n), exit: fmt.Sprintf("cexit%d", n),
+	}
+	w.counter = e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %d, ptr %s", from, w.counter))
+	e.inst(fmt.Sprintf("br label %%%s", w.head))
+	e.label(w.head)
+	w.cur = e.loadNum(w.counter, false)
+	o, ni := e.emitCallCore(nextAbi, "@"+p.next.sym(), []string{"ptr " + it}, nil)
+	if ni != nil {
+		return listWalk{}, ni
+	}
+	if o.kind != ckSum {
+		return listWalk{}, e.bnd()
+	}
+	some := slotVariantIndex(o.sum, "Some")
+	if some < 0 {
+		return listWalk{}, e.bnd()
+	}
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %d", c, e.loadNum(o.sum.tag, false), some))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, w.body, w.exit))
+	e.label(w.body)
+	w.word = e.loadNum(o.sum.pay, false)
+	return w, nil
+}
+
 // closeListWalk ends the pass: the fall-through branch to the step block
 // (skipped where the pass left a terminator of its own), the step itself,
 // and the exit block the result reads in.
@@ -6347,6 +6455,29 @@ func (e *emitter) listElemWord(face listElem, word string) (string, *NotImplemen
 		return "", e.bnd()
 	}
 	return "i64 " + word, nil
+}
+
+// protoElemFace reads a handle's `Some` payload as the element face a
+// combinator walk works in — the same domain listElemWord converts a
+// carrier's word into, so an element means one thing down both sources.
+// It is faceParam read backwards: faceParam spells a face as the
+// parameter a callback declares, this spells a handle's declared payload
+// as the face its word is.
+//
+// A payload with no one-word face — a String's pair, a unit — reports
+// false, and the combinator stops at its own boundary rather than
+// folding half an element. That is the same set the carrier form leaves
+// out, and for the same reason: one word is all a pass has.
+func protoElemFace(p fnParamAbi) (listElem, bool) {
+	switch p.kind {
+	case abiI64:
+		return listElem{kind: baseStrKind(p.typ), num: narrowName(p.typ)}, true
+	case abiDouble:
+		return listElem{kind: skF64}, true
+	case abiGc:
+		return listElem{rec: p.key, gc: true}, true
+	}
+	return listElem{}, false
 }
 
 // scalarWordFace reports whether one element's word is a value of the
@@ -6445,33 +6576,34 @@ func accKindOf(k fnAbiKind) strKind {
 // what differs is the accumulator (fold, reduce), the short circuit (any,
 // all, find), and the result (the sum pair for reduce and find, a scalar
 // for the rest).
-func (e *emitter) emitAcuteLoop(name, src string, face listElem, args []ast.Expr) (callResult, *NotImplemented) {
+func (e *emitter) emitAcuteLoop(name string, s walkSrc, face listElem, args []ast.Expr) (callResult, *NotImplemented) {
 	want := map[string]int{"fold": 2, "reduce": 1, "count": 0, "any": 1, "all": 1, "find": 1}[name]
 	if len(args) != want {
 		return callResult{}, e.bnd()
 	}
 	switch name {
 	case "count":
-		return e.emitCount(src)
+		return e.emitCount(s)
 	case "fold":
-		return e.emitFold(src, face, args)
+		return e.emitFold(s, face, args)
 	case "reduce":
-		return e.emitReduce(src, face, args[0])
+		return e.emitReduce(s, face, args[0])
 	case "any", "all":
-		return e.emitQuantify(name, src, face, args[0])
+		return e.emitQuantify(name, s, face, args[0])
 	case "find":
-		return e.emitFind(src, face, args[0])
+		return e.emitFind(s, face, args[0])
 	}
 	return callResult{}, e.bnd()
 }
 
 // emitCount is `count()`: the walk counts its own passes. The element
-// face is irrelevant to the answer — the count is the carrier's length,
-// which the walk reads anyway — so it takes no face at all.
-func (e *emitter) emitCount(src string) (callResult, *NotImplemented) {
+// face is irrelevant to the answer — over a carrier the count is its
+// length, which the walk reads anyway, and over a handle it is the
+// number of elements `next` answered `Some` for — so it takes no face.
+func (e *emitter) emitCount(s walkSrc) (callResult, *NotImplemented) {
 	n := e.slot("i64")
 	e.inst(fmt.Sprintf("store i64 0, ptr %s", n))
-	w, ni := e.openListWalk(src, 0)
+	w, ni := e.openWalk(s, 0)
 	if ni != nil {
 		return callResult{}, ni
 	}
@@ -6489,7 +6621,7 @@ func (e *emitter) emitCount(src string) (callResult, *NotImplemented) {
 // an address, exactly as a loop-carried source binding does. Its face
 // comes from init's own form; a gc init stops, the sum and tuple faces
 // having no word here yet.
-func (e *emitter) emitFold(src string, face listElem, args []ast.Expr) (callResult, *NotImplemented) {
+func (e *emitter) emitFold(s walkSrc, face listElem, args []ast.Expr) (callResult, *NotImplemented) {
 	op, isF, ni := e.emitNumExpr(args[0])
 	if ni != nil {
 		return callResult{}, ni
@@ -6505,7 +6637,7 @@ func (e *emitter) emitFold(src string, face listElem, args []ast.Expr) (callResu
 	if ni != nil {
 		return callResult{}, ni
 	}
-	w, ni := e.openListWalk(src, 0)
+	w, ni := e.openWalk(s, 0)
 	if ni != nil {
 		return callResult{}, ni
 	}
@@ -6530,7 +6662,7 @@ func (e *emitter) emitFold(src string, face listElem, args []ast.Expr) (callResu
 // payload word would be a bit pattern or a handle, and a match arm binds
 // the payload into the scalar domain, so the loop would hand the body a
 // reinterpretation of the wrong thing rather than a value.
-func (e *emitter) emitReduce(src string, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
+func (e *emitter) emitReduce(s walkSrc, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
 	if !scalarWordFace(face) {
 		return callResult{}, e.bnd()
 	}
@@ -6544,7 +6676,7 @@ func (e *emitter) emitReduce(src string, face listElem, arg ast.Expr) (callResul
 	if ni != nil {
 		return callResult{}, ni
 	}
-	w, ni := e.openListWalk(src, 0)
+	w, ni := e.openWalk(s, 0)
 	if ni != nil {
 		return callResult{}, ni
 	}
@@ -6575,7 +6707,7 @@ func (e *emitter) emitReduce(src string, face listElem, arg ast.Expr) (callResul
 // emitQuantify is `any(f)` and `all(f)`: the predicate decides, and the
 // first element that decides it ends the walk — the chapter's own body
 // recurses on the remainder, which is the same answer without the work.
-func (e *emitter) emitQuantify(name, src string, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
+func (e *emitter) emitQuantify(name string, s walkSrc, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
 	res := e.slot("i64")
 	start, hitWhen := int64(0), int64(1)
 	if name == "all" {
@@ -6586,7 +6718,7 @@ func (e *emitter) emitQuantify(name, src string, face listElem, arg ast.Expr) (c
 	if ni != nil {
 		return callResult{}, ni
 	}
-	w, ni := e.openListWalk(src, 0)
+	w, ni := e.openWalk(s, 0)
 	if ni != nil {
 		return callResult{}, ni
 	}
@@ -6615,7 +6747,7 @@ func (e *emitter) emitQuantify(name, src string, face listElem, arg ast.Expr) (c
 // carrier runs out — the predicate's answer is the whole test, so the
 // match arm the chapter's body would take is the branch here. The same
 // payload restriction reduce takes applies, for the same reason.
-func (e *emitter) emitFind(src string, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
+func (e *emitter) emitFind(s walkSrc, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
 	if !scalarWordFace(face) {
 		return callResult{}, e.bnd()
 	}
@@ -6629,7 +6761,7 @@ func (e *emitter) emitFind(src string, face listElem, arg ast.Expr) (callResult,
 	if ni != nil {
 		return callResult{}, ni
 	}
-	w, ni := e.openListWalk(src, 0)
+	w, ni := e.openWalk(s, 0)
 	if ni != nil {
 		return callResult{}, ni
 	}
@@ -6662,6 +6794,13 @@ func (e *emitter) emitFind(src string, face listElem, arg ast.Expr) (callResult,
 // at the step is at most MaxInt64-1 and the sum cannot wrap. The counter
 // is the loop's own state, not a source-visible value, so there is no
 // chapter 7 faces to report through either.
+//
+// A combinator's protocol walk advances its pass counter through here as
+// well, and there the proof does not hold: nothing bounds how many `Some`
+// answers a handle may give. The unchecked add is kept anyway, and the
+// gap is named rather than proved away — a wrap needs 2^63 passes, the
+// count is no source-visible value, and its one reader is reduce's
+// first-element test, which a wrap would merely re-arm.
 func (e *emitter) emitStep(cur string) string {
 	v := e.value()
 	e.inst(fmt.Sprintf("%%%s = add i64 %s, 1", v, cur))
