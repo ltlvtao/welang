@@ -3473,6 +3473,9 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 	if res, is, ni := e.emitAcute(fn, call); is {
 		return res, ni
 	}
+	if res, is, ni := e.emitLazy(fn, call); is {
+		return res, ni
+	}
 	if recv, ok := fn.Recv.(*ast.Ident); ok && e.concAlias[recv.Name] && !e.isLocalName(recv.Name) {
 		if spec, is := primCtors[fn.Name]; is {
 			ptr, ni := e.emitPrimCtor(spec, call.Args, typ)
@@ -6265,6 +6268,20 @@ func acuteCombinator(name string) bool {
 	return false
 }
 
+// lazyCombinator names the four lazy combinators — map, filter, take, skip
+// — whose results are Dyn<Iterator<U>> boxes rather than values (design D8
+// decision 2). They perform no element work at the call: what the call
+// builds is one adapter object holding the source box and the call's one
+// parameter, and every element the chain ever answers is the adapter's own
+// `next`'s to produce, one dispatch at a time.
+func lazyCombinator(name string) bool {
+	switch name {
+	case "map", "filter", "take", "skip":
+		return true
+	}
+	return false
+}
+
 // emitAcute recognizes and emits one combinator call. The bool says the
 // form is this face at all — the name is one of the seven AND the receiver
 // is a source's own iterator, a List's or a user Iterable's — so a
@@ -6281,7 +6298,30 @@ func (e *emitter) emitAcute(fn *ast.Member, call *ast.Call) (callResult, bool, *
 		return callResult{}, false, nil
 	}
 	im, ok := it.Fn.(*ast.Member)
-	if !ok || im.Name != "iterator" || len(it.Args) != 0 {
+	if !ok {
+		return callResult{}, false, nil
+	}
+	if im.Name != "iterator" || len(it.Args) != 0 {
+		// An inline chain (design D8 decision 2): the receiver is itself
+		// one of the lazy four, so this acute call walks the box that one
+		// answers — the boxed walkSrc, over the chain's own result face.
+		// A receiver that is neither a source's iterator nor a lazy call
+		// stays what it was: not this face, and the faces below stop it.
+		if lazyCombinator(im.Name) {
+			res, is, ni := e.emitLazy(im, it)
+			if ni != nil {
+				return callResult{}, true, ni
+			}
+			if !is || res.dyn == nil || len(res.dyn.Args) != 1 {
+				return callResult{}, false, nil
+			}
+			elem, ok := elemOfShape(e.instShape(res.dyn.Args[0]))
+			if !ok {
+				return callResult{}, true, e.bnd()
+			}
+			out, oni := e.emitAcuteLoop(fn.Name, walkSrc{box: &boxSrc{reg: res.gcReg, face: *res.dyn}}, elem, call.Args)
+			return out, true, oni
+		}
 		return callResult{}, false, nil
 	}
 	if _, ok := e.listFaceOf(im.Recv); ok {
@@ -6332,6 +6372,7 @@ type listWalk struct {
 type walkSrc struct {
 	src   string        // the carrier pointer (the List form)
 	proto *iterProtocol // the handle's protocol (the user Iterable form)
+	box   *boxSrc       // the boxed iterator (the lazy-chain form)
 }
 
 // openWalk opens the pass loop of whichever source this is, the counter
@@ -6339,6 +6380,9 @@ type walkSrc struct {
 func (e *emitter) openWalk(s walkSrc, from int64) (listWalk, *NotImplemented) {
 	if s.proto != nil {
 		return e.openProtoWalk(s.proto, from)
+	}
+	if s.box != nil {
+		return e.openBoxWalk(s.box, from)
 	}
 	return e.openListWalk(s.src, from)
 }
@@ -6437,6 +6481,55 @@ func (e *emitter) openProtoWalk(p *iterProtocol, from int64) (listWalk, *NotImpl
 	o, ni := e.emitCallCore(nextAbi, "@"+p.next.sym(), []string{"ptr " + it}, nil)
 	if ni != nil {
 		return listWalk{}, ni
+	}
+	if o.kind != ckSum {
+		return listWalk{}, e.bnd()
+	}
+	some := slotVariantIndex(o.sum, "Some")
+	if some < 0 {
+		return listWalk{}, e.bnd()
+	}
+	c := e.value()
+	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, %d", c, e.loadNum(o.sum.tag, false), some))
+	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, w.body, w.exit))
+	e.label(w.body)
+	w.word = e.loadNum(o.sum.pay, false)
+	return w, nil
+}
+
+// boxSrc is one boxed iterator a walk advances: the box's register and
+// the erased face it was built for (design D8 decision 2). The lazy four
+// answer such a box, and the walk over it is the protocol walk's own
+// shape with one word different — `next` is reached through the box's
+// table rather than a known symbol, which is emitDynCall's whole call.
+type boxSrc struct {
+	reg  string
+	face typecheck.Shape
+}
+
+// openBoxWalk emits the boxed-iterator walk's head: every pass dispatches
+// `next` once through the box's table and reads the Option's tag, the
+// first tag that is not `Some` leaving the loop — the protocol walk's own
+// termination rule, reached by the box's own route. The element word is
+// the payload the dispatched call answered, exactly the word an arm binds.
+func (e *emitter) openBoxWalk(b *boxSrc, from int64) (listWalk, *NotImplemented) {
+	n := e.blocks
+	e.blocks++
+	w := listWalk{
+		head: fmt.Sprintf("chead%d", n), body: fmt.Sprintf("cbody%d", n),
+		step: fmt.Sprintf("cstep%d", n), exit: fmt.Sprintf("cexit%d", n),
+	}
+	w.counter = e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %d, ptr %s", from, w.counter))
+	e.inst(fmt.Sprintf("br label %%%s", w.head))
+	e.label(w.head)
+	w.cur = e.loadNum(w.counter, false)
+	o, is, ni := e.emitDynCall(b.reg, b.face, "next", nil)
+	if !is || ni != nil {
+		// `next` is the protocol's one non-defaulted method, so a face
+		// this box carries and cannot dispatch it through is no walk this
+		// build can open — the stop the dispatch point itself takes.
+		return listWalk{}, e.bnd()
 	}
 	if o.kind != ckSum {
 		return listWalk{}, e.bnd()
@@ -10839,20 +10932,29 @@ func (e *emitter) iterSourceOf(x ast.Expr) (iterSource, bool) {
 // `dyn` rides the value and a call on the binding reads the thunk
 // (design D6 decision 5).
 func (e *emitter) emitIterBox(it iterSource, site typecheck.Site) (callResult, *NotImplemented) {
-	if ni := e.mkIterNext(it.head); ni != nil {
+	src, _, ni := e.listSource(it.recv)
+	if ni != nil {
 		return callResult{}, ni
 	}
-	slots, ok := e.ifaceSlots(site.Ret)
+	return e.iterBoxCore(src, site.Ret, it.head)
+}
+
+// iterBoxCore boxes one iterator object whose `next` is filed under head:
+// the object's table and thunk, the object itself, and the box around it.
+// face is the erased `Dyn<Iterator<T>>` shape the box is built for — the
+// site's own at a Dyn construction, synthesized where a lazy call needs a
+// source box no construction names (design D8 decision 2).
+func (e *emitter) iterBoxCore(src string, face typecheck.Shape, head string) (callResult, *NotImplemented) {
+	if ni := e.mkIterNext(head); ni != nil {
+		return callResult{}, ni
+	}
+	slots, ok := e.ifaceSlots(face)
 	if !ok || len(slots) == 0 {
 		// No slot list, or a marker face: there is no table to build and
 		// no `next` to reach through one, the same stop boxTable takes.
 		return callResult{}, e.bnd()
 	}
-	table, ni := e.vtableFor(site.Ret, slots, it.head)
-	if ni != nil {
-		return callResult{}, ni
-	}
-	src, _, ni := e.listSource(it.recv)
+	table, ni := e.vtableFor(face, slots, head)
 	if ni != nil {
 		return callResult{}, ni
 	}
@@ -10860,16 +10962,240 @@ func (e *emitter) emitIterBox(it iterSource, site typecheck.Site) (callResult, *
 	if ni != nil {
 		return callResult{}, ni
 	}
-	face := boxFace{kind: abiGc, words: []boxWord{{typ: "ptr", traced: true}}}
+	bf := boxFace{kind: abiGc, words: []boxWord{{typ: "ptr", traced: true}}}
 	mapOp := "null"
-	if g := e.dynMapName(face.words, false); g != "" {
+	if g := e.dynMapName(bf.words, false); g != "" {
 		mapOp = g
 	}
-	reg := e.allocObj(mapOp, dynBoxOff+8*len(face.words))
+	reg := e.allocObj(mapOp, dynBoxOff+8*len(bf.words))
 	e.gepStore(reg, 16, "ptr "+table)
 	e.gepStore(reg, dynBoxOff, "ptr "+obj)
-	f := site.Ret
+	f := face
 	return callResult{kind: ckGc, gcReg: reg, dyn: &f}, nil
+}
+
+// iterFaceOf spells one element face as the erased Dyn<Iterator<T>> shape a
+// lazy chain's boxes carry: the builtin Iterator declaration at that one
+// argument. The shape is synthesized rather than read from a site because
+// no construction names it — a lazy call's result is a box this emitter
+// builds — and a builtin declaration's bare name keys it exactly as the
+// builtin faces themselves are keyed, which is collision-free for the
+// reason design D1's note on builtin declarations gives.
+func iterFaceOf(elem listElem) typecheck.Shape {
+	return typecheck.Shape{
+		Kind: typecheck.ShapeDyn,
+		Decl: typecheck.ShapeDecl{Name: "Iterator"},
+		Args: []typecheck.Shape{{Kind: typecheck.ShapeBase, Name: strKindName(elem.kind)}},
+	}
+}
+
+// elemOfShape reads one Iterator face's argument back as the element face a
+// walk works in — the shape-level half of iterFaceOf, for faces that arrive
+// from the check stage (a map's recorded result, an inner chain's box)
+// rather than from a source's carrier. It admits the same one-word
+// vocabulary the carrier walks work in: a Base name whose word is a value
+// of the element's own type. String is a Base name whose value is two
+// words, so it stops here rather than fold half an element — the boundary
+// the source vocabulary takes at listFaceOf, read at this face's own door.
+func elemOfShape(s typecheck.Shape) (listElem, bool) {
+	if s.Kind != typecheck.ShapeBase {
+		return listElem{}, false
+	}
+	switch s.Name {
+	case "Float64":
+		return listElem{kind: skF64}, true
+	case "String":
+		return listElem{}, false
+	}
+	k := baseStrKind(s.Name)
+	if k == skNone || k == skStr {
+		return listElem{}, false
+	}
+	return listElem{kind: k, num: narrowName(s.Name)}, true
+}
+
+// emitListIterBox boxes one `<list>.iterator()` for a lazy chain's source:
+// the builtin object under its own head, the very construction a Dyn box
+// performs at a site (iterBoxCore), at the face the element's walk works
+// in. It answers the box's register — what a lazy adapter holds at its
+// sixteenth byte.
+func (e *emitter) emitListIterBox(it iterSource) (string, *NotImplemented) {
+	src, _, ni := e.listSource(it.recv)
+	if ni != nil {
+		return "", ni
+	}
+	res, ni := e.iterBoxCore(src, iterFaceOf(it.elem), it.head)
+	if ni != nil {
+		return "", ni
+	}
+	return res.gcReg, nil
+}
+
+// lazySource resolves one lazy combinator's receiver into the box its
+// adapter walks: a builtin List's iterator, boxed through its object, or
+// the box an inner lazy call answered — the chain's own inductive case.
+// Anything else (a String's iterator, a bare binding, a call this build
+// cannot key on) is no source this face admits, and the false answer hands
+// the call back to the faces below it.
+func (e *emitter) lazySource(recv ast.Expr) (string, typecheck.Shape, bool, *NotImplemented) {
+	call, ok := recv.(*ast.Call)
+	if !ok {
+		return "", typecheck.Shape{}, false, nil
+	}
+	m, ok := call.Fn.(*ast.Member)
+	if !ok {
+		return "", typecheck.Shape{}, false, nil
+	}
+	switch {
+	case m.Name == "iterator":
+		it, ok := e.iterSourceOf(recv)
+		if !ok {
+			return "", typecheck.Shape{}, false, nil
+		}
+		reg, ni := e.emitListIterBox(it)
+		if ni != nil {
+			return "", typecheck.Shape{}, true, ni
+		}
+		return reg, iterFaceOf(it.elem), true, nil
+	case lazyCombinator(m.Name):
+		res, is, ni := e.emitLazy(m, call)
+		if ni != nil {
+			return "", typecheck.Shape{}, true, ni
+		}
+		if !is || res.dyn == nil {
+			return "", typecheck.Shape{}, false, nil
+		}
+		return res.gcReg, *res.dyn, true, nil
+	}
+	return "", typecheck.Shape{}, false, nil
+}
+
+// emitLazy recognizes and emits one lazy combinator call (design D8
+// decision 2). The call performs no element work — chapter 11's rule — so
+// what it emits is the adapter object holding the source box and the one
+// parameter, plus the box that carries the adapter under the chain's
+// result face Dyn<Iterator<U>>: map's U is the check stage's recorded
+// application, the parameter alone being unable to say what it is, and the
+// other three keep the source's own T. The result registers in the gc
+// binding's dyn face, so a further lazy call chains onto it and an acute
+// one walks it — emitAcute's inline-chain arm and emitDynCall's are the
+// two readers of that face.
+//
+// The bool says the form is this face at all — the name is one of the four
+// AND the receiver is a source this face admits — so a failure past that
+// point is a boundary of this face rather than a fall-through.
+func (e *emitter) emitLazy(fn *ast.Member, call *ast.Call) (callResult, bool, *NotImplemented) {
+	if !lazyCombinator(fn.Name) {
+		return callResult{}, false, nil
+	}
+	if len(call.Args) != 1 {
+		return callResult{}, true, e.bnd()
+	}
+	srcBox, srcFace, ok, ni := e.lazySource(fn.Recv)
+	if ni != nil {
+		return callResult{}, true, ni
+	}
+	if !ok || len(srcFace.Args) != 1 {
+		return callResult{}, false, nil
+	}
+	elem, ok := elemOfShape(e.instShape(srcFace.Args[0]))
+	if !ok {
+		return callResult{}, true, e.bnd()
+	}
+	tn := strKindName(elem.kind)
+	resFace := srcFace
+	head := ""
+	var u listElem
+	words := []boxWord{{typ: "ptr", traced: true}}
+	param := ""
+	switch fn.Name {
+	case "map":
+		site, ok := e.siteOf(call)
+		if !ok || site.Ret.Kind != typecheck.ShapeDyn || len(site.Ret.Args) != 1 {
+			// No recorded application, or one whose result is not the
+			// iterator face: U is not this stage's to guess.
+			return callResult{}, true, e.bnd()
+		}
+		uArg := e.instShape(site.Ret.Args[0])
+		u, ok = elemOfShape(uArg)
+		if !ok {
+			return callResult{}, true, e.bnd()
+		}
+		resFace = typecheck.Shape{
+			Kind: typecheck.ShapeDyn,
+			Decl: typecheck.ShapeDecl{Name: "Iterator"},
+			Args: []typecheck.Shape{uArg},
+		}
+		head = "MapIter$" + tn + "$" + strKindName(u.kind)
+		// The fn value's signature is the vocabulary's own spelling: one
+		// parameter at the source's element face, a return at U's — the
+		// same faces an acute callback declares through.
+		uk := faceAbiKind(u)
+		sig := fnAbi{ret: uk, retTyp: abiTypOf(uk), retName: strKindName(u.kind),
+			params: []fnParamAbi{faceParam(elem)}}
+		fv, ni := e.emitFnArg(call.Args[0], &sig)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		param = "ptr " + fv.carrier
+	case "filter":
+		head = "FilterIter$" + tn
+		fv, ni := e.emitFnArg(call.Args[0], new(acuteCallback("any", elem, 0)))
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		param = "ptr " + fv.carrier
+	default: // take and skip: one count, the same word either way
+		op, isF, ni := e.emitNumExpr(call.Args[0])
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		if isF {
+			return callResult{}, true, e.bnd()
+		}
+		head = strings.ToUpper(fn.Name[:1]) + fn.Name[1:] + "Iter$" + tn
+		words = []boxWord{{typ: "i64"}}
+		param = "i64 " + op
+	}
+	if ni := e.mkLazyNext(head, fn.Name, elem, u); ni != nil {
+		return callResult{}, true, ni
+	}
+	slots, ok := e.ifaceSlots(resFace)
+	if !ok || len(slots) == 0 {
+		return callResult{}, true, e.bnd()
+	}
+	table, ni := e.vtableFor(resFace, slots, head)
+	if ni != nil {
+		return callResult{}, true, ni
+	}
+	obj := e.emitLazyObject(words, srcBox, param)
+	bf := boxFace{kind: abiGc, words: []boxWord{{typ: "ptr", traced: true}}}
+	mapOp := "null"
+	if g := e.dynMapName(bf.words, false); g != "" {
+		mapOp = g
+	}
+	reg := e.allocObj(mapOp, dynBoxOff+8*len(bf.words))
+	e.gepStore(reg, 16, "ptr "+table)
+	e.gepStore(reg, dynBoxOff, "ptr "+obj)
+	f := resFace
+	return callResult{kind: ckGc, gcReg: reg, dyn: &f}, true, nil
+}
+
+// emitLazyObject allocates one lazy adapter: the pair design D8 decision 2
+// names — the source box at 16 (traced: a box is a gc value) and the call's
+// one parameter at 24. The parameter's face picks this object's descriptor:
+// a fn value's carrier for map and filter, a plain count for take and skip,
+// the untraced half being the same word the builtin iterator object's index
+// is, so it adds no global of its own.
+func (e *emitter) emitLazyObject(words []boxWord, srcBox, param string) string {
+	mapOp := "null"
+	if g := e.dynMapName(words, true); g != "" {
+		mapOp = g
+	}
+	obj := e.allocObj(mapOp, iterObjSize)
+	e.gepStore(obj, 16, "ptr "+srcBox)
+	e.gepStore(obj, 24, param)
+	return obj
 }
 
 // emitIterObject allocates one builtin iterator object: the pair design D7
@@ -10965,6 +11291,199 @@ func (e *emitter) emitIterNext(fd *fnDef) {
 			"  ret { i64, i64, i64 } %%r2\n"+
 			"}\n",
 		fd.abi.retTyp, fd.sym()))
+}
+
+// mkLazyNext registers one lazy adapter head's `next` the way mkIterNext
+// registers a builtin object's: a fnDef whose abiOK short-circuits
+// classify (no impl declares this head — the adapter is the emitter's own
+// construction), keyed so vtableFor finds it when the chain's box asks for
+// its table. The define lands in e.thunks, not methodsOrd, for the same
+// reason the builtin object's does: it is plumbing the vtable reaches
+// through a thunk, not a method a call names.
+func (e *emitter) mkLazyNext(head, name string, t, u listElem) *NotImplemented {
+	key := head + ".next"
+	if _, ok := e.methods[key]; ok {
+		return nil
+	}
+	fd := &fnDef{
+		key:     e.curKey,
+		name:    "next",
+		recvKey: head,
+		abi:     fnAbi{ret: abiSum, retTyp: "{ i64, i64, i64 }"},
+		abiOK:   true,
+	}
+	e.methods[key] = fd
+	e.emitLazyNext(fd, name, t, u)
+	return nil
+}
+
+// emitLazyNext emits one lazy adapter's `next` define: the four bodies
+// design D8 decision 2 names, reading the pair emitLazyObject laid down —
+// the source box at 16, the call's one parameter at 24.
+//
+// Every body advances the SOURCE box: the adapter holds it at 16, and the
+// box's table slot 0 is `next`, the one method the Iterator face leaves a
+// head to answer (T6's pin: exactly one slot). The tag test names Some the
+// way every next this emitter writes it — the emitter's own variant table
+// — which is safe here for a reason stronger than the builtin object's:
+// the only sources this face admits (lazySource) are nexts this emitter
+// itself synthesized, a builtin object's or another adapter's, so no
+// callee's variant table can disagree with the one this test names. A user
+// Iterable is no source this face reads; it stays the protocol face's.
+//
+// map and filter read the parameter as a fn value's carrier — the pair at
+// 16 and 24 the fn carrier always is — and call it with the payload word
+// in the element's own domain (a Float64 element crosses as a double, and
+// map's answer converts back when U is a Float64, the same two casts an
+// acute callback's domain takes). filter's miss loops: the failed
+// predicate re-enters the dispatch, so the adapter answers the first
+// element that holds, and take and skip read the parameter as a plain
+// count in a slot that crosses their back edges — take counts down before
+// each dispatch, skip counts down through a drain loop of its own and then
+// passes the rest through a second dispatch (the two need separate
+// registers, so skip prefixes its drain's with d and its pass's with p).
+// take and skip pass the payload word untouched: the sum's word is the
+// element's bits whatever the element's type, and no fn of theirs ever
+// reads it.
+func (e *emitter) emitLazyNext(fd *fnDef, name string, t, u listElem) {
+	// dispatch is the prologue every body advances the source with; pre
+	// separates skip's two dispatches, and into is where a Some goes.
+	dispatch := func(pre, into string) string {
+		return "" +
+			"  %" + pre + "sp = getelementptr i8, ptr %self, i64 16\n" +
+			"  %" + pre + "src = load ptr, ptr %" + pre + "sp\n" +
+			"  %" + pre + "stp = getelementptr i8, ptr %" + pre + "src, i64 16\n" +
+			"  %" + pre + "tbl = load ptr, ptr %" + pre + "stp\n" +
+			"  %" + pre + "thp = getelementptr i8, ptr %" + pre + "tbl, i64 0\n" +
+			"  %" + pre + "thk = load ptr, ptr %" + pre + "thp\n" +
+			"  %" + pre + "o = call { i64, i64, i64 } %" + pre + "thk(ptr %" + pre + "src)\n" +
+			"  %" + pre + "tag = extractvalue { i64, i64, i64 } %" + pre + "o, 0\n" +
+			"  %" + pre + "is = icmp eq i64 %" + pre + "tag, 1\n" +
+			"  br i1 %" + pre + "is, label %" + into + ", label %none\n"
+	}
+	// carrier loads the fn value the adapter holds at 24 — the pair every
+	// fn carrier is, its code pointer at 16 and its environment at 24.
+	carrier := "" +
+		"  %cp = getelementptr i8, ptr %self, i64 24\n" +
+		"  %car = load ptr, ptr %cp\n" +
+		"  %fp = getelementptr i8, ptr %car, i64 16\n" +
+		"  %fn = load ptr, ptr %fp\n" +
+		"  %ep = getelementptr i8, ptr %car, i64 24\n" +
+		"  %env = load ptr, ptr %ep\n"
+	// tail answers the three-word sum; q names keep clear of the working
+	// registers a body may already have taken.
+	tail := "" +
+		"  %q0 = insertvalue { i64, i64, i64 } undef, i64 %tg, 0\n" +
+		"  %q1 = insertvalue { i64, i64, i64 } %q0, i64 %pw, 1\n" +
+		"  %q2 = insertvalue { i64, i64, i64 } %q1, i64 0, 2\n" +
+		"  ret { i64, i64, i64 } %q2\n"
+	// elemCross readies the payload word as the fn's parameter operand: a
+	// Float64 element's word is its bits, and the call wants the double.
+	var elemCross string
+	argOp := "i64 %v"
+	if t.kind == skF64 {
+		elemCross = "  %vd = bitcast i64 %v to double\n"
+		argOp = "double %vd"
+	}
+	body := ""
+	switch name {
+	case "map":
+		uTyp := "i64"
+		mapCast := ""
+		payReg := "%m"
+		if u.kind == skF64 {
+			uTyp = "double"
+			mapCast = "  %w = bitcast double %m to i64\n"
+			payReg = "%w"
+		}
+		body = "" +
+			"entry:\n" +
+			dispatch("", "step") +
+			"step:\n" +
+			"  %v = extractvalue { i64, i64, i64 } %o, 1\n" +
+			elemCross +
+			carrier +
+			"  %m = call " + uTyp + " %fn(ptr %env, " + argOp + ")\n" +
+			mapCast +
+			"  br label %none\n" +
+			"none:\n" +
+			"  %tg = phi i64 [ 1, %step ], [ 0, %entry ]\n" +
+			"  %pw = phi i64 [ " + payReg + ", %step ], [ 0, %entry ]\n" +
+			tail
+	case "filter":
+		// The miss re-enters the dispatch, and a dispatch a back edge
+		// reaches cannot live in the entry block — LLVM forbids a branch
+		// to it, whichever name the first block carries — so the body
+		// opens with a fall-through into a loop head of its own.
+		body = "" +
+			"entry:\n" +
+			"  br label %loop\n" +
+			"loop:\n" +
+			dispatch("", "test") +
+			"test:\n" +
+			"  %v = extractvalue { i64, i64, i64 } %o, 1\n" +
+			elemCross +
+			carrier +
+			"  %b = call i64 %fn(ptr %env, " + argOp + ")\n" +
+			"  %keep = icmp ne i64 %b, 0\n" +
+			"  br i1 %keep, label %step, label %loop\n" +
+			"step:\n" +
+			"  br label %none\n" +
+			"none:\n" +
+			"  %tg = phi i64 [ 1, %step ], [ 0, %loop ]\n" +
+			"  %pw = phi i64 [ %v, %step ], [ 0, %loop ]\n" +
+			tail
+	default: // take and skip
+		if name == "take" {
+			body = "" +
+				"entry:\n" +
+				"  %rp = getelementptr i8, ptr %self, i64 24\n" +
+				"  %r = load i64, ptr %rp\n" +
+				"  %done = icmp sle i64 %r, 0\n" +
+				"  br i1 %done, label %none, label %head\n" +
+				"head:\n" +
+				dispatch("", "step") +
+				"step:\n" +
+				"  %v = extractvalue { i64, i64, i64 } %o, 1\n" +
+				"  %r1 = sub i64 %r, 1\n" +
+				"  store i64 %r1, ptr %rp\n" +
+				"  br label %none\n" +
+				"none:\n" +
+				"  %tg = phi i64 [ 1, %step ], [ 0, %entry ], [ 0, %head ]\n" +
+				"  %pw = phi i64 [ %v, %step ], [ 0, %entry ], [ 0, %head ]\n" +
+				tail
+		} else {
+			// The drain loop's back edge reaches check, so check cannot
+			// be the entry block — the body opens with the same
+			// fall-through filter's loop head takes.
+			body = "" +
+				"entry:\n" +
+				"  br label %check\n" +
+				"check:\n" +
+				"  %sp0 = getelementptr i8, ptr %self, i64 24\n" +
+				"  %s0 = load i64, ptr %sp0\n" +
+				"  %draining = icmp sgt i64 %s0, 0\n" +
+				"  br i1 %draining, label %drain, label %pass\n" +
+				"drain:\n" +
+				dispatch("d", "dec") +
+				"dec:\n" +
+				"  %s1 = sub i64 %s0, 1\n" +
+				"  store i64 %s1, ptr %sp0\n" +
+				"  br label %check\n" +
+				"pass:\n" +
+				dispatch("p", "step") +
+				"step:\n" +
+				"  %v = extractvalue { i64, i64, i64 } %po, 1\n" +
+				"  br label %none\n" +
+				"none:\n" +
+				"  %tg = phi i64 [ 1, %step ], [ 0, %drain ], [ 0, %pass ]\n" +
+				"  %pw = phi i64 [ %v, %step ], [ 0, %drain ], [ 0, %pass ]\n" +
+				tail
+		}
+	}
+	e.thunks = append(e.thunks, fmt.Sprintf(
+		"define internal %s @%s(ptr %%self) {\n%s}\n",
+		fd.abi.retTyp, fd.sym(), body))
 }
 
 // boxFace resolves one concrete type to the payload face its box stores it

@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-lazy-chain",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    let ys = xs.iterator().map(|x| x * 10).take(2).collect()\n    for y in ys { io.println(\"mt ${y}\") }\n\n    let a = xs.iterator().skip(2).collect()\n    for v in a { io.println(\"sk ${v}\") }\n\n    let b = xs.iterator().filter(|x| x > 2).count()\n    io.println(\"cnt ${b}\")\n\n    let c = xs.iterator().map(|x| x * 2).skip(1).take(2).collect()\n    for v in c { io.println(\"ch ${v}\") }\n\n    let fs = [1.5, 2.5, 3.5]\n    let d = fs.iterator().map(|x| x + 1.0).collect()\n    for v in d { io.println(\"f ${v}\") }\n\n    let e = xs.iterator().map(|x| x * 10).take(0).collect()\n    let n = e.iterator().count()\n    io.println(\"zero ${n}\")\n\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "mt 10\nmt 20\nsk 3\ncnt 1\nch 4\nch 6\nf 2.5\nf 3.5\nf 4.5\nzero 0\n",
+  "stderr": ""
+}

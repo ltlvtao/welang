@@ -750,20 +750,13 @@ pub fn main() effect io -> Result<(), AppError> {
 	}
 }
 
-// TestAcuteOutsideTheSixStops: the five lazy combinators are B1b's — their
-// Dyn<Iterator<U>> results need the vtable face — so a lazy name over a
-// List receiver is not this face and lands on the boundary below.
-func TestAcuteOutsideTheSixStops(t *testing.T) {
-	_, ni := Emit(listModule(nil,
-		listBind("xs", intLit("1")),
-		letBind("n", acute(ident("xs"), "filter",
-			lam(binOp(">", ident("x"), intLit("0")), "x"))),
-		okReturn(),
-	), "demo")
-	if ni == nil || ni.What != bndMainBody {
-		t.Fatalf("want %q, got %+v", bndMainBody, ni)
-	}
-}
+// No outside-the-set pin lives here anymore: a lazy name over a bare List
+// receiver (`xs.filter(..)` without the `.iterator()`) is the checker's own
+// stop — the List method vocabulary is the standard library's (chapter 15),
+// so the name resolves there and stops on the std-module word before the
+// emission ever sees it — and the lazy face's own negative pins (a String
+// source, a gc element source) run through the real pipeline in
+// lazy_test.go.
 
 // TestAcuteCollectTakesNoArgument: the call form is `collect()` — a
 // with-argument spelling is no form this family recognises, so it stops
