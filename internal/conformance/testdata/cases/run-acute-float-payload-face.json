@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-float-payload-face",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let fs = [1.5, 2.5]\n    let r = fs.iterator().reduce(|p, q| p + q)\n    match r {\n        Some(v) => { io.println(\"sum ${v}\") }\n        None => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "sum 4\n",
+  "stderr": ""
+}

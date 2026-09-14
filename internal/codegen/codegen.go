@@ -6623,21 +6623,6 @@ func protoElemFace(p fnParamAbi) (listElem, bool) {
 	return listElem{}, false
 }
 
-// scalarWordFace reports whether one element's word is a value of the
-// element's own type in the i64 domain — the only payload reduce and find
-// can answer, a match arm binding the payload into exactly that domain. A
-// gc record's word is a handle and a Float64's is a bit pattern: both are
-// words, and neither is a value of the element's type, which is why
-// neither family is in this set — listElemFace gives a gc element no kind
-// at all, and a Float64 the one kind whose word is not its value.
-func scalarWordFace(face listElem) bool {
-	switch face.kind {
-	case skI64, skU64, skBool, skRune:
-		return true
-	}
-	return false
-}
-
 // faceAbiKind is the calling face one element's word crosses as.
 func faceAbiKind(face listElem) fnAbiKind {
 	switch {
@@ -6665,6 +6650,58 @@ func faceParam(face listElem) fnParamAbi {
 		p.typ = "Float64"
 	}
 	return p
+}
+
+// payloadFace is the face reduce and find answer Some's payload in — the
+// element's own word as the ABI carries it: an i64-domain scalar as its
+// value, a Float64 as its bit pattern, a gc record as its handle. The
+// answer's slot gives Some one payload word, and one word is exactly what
+// each of these faces is; the shape table the answer carries then binds a
+// match arm's — or a String position's — read by the same face. A
+// String's pair and a face the walk never fixed report false, so the
+// payload stops at its own boundary rather than binding half an element.
+func payloadFace(face listElem) (fnParamAbi, bool) {
+	if face.kind == skStr || (!face.gc && face.kind == skNone) {
+		return fnParamAbi{}, false
+	}
+	p := faceParam(face)
+	if len(abiWordTypes(p)) != 1 {
+		return fnParamAbi{}, false
+	}
+	return p, true
+}
+
+// optionShapes is the answer's own table: None carries nothing, Some
+// carries the element's payload word — the same order the tag arithmetic
+// writes (None is 0, Some is 1), so the arm's discriminant test and the
+// table's index agree without either reading the other.
+func optionShapes(p fnParamAbi) []sumVariantShape {
+	return []sumVariantShape{{name: "None"}, {name: "Some", pay: []fnParamAbi{p}}}
+}
+
+// payRoundTrip reads one payload word back as the calling face the folded
+// step takes it in, and spells the value the step answers so it goes back
+// into the word — the two bit disciplines every payload word crosses by,
+// a handle through ptrtoint and a double through bitcast, which is how it
+// went in and how an arm's binding reads it out.
+func (e *emitter) payRoundTrip(pay string, face listElem) (cur string, back func(string) string) {
+	switch {
+	case face.gc:
+		return "ptr " + e.wordPtr(e.loadNum(pay, false)), func(r string) string {
+			v := e.value()
+			e.inst(fmt.Sprintf("%%%s = ptrtoint ptr %%%s to i64", v, r))
+			return "%" + v
+		}
+	case face.kind == skF64:
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = bitcast i64 %s to double", v, e.loadNum(pay, false)))
+		return "double %" + v, func(r string) string {
+			b := e.value()
+			e.inst(fmt.Sprintf("%%%s = bitcast double %%%s to i64", b, r))
+			return "%" + b
+		}
+	}
+	return "i64 " + e.loadNum(pay, false), func(r string) string { return "%" + r }
 }
 
 // acuteCallback is the callback's signature, read off the combinator's
@@ -6881,12 +6918,15 @@ func (e *emitter) emitFold(s walkSrc, face listElem, args []ast.Expr) (callResul
 // emitReduce is `reduce(f)` over a non-empty carrier and None over an
 // empty one: the first element is the accumulator, every later one is a
 // folded step. The pair is the runtime's Option ABI — None is 0, Some is
-// 1, as receive's own table has it. A Float64 or gc element stops: the
-// payload word would be a bit pattern or a handle, and a match arm binds
-// the payload into the scalar domain, so the loop would hand the body a
-// reinterpretation of the wrong thing rather than a value.
+// 1, as receive's own table has it. The payload word carries the element
+// by its own face — a Float64 as its bit pattern, a gc record as its
+// handle, an i64-domain scalar as its value — and the folded step crosses
+// that face through payRoundTrip, so an arm's binding reads the same
+// value the element was. A String's pair does not fit the one word, so
+// its payload stops.
 func (e *emitter) emitReduce(s walkSrc, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
-	if !scalarWordFace(face) {
+	p, ok := payloadFace(face)
+	if !ok {
 		return callResult{}, e.bnd()
 	}
 	tag := e.slot("i64")
@@ -6919,12 +6959,13 @@ func (e *emitter) emitReduce(s walkSrc, face listElem, arg ast.Expr) (callResult
 		return callResult{}, ni
 	}
 	parts := e.fnParts(fv)
-	cur := e.loadNum(pay, false)
+	cur, back := e.payRoundTrip(pay, face)
+	typ := abiTypOf(faceAbiKind(face))
 	r := e.value()
-	e.inst(fmt.Sprintf("%%%s = call i64 %s(ptr %s, i64 %s, %s)", r, parts.fnptr, parts.env, cur, elem))
-	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", r, pay))
+	e.inst(fmt.Sprintf("%%%s = call %s %s(ptr %s, %s, %s)", r, typ, parts.fnptr, parts.env, cur, elem))
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", back(r), pay))
 	e.closeListWalk(w)
-	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, pay1: pay1, variants: []string{"None", "Some"}}}, nil
+	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, pay1: pay1, variants: []string{"None", "Some"}, shapes: optionShapes(p)}}, nil
 }
 
 // emitQuantify is `any(f)` and `all(f)`: the predicate decides, and the
@@ -6968,10 +7009,13 @@ func (e *emitter) emitQuantify(name string, s walkSrc, face listElem, arg ast.Ex
 
 // emitFind is `find(f)`: Some(element) at the first hit, None when the
 // carrier runs out — the predicate's answer is the whole test, so the
-// match arm the chapter's body would take is the branch here. The same
-// payload restriction reduce takes applies, for the same reason.
+// match arm the chapter's body would take is the branch here. The
+// payload word carries the element by its own face, as reduce's does;
+// the predicate already took the element through listElemWord, and the
+// hit arm stores the same word the walk produced.
 func (e *emitter) emitFind(s walkSrc, face listElem, arg ast.Expr) (callResult, *NotImplemented) {
-	if !scalarWordFace(face) {
+	p, ok := payloadFace(face)
+	if !ok {
 		return callResult{}, e.bnd()
 	}
 	tag := e.slot("i64")
@@ -6993,13 +7037,13 @@ func (e *emitter) emitFind(s walkSrc, face listElem, arg ast.Expr) (callResult, 
 		return callResult{}, ni
 	}
 	parts := e.fnParts(fv)
-	p := e.value()
-	e.inst(fmt.Sprintf("%%%s = call i64 %s(ptr %s, %s)", p, parts.fnptr, parts.env, elem))
+	pv := e.value()
+	e.inst(fmt.Sprintf("%%%s = call i64 %s(ptr %s, %s)", pv, parts.fnptr, parts.env, elem))
 	n := e.blocks
 	e.blocks++
 	hit, cont := fmt.Sprintf("fhit%d", n), fmt.Sprintf("fcont%d", n)
 	c := e.value()
-	e.inst(fmt.Sprintf("%%%s = icmp ne i64 %%%s, 0", c, p))
+	e.inst(fmt.Sprintf("%%%s = icmp ne i64 %%%s, 0", c, pv))
 	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, hit, cont))
 	e.label(hit)
 	e.inst(fmt.Sprintf("store i64 1, ptr %s", tag))
@@ -7007,7 +7051,7 @@ func (e *emitter) emitFind(s walkSrc, face listElem, arg ast.Expr) (callResult, 
 	e.inst(fmt.Sprintf("br label %%%s", w.exit))
 	e.label(cont)
 	e.closeListWalk(w)
-	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, pay1: pay1, variants: []string{"None", "Some"}}}, nil
+	return callResult{kind: ckSum, sum: sumSlot{tag: tag, pay: pay, pay1: pay1, variants: []string{"None", "Some"}, shapes: optionShapes(p)}}, nil
 }
 
 // emitStep advances the loop counter by one. The add is unchecked because

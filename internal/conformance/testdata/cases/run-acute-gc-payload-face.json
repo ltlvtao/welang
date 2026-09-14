@@ -1,0 +1,16 @@
+{
+  "name": "run-acute-gc-payload-face",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { n: Int64 }\n\npub fn main() effect io -> Result<(), AppError> {\n    let cs = [Cell { n: 1 }, Cell { n: 7 }]\n    let f = cs.iterator().find(|c| c.n > 5)\n    match f {\n        Some(c) => { io.println(\"found ${c.n}\") }\n        None => { io.println(\"none\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "found 7\n",
+  "stderr": ""
+}

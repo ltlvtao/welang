@@ -30,8 +30,10 @@ import (
 //     List<T> the element vocabulary reads directly, and no box is built
 //     on its way out (T8-1);
 //   - reduce and find answer Option<E> — the sum pair, None 0 and Some 1 —
-//     and stop where the payload word cannot be the value a match arm
-//     would bind.
+//     with the payload carried in the element's own face: a Float64 rides
+//     its double bits, a gc element its handle, and a match arm binds the
+//     value back out of that face (T9). Multi-word payloads — a String, a
+//     tuple — still stop: one pass has one word to give.
 //
 // The emitted shape is pinned below; the answers are the conformance
 // goldens' and the loop's own behaviour is T7-2's, already pinned.
@@ -399,32 +401,145 @@ func TestAcuteBoolAndRunePayloadsAnswer(t *testing.T) {
 	), "chead")
 }
 
-// TestAcuteReduceFloatElementsStopAtTheBoundary: reduce answers
-// Option<E>, and a match arm binds the payload into the scalar domain —
-// so a Float64 element's payload word would be a bit pattern the arm
-// would read as an integer. The element domain is the loop's own, and the
-// loop stops where it cannot answer the declared type.
-func TestAcuteReduceFloatElementsStopAtTheBoundary(t *testing.T) {
-	_, ni := Emit(listModule(nil,
+// TestAcuteReduceFloatPayloadAnswersInItsOwnFace: a Float64's payload word
+// is its bit pattern — the very word the walk read — so the first pass
+// stores it raw, every later pass crosses it back to the double it holds
+// before the callback and after it, and the arm's binding reads it out the
+// same way. The answer never leaves the element's face, which is what
+// makes `Some(v)`'s v a Float64 rather than the integer the word would
+// otherwise read as.
+func TestAcuteReduceFloatPayloadAnswersInItsOwnFace(t *testing.T) {
+	ir := assertClean(t, listModule(nil,
 		listBind("fs", floatLit("1.5"), floatLit("2.5")),
-		letBind("n", acute(ident("fs"), "reduce",
-			lam(binOp("+", ident("a"), ident("b")), "a", "b"))),
+		letBind("r", acute(ident("fs"), "reduce",
+			lam(binOp("+", ident("p"), ident("q")), "p", "q"))),
+		&ast.ExprStmt{Expr: &ast.Match{Scrutinee: ident("r"), Arms: []ast.MatchArm{
+			{Pat: &ast.PatVariant{Name: "Some", Args: []ast.Pattern{&ast.PatBinding{Name: "v"}}},
+				Body: blockOf(ioCall("io", "println", interpLit([]string{"sum ", ""}, ident("v"))))},
+			{Pat: &ast.PatVariant{Name: "None"},
+				Body: blockOf(ioCall("io", "println", strLit(`"none"`)))},
+		}}},
 		okReturn(),
-	), "demo")
-	if ni == nil || ni.What != bndMainBody {
-		t.Fatalf("want %q, got %+v", bndMainBody, ni)
+	))
+	m := regexp.MustCompile(`store i64 0, ptr (%v\d+)\n\s+store i64 0, ptr (%v\d+)`).FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("reduce opens with the pair at None:\n%s", ir)
+	}
+	tag, pay := regexp.QuoteMeta(m[1]), regexp.QuoteMeta(m[2])
+	elem := regexp.MustCompile(`cbody\d+:\n\s+(%v\d+) = call i64 @__we_list_get`).FindStringSubmatch(ir)
+	if elem == nil {
+		t.Fatalf("the body reads the element:\n%s", ir)
+	}
+	w := regexp.QuoteMeta(elem[1])
+	if !regexp.MustCompile(`rfirst\d+:\n\s+store i64 1, ptr ` + tag + `\n\s+store i64 ` + w + `, ptr ` + pay + `\n\s+br label %cstep\d+`).MatchString(ir) {
+		t.Fatalf("the first element becomes Some(word), the bit pattern itself:\n%s", ir)
+	}
+	if !regexp.MustCompile(`rlater\d+:\n\s+%v\d+ = bitcast i64 ` + w + ` to double\n` + midLoads + `\s+%v\d+ = load i64, ptr ` + pay + `\n\s+%v\d+ = bitcast i64 %v\d+ to double\n\s+%v\d+ = call double %v\d+\(ptr %v\d+, double %v\d+, double %v\d+\)\n\s+%v\d+ = bitcast double %v\d+ to i64\n\s+store i64 %v\d+, ptr ` + pay).MatchString(ir) {
+		t.Fatalf("a later pass folds in the double domain and stores the bits back:\n%s", ir)
+	}
+	// The arm binds v out of the same face. Both the folded step and the
+	// arm read the slot and cross to a double, so the pair alone is not the
+	// arm's — what discriminates is which double the hole renders.
+	fed := false
+	for _, a := range regexp.MustCompile(`(%v\d+) = load i64, ptr `+pay+`\n\s+(%v\d+) = bitcast i64 %v\d+ to double\n`).FindAllStringSubmatch(ir, -1) {
+		if strings.Contains(ir, "@__we_str_of_f64(double "+a[2]+")") {
+			fed = true
+		}
+	}
+	if !fed {
+		t.Fatalf("the arm's binding renders as the double the word holds:\n%s", ir)
 	}
 }
 
-// TestAcuteFindGcElementsStopAtTheBoundary: the same rule for a gc
-// handle — the payload word would be an address the arm would read as a
-// number.
-func TestAcuteFindGcElementsStopAtTheBoundary(t *testing.T) {
-	_, ni := Emit(listModule(
+// TestAcuteFindGcPayloadAnswersInItsOwnFace: a gc record's payload word is
+// its handle — the very word the walk read — so the hit stores the handle
+// itself and the arm's binding turns it back into the pointer it names,
+// the record key carried in the binding so a field read inside the body
+// lands on the record's own offsets. `Some(c)`'s c is the record, not the
+// address-as-integer the word would otherwise read as.
+func TestAcuteFindGcPayloadAnswersInItsOwnFace(t *testing.T) {
+	ir := assertClean(t, listModule(
 		[]ast.Item{recDecl("Cell", "gc", fld("n", "Int64"))},
 		letBind("cs", &ast.ListLit{Elems: []ast.Expr{construct("Cell", init1("n", intLit("1")))}}),
-		letBind("n", acute(ident("cs"), "find",
+		letBind("f", acute(ident("cs"), "find",
 			lam(binOp(">", memberOf(ident("c"), "n"), intLit("0")), "c"))),
+		&ast.ExprStmt{Expr: &ast.Match{Scrutinee: ident("f"), Arms: []ast.MatchArm{
+			{Pat: &ast.PatVariant{Name: "Some", Args: []ast.Pattern{&ast.PatBinding{Name: "c"}}},
+				Body: blockOf(ioCall("io", "println", interpLit([]string{"found ", ""}, memberOf(ident("c"), "n"))))},
+			{Pat: &ast.PatVariant{Name: "None"},
+				Body: blockOf(ioCall("io", "println", strLit(`"none"`)))},
+		}}},
+		okReturn(),
+	))
+	m := regexp.MustCompile(`store i64 0, ptr (%v\d+)\n\s+store i64 0, ptr (%v\d+)`).FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("find opens with the pair at None:\n%s", ir)
+	}
+	tag, pay := regexp.QuoteMeta(m[1]), regexp.QuoteMeta(m[2])
+	elem := regexp.MustCompile(`cbody\d+:\n\s+(%v\d+) = call i64 @__we_list_get`).FindStringSubmatch(ir)
+	if elem == nil {
+		t.Fatalf("the body reads the element:\n%s", ir)
+	}
+	if !regexp.MustCompile(`fhit\d+:\n\s+store i64 1, ptr ` + tag + `\n\s+store i64 ` + regexp.QuoteMeta(elem[1]) + `, ptr ` + pay + `\n\s+br label %cexit\d+`).MatchString(ir) {
+		t.Fatalf("the hit answers Some(handle) and ends the walk:\n%s", ir)
+	}
+	// The arm binds c back to the record: the word loads out of the slot,
+	// crosses to the pointer it names, and the field read walks that
+	// pointer's own offsets before the hole renders it.
+	fed := false
+	for _, a := range regexp.MustCompile(`(%v\d+) = load i64, ptr `+pay+`\n\s+(%v\d+) = inttoptr i64 %v\d+ to ptr\n\s+(%v\d+) = getelementptr i8, ptr %v\d+, i64 16\n\s+(%v\d+) = load i64, ptr %v\d+\n`).FindAllStringSubmatch(ir, -1) {
+		if strings.Contains(ir, "getelementptr i8, ptr "+a[2]+", i64 16") &&
+			strings.Contains(ir, "@__we_str_of_i64(i64 "+a[4]+")") {
+			fed = true
+		}
+	}
+	if !fed {
+		t.Fatalf("the arm's binding reads the record through its own handle:\n%s", ir)
+	}
+}
+
+// TestAcuteIntPayloadReadsIntoAStringPosition: the payload face is not
+// match-only currency — the shape table the answer carries is what a
+// String position reads by too, so the word a find answers over Int64s
+// renders through the Int64's own verb with no conversion in between.
+// Before the table, the arm bound its word untyped and this read stopped;
+// the same table closes both consumers.
+func TestAcuteIntPayloadReadsIntoAStringPosition(t *testing.T) {
+	ir := assertClean(t, listModule(nil,
+		listBind("xs", intLit("4"), intLit("7")),
+		letBind("f", acute(ident("xs"), "find",
+			lam(binOp(">", ident("x"), intLit("3")), "x"))),
+		&ast.ExprStmt{Expr: &ast.Match{Scrutinee: ident("f"), Arms: []ast.MatchArm{
+			{Pat: &ast.PatVariant{Name: "Some", Args: []ast.Pattern{&ast.PatBinding{Name: "v"}}},
+				Body: blockOf(ioCall("io", "println", interpLit([]string{"got ", ""}, ident("v"))))},
+			{Pat: &ast.PatVariant{Name: "None"},
+				Body: blockOf(ioCall("io", "println", strLit(`"none"`)))},
+		}}},
+		okReturn(),
+	))
+	m := regexp.MustCompile(`store i64 0, ptr (%v\d+)\n\s+store i64 0, ptr (%v\d+)`).FindStringSubmatch(ir)
+	if m == nil {
+		t.Fatalf("find opens with the pair at None:\n%s", ir)
+	}
+	fed := false
+	for _, a := range regexp.MustCompile(`(%v\d+) = load i64, ptr `+regexp.QuoteMeta(m[2])+`\n`).FindAllStringSubmatch(ir, -1) {
+		if strings.Contains(ir, "@__we_str_of_i64(i64 "+a[1]+")") {
+			fed = true
+		}
+	}
+	if !fed {
+		t.Fatalf("the arm's binding renders through the Int64's own verb:\n%s", ir)
+	}
+}
+
+// TestAcuteStringPayloadStillStops: a String is two words and the payload
+// slot is one — the widened face does not reach past the word it has, so a
+// String element's answer still stops rather than binding half a string.
+func TestAcuteStringPayloadStillStops(t *testing.T) {
+	_, ni := Emit(listModule(nil,
+		listBind("ss", strLit("a"), strLit("b")),
+		letBind("n", acute(ident("ss"), "reduce",
+			lam(ident("p"), "p", "q"))),
 		okReturn(),
 	), "demo")
 	if ni == nil || ni.What != bndMainBody {
