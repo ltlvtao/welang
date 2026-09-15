@@ -1,0 +1,5 @@
+// std.io — the M8 provision as a real source (B2a design D1). Each entry
+// keeps the keyed fiction body: codegen replaces the call site with the
+// runtime entry, and the empty body checks clean under the ordinary walk.
+pub fn println(s: String) effect io { }
+pub fn print(s: String) effect io { }

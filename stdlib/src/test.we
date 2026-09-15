@@ -1,0 +1,10 @@
+// std.test — the M10a provision as a real source (B2a design D1-4,
+// option A). assertEqual is declared here for the name's reach — mock
+// targets and value positions resolve it — but its calls still ride
+// importCall's dispatch ahead of the member gate: the call face's own
+// typing (the first parameter fixes T, the Eq-domain gate, the same-type
+// second parameter) is not a declaration's business. The empty bodies are
+// the keyed fictions; codegen emits the call face directly.
+pub fn assertTrue(cond: Bool) { }
+pub fn assertFalse(cond: Bool) { }
+pub fn assertEqual<T>(a: T, b: T) { }

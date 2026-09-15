@@ -24,9 +24,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ltlvtao/welang/internal/ast"
 	"github.com/ltlvtao/welang/internal/diag"
+	"github.com/ltlvtao/welang/internal/parser"
+	"github.com/ltlvtao/welang/stdlib"
 )
 
 // Mode selects the module context: one file checked alone, or the root
@@ -2461,65 +2464,46 @@ func (c *checker) checkImport(imp *ast.Import) {
 // StdModule is the registry of compiler-provided modules. The std segment
 // never resolves against the file system, so the project loader and the
 // single-file pre-ingest both ask here — one authority for which std
-// modules a build provides. Each module is synthetic We source: real
-// declarations the same checker machinery a user module rides walks (the
-// provision is compiler-built; the checking is not privileged). M8
-// provides std.io (design D2); the self-hosting route — real sources over
-// a foreign layer — is design D9's disclosed follow-up.
+// modules a build provides. Since B2a the provision is real embedded We
+// source (design D1): every key present in stdlib.Sources() parses
+// through the same parser a user module rides, and the parsed file is
+// cached for the process lifetime — one AST per key, so the buckets'
+// sumInfo pointers stay identical however many faces read them back (the
+// stdConcurrentFile singleton precedent). std.concurrent stays synthetic
+// (design D1-5's disclosed exception): its AST encodes the E0404
+// name-space exemption — two sums sharing the variant name Closed — and
+// the expectation-driven channel marker a real source cannot declare;
+// migrating it is a standard-library-surface decision, not this change.
 func StdModule(key string) (*ast.File, bool) {
-	switch key {
-	case "std.io":
-		return &ast.File{Items: []ast.Item{
-			&ast.FnDecl{
-				Pub:        true,
-				Name:       "println",
-				Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
-				EffectTags: []string{"io"},
-			},
-			&ast.FnDecl{
-				Pub:        true,
-				Name:       "print",
-				Params:     []ast.Param{{Name: "s", Type: &ast.NamedType{Name: "String"}}},
-				EffectTags: []string{"io"},
-			},
-		}}, true
-	case "std.concurrent":
+	if key == "std.concurrent" {
 		return stdConcurrentFile, true
-	case "std.test":
-		// M10a design D8: the two Bool faces are plain declarations — the
-		// ordinary import surface types their calls (the std.io println
-		// precedent); assertEqual is not an item but a call face, riding
-		// importCall's dispatch ahead of the gate, so it has no marker
-		// declaration here — a mock on it resolves nowhere (E1304), the
-		// honest reading of a face that is not a module-level fn.
-		return &ast.File{Items: []ast.Item{
-			&ast.FnDecl{Pub: true, Name: "assertTrue", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
-				Params: []ast.Param{{Name: "cond", Type: &ast.NamedType{Name: "Bool", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}}},
-			&ast.FnDecl{Pub: true, Name: "assertFalse", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
-				Params: []ast.Param{{Name: "cond", Type: &ast.NamedType{Name: "Bool", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}}},
-		}}, true
-	case "std.time":
-		// M10b design D4: the fourth synthetic module — now and sleep as
-		// plain declarations with the time effect segment (the std.io
-		// precedent again; the loading gate keys on the module key, so a
-		// user module named time never disturbs the entry). The bodies are
-		// the We-writable fiction the M8 discipline wants — a tail-produced
-		// Int64 for now, an empty body for sleep — the same checker
-		// machinery walks them, and the run face rides the virtual clock
-		// test.c owns inside the test extent and the wall clock outside it.
-		return &ast.File{Items: []ast.Item{
-			&ast.FnDecl{Pub: true, Name: "now", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
-				EffectTags: []string{"time"},
-				Ret:        &ast.NamedType{Name: "Int64", Line: 1, Col: 1},
-				Body: ast.Block{Items: []ast.Stmt{&ast.ExprStmt{
-					Expr: &ast.Literal{Kind: "int", Text: "0"}, Line: 1, Col: 1,
-				}}, Line: 1, Col: 1}},
-			&ast.FnDecl{Pub: true, Name: "sleep", Line: 1, Col: 1, NameLine: 1, NameCol: 1,
-				Params:     []ast.Param{{Name: "ms", Type: &ast.NamedType{Name: "Int64", Line: 1, Col: 1}, NameLine: 1, NameCol: 1}},
-				EffectTags: []string{"time"}},
-		}}, true
+	}
+	if src, ok := stdlib.Sources()[strings.TrimPrefix(key, "std.")]; ok {
+		return parseStdModule(key, src)
 	}
 	return nil, false
+}
+
+// stdModuleCache holds one parsed file per std source key. The AST is
+// pure data and the checker never rewrites it, so every Check in the
+// process shares the same pointers (the M6b cross-module AST-sharing
+// precedent — pointer identity is what the sumInfo buckets key on).
+var stdModuleCache sync.Map // string -> *ast.File
+
+// parseStdModule parses one embedded source, caching the file. A parse
+// failure here is an invariant violation, not a diagnostic face:
+// stdlib's own test parses every embedded source, so reaching the panic
+// means the gate and the sources drifted apart.
+func parseStdModule(key, src string) (*ast.File, bool) {
+	if cached, ok := stdModuleCache.Load(key); ok {
+		return cached.(*ast.File), true
+	}
+	file, d, ni := parser.Parse(key+".we", []byte(src))
+	if d != nil || ni != nil || file == nil {
+		panic("typecheck: embedded std source " + key + ".we does not parse")
+	}
+	stdModuleCache.Store(key, file)
+	return file, true
 }
 
 // stdConcurrentFile is the std.concurrent module's synthetic source
@@ -2702,9 +2686,13 @@ func (c *checker) importCall(mod string, x *ast.Call, expected Type) Type {
 		}
 	}
 	// The std.test equality assertion rides its own face ahead of the
-	// gate (M10a design D8): a same-type-pair judgment, not a declared
-	// fn. The gate is the module key itself — a user module's
-	// same-named items never reach this branch.
+	// gate (M10a design D8; B2a design D1-4 option A): src/test.we
+	// declares the entry for the name's reach — mock targets and value
+	// positions resolve it — but the call's typing stays here, ahead of
+	// the member gate, because the first parameter fixing T, the Eq-
+	// domain gate, and the same-type second parameter are the call
+	// face's business, not a declaration's. The gate is the module key
+	// itself — a user module's same-named items never reach this branch.
 	if mod == "std.test" && m.Name == "assertEqual" {
 		return c.assertEqualCall(x)
 	}

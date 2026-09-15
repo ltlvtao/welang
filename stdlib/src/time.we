@@ -1,0 +1,6 @@
+// std.time — the M10b provision as a real source (B2a design D1). now's
+// body is the We-writable fiction (a tail-produced Int64); the run face
+// rides the virtual clock inside the test extent and the wall clock
+// outside it. sleep's empty body is the keyed fiction.
+pub fn now() effect time -> Int64 { 0 }
+pub fn sleep(ms: Int64) effect time { }
