@@ -12,7 +12,10 @@ import (
 // the names the synthetic registry used to hand out; the bodies are the
 // fictions the sources write (empty blocks; now's tail 0). assertEqual
 // is among them by design D1-4 option A: declared for reach, its calls
-// still riding importCall's dispatch ahead of the gate.
+// still riding importCall's dispatch ahead of the gate. std.string's two
+// are the first real bodies (B2a design D5): the row checks the names
+// the same way — the body's realness is the pipeline's business, not the
+// loader's.
 func TestStdModuleLoadsParsedSources(t *testing.T) {
 	cases := []struct {
 		key   string
@@ -23,6 +26,7 @@ func TestStdModuleLoadsParsedSources(t *testing.T) {
 		{"std.time", []string{"now", "sleep"}},
 		{"std.fs", []string{"readFile", "writeFile", "appendFile", "removeFile", "makeDir", "removeDir", "listDir"}},
 		{"std.process", []string{"run"}},
+		{"std.string", []string{"join", "repeat"}},
 	}
 	for _, tc := range cases {
 		file, ok := StdModule(tc.key)

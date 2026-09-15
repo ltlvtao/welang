@@ -1768,6 +1768,19 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 							}
 						case "io", "test", "time":
 							e.stdQuals[a] = d.Path[1]
+						case "string":
+							// The one std module whose bodies are real (B2a
+							// design D5): join/repeat ride the program face —
+							// the module carries a ProgModule, so its key sits
+							// in modKeys and the qualifier resolves exactly a
+							// program module's does, through instCallee and
+							// the slot. The stdQuals row keeps the std
+							// spelling recognized; the curImports entry is
+							// what routes the call, and only this std module
+							// gets one — the keyed modules resolve through
+							// the std table below instead.
+							e.stdQuals[a] = d.Path[1]
+							e.curImports[a] = "std.string"
 						default:
 							return "", e.bnd() // an unknown std module is the check stage's to reject; never silent
 						}

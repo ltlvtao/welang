@@ -368,7 +368,16 @@ func (e *env) programModules(mods []typecheck.Module, sh *typecheck.Shapes) []co
 	prog := make([]codegen.ProgModule, 0, len(mods))
 	for _, m := range mods {
 		if m.Key == "std" || strings.HasPrefix(m.Key, "std.") {
-			continue
+			// The one exception is the std module whose bodies are real
+			// (B2a design D5): std.string's join/repeat are pure functions
+			// the pipeline defines like any program module's fns, so the
+			// module rides the program face and its defines reach the IR.
+			// Every other std module keeps dropping out — the keyed fns'
+			// call faces ride the emitter's own std table, and a define
+			// for a fiction body would be dead IR.
+			if m.Key != "std.string" {
+				continue
+			}
 		}
 		prog = append(prog, codegen.ProgModule{Key: m.Key, ID: m.Key, File: m.File, Shapes: sh})
 	}

@@ -1,0 +1,27 @@
+// std.string — string building (B2a design D5). The first std module
+// whose bodies are real: join and repeat are pure functions with no
+// effect section (chapter 16's explicit purity), callable from any
+// context, and the pipeline emits their defines the way it emits a
+// program module's — the bodies are the check stage's material and the
+// IR both. The faces they use are the widened greens of the codegen
+// lines: a for over a List<String>, concatenation, var rebinding, and
+// a while with an Int64 counter.
+pub fn join(parts: List<String>, sep: String) -> String {
+    var acc = ""
+    var first = true
+    for p in parts {
+        if first { first = false } else { acc = acc + sep }
+        acc = acc + p
+    }
+    return acc
+}
+
+pub fn repeat(s: String, n: Int64) -> String {
+    var acc = ""
+    var i: Int64 = 0
+    while i < n {
+        acc = acc + s
+        i = i + 1
+    }
+    return acc
+}
