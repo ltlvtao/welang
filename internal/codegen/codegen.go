@@ -52,7 +52,19 @@ type NotImplemented struct {
 // method, List-of-String elements, and primitives in return position among
 // them), so their retirement rides the B1b landing rather than this
 // reconciliation. The per-case accounting is in the change's T13
-// completion record.
+// completion record. T14, codegen-full's close, is the final audit:
+// no word retires — design D0's "< 5 words" was one more refuted
+// prediction. Each word still names a live stop: main-body
+// remainders (the ? gates, a sync object read into a String
+// position, the String-element callback face, the boxed-iterator
+// payload faces, the timeout-Result arm read), the same value-face
+// families in fn bodies beside their own, task-thunk captures
+// beyond the scalar set, bndGenericFns' impl-head rejection plus
+// its Eq-domain residuals, and the indeterminable top-level
+// binding. bndGenericFns is the two towers' shared word face: the
+// check stage emits the same string from its own constant at
+// assertEqual's Eq-domain gate, so this row and that one retire
+// together or not at all.
 const (
 	bndMainBody = "main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return)"
 	bndTopLets  = "top-level value bindings in code generation"
