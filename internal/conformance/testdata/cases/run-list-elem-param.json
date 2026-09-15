@@ -1,0 +1,16 @@
+{
+  "name": "run-list-elem-param",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn first(xs: List<String>) effect io -> String {\n    for s in xs { return s }\n    return \"none\"\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(first([\"x\", \"y\"]))\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "x\n",
+  "stderr": ""
+}

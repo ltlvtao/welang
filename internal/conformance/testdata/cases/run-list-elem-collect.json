@@ -1,0 +1,16 @@
+{
+  "name": "run-list-elem-collect",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [\"a\", \"bb\"]\n    let ys = xs.iterator().collect()\n    for s in ys { io.println(s) }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "a\nbb\n",
+  "stderr": ""
+}

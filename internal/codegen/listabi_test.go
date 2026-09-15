@@ -241,21 +241,17 @@ func TestNestedListElementHasNoCarrierFace(t *testing.T) {
 	}
 }
 
-// TestStringElementListRefusesAtTheClassifier: a String element is two
-// words, and this build's element slot is one, so the classifier refuses
-// the signature — the same read that refuses the literal. T11-2 widens the
-// element representation and this pin flips with it: re-anchor then.
-func TestStringElementListRefusesAtTheClassifier(t *testing.T) {
-	ni := listAbiStop(t, listAbiSrc(
+// TestStringElementListCrossesTheClassifier: the element face a String
+// argument fixes is the boxed pair's handle (T11-2), so the carrier the
+// signature admits is one handle wide like any other — the same read the
+// literal and the walk take — and the define names the parameter by its
+// own ABI slot.
+func TestStringElementListCrossesTheClassifier(t *testing.T) {
+	ir := emitListAbi(t, listAbiSrc(
 		"fn f(xs: List<String>) -> Int64 {\n    return 0\n}\n",
 		"",
 	))
-	if ni == nil {
-		t.Fatal("a String element named an element face")
-	}
-	if ni.What != bndFnBody {
-		t.Fatalf("boundary word: %q", ni.What)
-	}
+	wantIR(t, ir, "define i64 @main.f(ptr %xs)", "the carrier is the parameter's whole slot")
 }
 
 // TestModuleLevelListArgumentCrosses: the carrier's sources are the same

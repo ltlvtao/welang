@@ -352,14 +352,26 @@ type listBinding struct {
 // in the carrier. A scalar face is its interpolation domain (the word IS
 // the value; a Float64 rides as its bit pattern); a gc face is the
 // module-qualified record key the handle points at, whose element slots
-// the carrier's descriptor traces. Everything else — a String's two words,
-// a sum's two, a tuple's several, a fn value, a nested collection — has no
-// one-word face and stops at the body boundary.
+// the carrier's descriptor traces; a String face (skStr) is the handle of
+// a descriptor-less box holding the pair — the buffer a String's words
+// name is malloc'd, outside the collector's domain, so the box holds no
+// word the collector could trace through and its map word stays null, the
+// all-scalar box's precedent. Everything else — a sum's two words, a
+// tuple's several, a fn value, a nested collection — has no one-word face
+// and stops at the body boundary.
 type listElem struct {
 	kind strKind
 	num  string // a narrow integer element keeps the width its type named
 	rec  string
 	gc   bool
+}
+
+// traces reports whether the carrier must describe this element's slot to
+// the collector: a gc handle names a record block, and a String's handle
+// names the box that holds the pair. A scalar word is data and traces
+// nothing.
+func (f listElem) traces() bool {
+	return f.gc || f.kind == skStr
 }
 
 // fnValue is one bound function value (design D5): the single pointer a
@@ -6118,12 +6130,14 @@ func (e *emitter) listFaceOf(x ast.Expr) (listElem, bool) {
 // answered — under the head pattern. A scalar face binds as any scalar
 // does (the body assigns it, so it takes a slot; otherwise it keeps the
 // register the element arrived in), a Float64 face converts the word's bit
-// pattern back to the double it holds, and a gc face binds the record
-// reference its handle names — copied when the record is a value-category
-// one, chapter 8's rule for every binding of a value. A gc binding the
-// body assigns has no slot to write (chapter 8's gc records bind by
-// reference; the emitter's slot face for them is the B-track's), so the
-// loop stops at the body boundary rather than dropping the write.
+// pattern back to the double it holds, a String face opens the box its
+// word names and binds the pair out of it — the two slots where the body
+// assigns the name, the operand pair otherwise — and a gc face binds the
+// record reference its handle names — copied when the record is a
+// value-category one, chapter 8's rule for every binding of a value. A gc
+// binding the body assigns has no slot to write (chapter 8's gc records
+// bind by reference; the emitter's slot face for them is the B-track's),
+// so the loop stops at the body boundary rather than dropping the write.
 func (e *emitter) bindForListElem(pat ast.Pattern, word string, face listElem) *NotImplemented {
 	switch p := pat.(type) {
 	case *ast.PatWildcard:
@@ -6141,6 +6155,19 @@ func (e *emitter) bindForListElem(pat ast.Pattern, word string, face listElem) *
 				reg = e.emitRecCopy(reg, face.rec)
 			}
 			e.gcEnv[p.Name] = gcBinding{rec: face.rec, reg: reg}
+			return nil
+		}
+		if face.kind == skStr {
+			// The word names the box the element rode in: open it and load
+			// the pair, then bind the name as any String binds.
+			box := e.wordPtr(word)
+			sp := e.gepLoadPtr(box, 16)
+			sl := e.gepLoadI64(box, 24)
+			if e.assigned[p.Name] {
+				e.bindStringSlot(p.Name, sp, sl)
+				return nil
+			}
+			e.strEnv[p.Name] = strBinding{dataOp: sp, lenOp: sl}
 			return nil
 		}
 		op, isF := word, false
@@ -6213,7 +6240,7 @@ func (e *emitter) emitListLit(x *ast.ListLit, typ ast.TypeRef) (string, listElem
 	e.use("__we_root_push")
 	e.pushes++
 	traced := 0
-	if face.gc {
+	if face.traces() {
 		traced = 1
 	}
 	reg := "%" + e.value()
@@ -6237,11 +6264,12 @@ func (e *emitter) emitListLit(x *ast.ListLit, typ ast.TypeRef) (string, listElem
 }
 
 // emitListElemValue emits one element as the one word its face occupies: a
-// scalar's value, a Float64's bit pattern, or a gc handle. The word is the
-// same width whatever the face, which is the carrier's whole layout
-// contract; a conversion the operator family cannot answer — a float where
-// the face holds an integer, or the reverse — stops at the boundary
-// rather than storing a reinterpretation of the wrong domain.
+// scalar's value, a Float64's bit pattern, a gc handle, or — for a String —
+// the handle of the box carved to hold the pair. The word is the same
+// width whatever the face, which is the carrier's whole layout contract; a
+// conversion the operator family cannot answer — a float where the face
+// holds an integer, or the reverse — stops at the boundary rather than
+// storing a reinterpretation of the wrong domain.
 func (e *emitter) emitListElemValue(x ast.Expr, face listElem) (string, *NotImplemented) {
 	if face.gc {
 		reg, key, ni := e.emitRecordValue(x)
@@ -6252,6 +6280,23 @@ func (e *emitter) emitListElemValue(x ast.Expr, face listElem) (string, *NotImpl
 			return "", e.bnd()
 		}
 		return e.ptrWord(reg), nil
+	}
+	if face.kind == skStr {
+		// The pair cannot ride in one word, so the word names a box holding
+		// it: a descriptor-less 32-byte gc object — the map word null, the
+		// pointer word at 16, the length word at 24. No word inside is a gc
+		// reference (the buffer is malloc'd, outside the collector's
+		// domain), so the map stays null; the allocObj protocol roots the
+		// box here, and the carrier's descriptor keeps it reachable once
+		// the word is pushed.
+		p, l, ni := e.emitStringExpr(x)
+		if ni != nil {
+			return "", ni
+		}
+		box := e.allocObj("null", 32)
+		e.gepStore(box, 16, "ptr "+p)
+		e.gepStore(box, 24, "i64 "+l)
+		return e.ptrWord(box), nil
 	}
 	op, isF, ni := e.emitNumExpr(x)
 	if ni != nil {
@@ -6301,11 +6346,11 @@ func listArgOf(t ast.TypeRef) (ast.TypeRef, bool) {
 // elemFaceOfType reads one element type's face through the ABI classifier
 // — which already erases newtype wrappers and resolves a record's
 // module-qualified key — and keeps the families the one-word carrier can
-// hold: the integer family, Bool, Rune, Float64 (as its bit pattern), and
-// a record's handle. A String is two words, a sum two, a tuple several, a
-// fn value a carrier of its own, and a nested collection a carrier whose
-// own element face would have to be written down too; all of them report
-// false.
+// hold: the integer family, Bool, Rune, Float64 (as its bit pattern), a
+// record's handle, and a String as the handle of the box its pair rides in
+// (skStr). A sum is two words, a tuple several, a fn value a carrier of
+// its own, and a nested collection a carrier whose own element face would
+// have to be written down too; those report false.
 func (e *emitter) elemFaceOfType(t ast.TypeRef) (listElem, bool) {
 	t = e.derefNewtype(t)
 	// A nested collection refuses here rather than downstream: the carrier
@@ -6331,6 +6376,8 @@ func (e *emitter) elemFaceOfType(t ast.TypeRef) (listElem, bool) {
 		return listElem{kind: skF64}, true
 	case abiGc:
 		return listElem{rec: key, gc: true}, true
+	case abiStr:
+		return listElem{kind: skStr}, true
 	}
 	return listElem{}, false
 }
@@ -6728,8 +6775,12 @@ func (e *emitter) closeListWalk(w listWalk) {
 // listElemWord converts one pass's element word into the operand a
 // callback takes: a gc record's handle back to its pointer — copied where
 // the record's category is a value, chapter 8's rule at every binding —
-// and a Float64's bit pattern back to the double it holds. A word whose
-// face the emitted loop never fixed as a scalar reports false.
+// and a Float64's bit pattern back to the double it holds. A String's word
+// names a box, and the callback's parameter would be the String itself —
+// two words the one call cannot pass — so that face reports false here:
+// the combinators that hand an element to a callback stop at their own
+// boundary. A word whose face the emitted loop never fixed as a scalar
+// reports false too.
 func (e *emitter) listElemWord(face listElem, word string) (string, *NotImplemented) {
 	if face.gc {
 		reg := e.wordPtr(word)
@@ -6743,7 +6794,7 @@ func (e *emitter) listElemWord(face listElem, word string) (string, *NotImplemen
 		e.inst(fmt.Sprintf("%%%s = bitcast i64 %s to double", v, word))
 		return "double %" + v, nil
 	}
-	if face.kind == skNone {
+	if face.kind == skStr || face.kind == skNone {
 		return "", e.bnd()
 	}
 	return "i64 " + word, nil
@@ -6988,7 +7039,7 @@ func (e *emitter) emitCollect(s walkSrc, face listElem) (callResult, *NotImpleme
 	e.use("__we_root_pop")
 	e.pushes++
 	traced := 0
-	if face.gc {
+	if face.traces() {
 		traced = 1
 	}
 	lst := e.slot("ptr")
@@ -7000,7 +7051,7 @@ func (e *emitter) emitCollect(s walkSrc, face listElem) (callResult, *NotImpleme
 	if ni != nil {
 		return callResult{}, ni
 	}
-	if face.gc {
+	if face.traces() {
 		// The growth push is the first emitted path whose push may move
 		// the carrier (list.c doubles): the copy's allocation can fire a
 		// collection while this pass's element — a handle the walk just
@@ -7014,7 +7065,7 @@ func (e *emitter) emitCollect(s walkSrc, face listElem) (callResult, *NotImpleme
 	}
 	r := e.value()
 	e.inst(fmt.Sprintf("%%%s = call ptr @__we_list_push(ptr %s, i64 %s)", r, e.loadPtr(lst), w.word))
-	if face.gc {
+	if face.traces() {
 		e.inst("call void @__we_root_pop()")
 	}
 	e.inst("call void @__we_root_pop()")
@@ -11298,10 +11349,14 @@ type iterSource struct {
 // It answers only where one element word carries the element's whole
 // value, which is the set strKindName names — the same set the carrier
 // walks work in. Every other element keeps the boundary the box face took
-// before it: a `List<String>` element is two words and the pair is no
-// payload word this object could hold, and a `List<Cell>` element's
-// `Option<Cell>` is a sum whose words the interface's own slot still
-// classifies the way any other face does.
+// before it: a `List<Cell>` element's `Option<Cell>` is a sum whose words
+// the interface's own slot still classifies the way any other face does.
+// A `List<String>` element answers here since T11-2 — its word is the box
+// handle, one word like any other — but the faces downstream of the object
+// do not follow it: a `next` payload read stops where T9's payload face
+// stops (skStr is no payload word a sum slot classifies), and an acute
+// combinator on the box stops at elemOfShape's own refusal of String. The
+// construction opens, a bound `next` binds, and the payload does not read.
 func (e *emitter) iterSourceOf(x ast.Expr) (iterSource, bool) {
 	call, ok := x.(*ast.Call)
 	if !ok || len(call.Args) != 0 || len(call.TypeArgs) != 0 {
@@ -12959,12 +13014,12 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 		// whose element face the argument fixes. The face is elemFaceOf-
 		// Type's own domain — one authority — so the carrier a signature
 		// admits and the walk a callee binds over it read the same answer;
-		// a nested List has no element face there, and a String element
-		// none in this build's width, so both refuse here rather than at
-		// some deeper emission. The empty key is the box's precedent: the
-		// handle shares rather than copies wherever a record's key would
-		// have sent it to emitOwnedRecord, and the face rides the ABI
-		// entry instead (fitAbi and bindTupleParams carry it).
+		// a nested List has no element face there, so it refuses here
+		// rather than at some deeper emission. The empty key is the box's
+		// precedent: the handle shares rather than copies wherever a
+		// record's key would have sent it to emitOwnedRecord, and the face
+		// rides the ABI entry instead (fitAbi and bindTupleParams carry
+		// it).
 		arg := e.derefNewtype(e.resolveRef(n.Args[0]))
 		if _, ok := e.elemFaceOfType(arg); !ok {
 			return abiVoid, "", false
