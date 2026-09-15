@@ -225,6 +225,11 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_fs_make_dir", "declare void @__we_fs_make_dir(ptr, i64, ptr)"},
 	{"__we_fs_remove_dir", "declare void @__we_fs_remove_dir(ptr, i64, ptr)"},
 	{"__we_fs_list_dir", "declare void @__we_fs_list_dir(ptr, i64, ptr)"},
+	// B2a T3 (design D4/D7): the process entry, appended under the same
+	// discipline — a program that spawns nothing declares none. The
+	// command crosses as its (ptr, i64) pair, the argument list as its
+	// carrier handle, and the answer through the out-parameter trio.
+	{"__we_proc_run", "declare void @__we_proc_run(ptr, i64, ptr, ptr)"},
 }
 
 // ProgModule is one module of a program emission (design D1): the module
@@ -1091,19 +1096,22 @@ func (e *emitter) resolveStd(name string) string {
 	if _, ok := stdFnEntries[name]; ok {
 		return name
 	}
-	if name == "fs" {
-		return name // the fs family rides its own table beside the std entries
+	if name == "fs" || name == "process" {
+		return name // the fs family and the process entry ride their own tables beside the std entries
 	}
 	return ""
 }
 
-// registerStdSums enters one std module's sum declarations under the
-// module's own dotted key ("std.fs.FsError"), the same tables a program
-// module's pass-one walk fills — a std module declares no program module,
-// so this registration at the import site is the only walk it gets. The
-// guard makes it idempotent: a program may import std.fs in several
-// modules, and the second import must not rewrite the first's tables.
-func (e *emitter) registerStdSums(modKey string) *NotImplemented {
+// registerStdModule enters one std module's declarations under the
+// module's own dotted key ("std.fs.FsError", "std.process.ProcessResult"),
+// the same tables a program module's pass-one walk fills — a std module
+// declares no program module, so this registration at the import site is
+// the only walk it gets. The fns are deliberately absent: they are the
+// keyed fiction codegen replaces, and a define for a fiction would be
+// dead IR. The guard makes it idempotent: a program may import the same
+// std module in several modules, and the second import must not rewrite
+// the first's tables.
+func (e *emitter) registerStdModule(modKey string) *NotImplemented {
 	if _, ok := e.sumsOrd[modKey]; ok {
 		return nil
 	}
@@ -1112,20 +1120,35 @@ func (e *emitter) registerStdSums(modKey string) *NotImplemented {
 		return e.bnd() // the gate guarantees the source; this is the honest stop if it drifts
 	}
 	for _, it := range file.Items {
-		d, isSum := it.(*ast.SumDecl)
-		if !isSum || len(d.TypeParams) != 0 {
-			continue
+		switch d := it.(type) {
+		case *ast.SumDecl:
+			if len(d.TypeParams) != 0 {
+				continue
+			}
+			variants := make(map[string][]ast.TypeRef, len(d.Variants))
+			names := make([]string, len(d.Variants))
+			for i, v := range d.Variants {
+				variants[v.Name] = v.Payload
+				names[i] = v.Name
+			}
+			key := modKey + "." + d.Name
+			e.sums[key] = variants
+			e.sumsOrd[key] = names
+			e.sumDecls[key] = d
+		case *ast.RecordDecl:
+			// The record tables a field read walks by: the order list is
+			// inert until a construction marks the record used, and a std
+			// module's records are the C family's answers, never a We-side
+			// construction — so no map descriptor ever materializes.
+			if len(d.TypeParams) != 0 {
+				continue
+			}
+			key := modKey + "." + d.Name
+			if _, seen := e.records[key]; !seen {
+				e.order = append(e.order, recRef{name: key, decl: d})
+			}
+			e.records[key] = d
 		}
-		variants := make(map[string][]ast.TypeRef, len(d.Variants))
-		names := make([]string, len(d.Variants))
-		for i, v := range d.Variants {
-			variants[v.Name] = v.Payload
-			names[i] = v.Name
-		}
-		key := modKey + "." + d.Name
-		e.sums[key] = variants
-		e.sumsOrd[key] = names
-		e.sumDecls[key] = d
 	}
 	e.sumsOrd[modKey] = nil // the marker that says the module was walked
 	return nil
@@ -1723,16 +1746,24 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 							e.concAlias[a] = true
 						case "fs":
 							e.stdQuals[a] = d.Path[1]
-							// The module's own sums register here: a std
-							// module is never a program module, so its
-							// declarations reach no pass-one walk of their
-							// own — yet a caller spells FsError qualified
+							// The module's own declarations register here:
+							// a std module is never a program module, so
+							// they reach no pass-one walk of their own —
+							// yet a caller spells FsError qualified
 							// (Result<_, fs.FsError>), and the fused table
 							// that spell needs is built from the sum's own
-							// declaration. Only the sums register; the fns
-							// are the keyed fiction codegen replaces, and a
-							// define for a fiction would be dead IR.
-							if ni := e.registerStdSums("std.fs"); ni != nil {
+							// declaration.
+							if ni := e.registerStdModule("std.fs"); ni != nil {
+								return "", ni
+							}
+						case "process":
+							e.stdQuals[a] = d.Path[1]
+							// The same registration std.fs takes, with a
+							// record riding beside the sum: ProcessError
+							// for the fused table a Result's signature
+							// builds, ProcessResult for the Ok payload's
+							// field reads.
+							if ni := e.registerStdModule("std.process"); ni != nil {
 								return "", ni
 							}
 						case "io", "test", "time":
@@ -3718,6 +3749,15 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 					return e.emitFsEntryCall("fs."+fn.Name, ent, call.Args)
 				}
 			}
+			if sk == "process" {
+				// The process entry rides its own row beside them for the
+				// same reason: its answer is a fused Result through the out
+				// trio, and its Ok half carries a record handle — a face no
+				// std entry and no fs entry answers.
+				if fn.Name == "run" {
+					return e.emitProcRunCall(call.Args)
+				}
+			}
 			if ent, ok := stdFnEntries[sk][fn.Name]; ok {
 				if sk == "io" {
 					// The scalar shortcut stays a direct call: the i64
@@ -3857,6 +3897,74 @@ func (e *emitter) emitFsEntryCall(name string, ent fsEntry, args []ast.Expr) (ca
 		e.pushes++
 		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", h))
 	}
+	return callResult{kind: ckSum, sum: sumSlot{
+		tag: ts, pay: pp, pay1: p1,
+		variants: sumVariantNames(shapes), shapes: shapes, key: "Result",
+	}}, nil
+}
+
+// emitProcRunCall emits process.run through its slot: the command crosses
+// as its String pair, the argument list as its carrier handle (the C side
+// reads the carrier through its own accessors), and the answer comes back
+// through the out-parameter trio the C side writes (design D7-2). The
+// fused table is Result<ProcessResult, ProcessError>'s: the Ok half is
+// the answer record's handle and the Err half ProcessError's one String
+// variant — the tags a match arm tests are the tags the C side wrote.
+func (e *emitter) emitProcRunCall(args []ast.Expr) (callResult, *NotImplemented) {
+	if len(args) != 2 {
+		return callResult{}, e.bnd()
+	}
+	p, l, ni := e.emitStringExpr(args[0])
+	if ni != nil {
+		return callResult{}, ni
+	}
+	// A literal argument list rides the typed literal path: the signature
+	// names the element face, so the literal needs no element to read it
+	// from — the empty list, this face's most common caller, crosses the
+	// same typed path an annotated binding takes.
+	var a string
+	if lit, ok := args[1].(*ast.ListLit); ok {
+		a, _, ni = e.emitListLit(lit, &ast.NamedType{Name: "List", Args: []ast.TypeRef{&ast.NamedType{Name: "String"}}})
+	} else {
+		a, _, ni = e.emitListOperand(args[1])
+	}
+	if ni != nil {
+		return callResult{}, ni
+	}
+	slot := e.slotFor("process.run", "@__we_proc_run")
+	e.use("__we_proc_run")
+	fp := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
+	out := e.slot("[3 x i64]")
+	e.inst(fmt.Sprintf("call void %%%s(ptr %s, i64 %s, ptr %s, ptr %s)", fp, p, l, a, out))
+	okShape, ok := e.payloadShape("Ok", []ast.TypeRef{&ast.NamedType{Qual: "process", Name: "ProcessResult"}})
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	errShapes, ok := e.namedSumShapes(&ast.NamedType{Qual: "process", Name: "ProcessError"})
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	shapes := append([]sumVariantShape{okShape}, errShapes...)
+	tag := e.gepLoadI64(out, 0)
+	pay := e.gepLoadI64(out, 8)
+	pay1 := e.gepLoadI64(out, 16)
+	ts := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", tag, ts))
+	pp := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay, pp))
+	p1 := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay1, p1))
+	// The Ok handle is a gc reference the C side carved without rooting
+	// (no allocation follows its carve — the buffers were malloc'd first):
+	// the caller re-roots it the way every gc return does, before any
+	// further allocation can run. Nothing sits between the load and the
+	// push.
+	h := e.value()
+	e.inst(fmt.Sprintf("%%%s = inttoptr i64 %s to ptr", h, pay))
+	e.use("__we_root_push")
+	e.pushes++
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", h))
 	return callResult{kind: ckSum, sum: sumSlot{
 		tag: ts, pay: pp, pay1: p1,
 		variants: sumVariantNames(shapes), shapes: shapes, key: "Result",
@@ -13375,6 +13483,20 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 		// one pointer, so the argument is not read here.
 		if e.concAlias[n.Qual] && primTypeNames[n.Name] {
 			return abiPrim, "", true
+		}
+		// A std module's record reaches the ABI qualified the same way
+		// its sums do — the import site registered the module's
+		// declarations. The one spelling that arrives here today is
+		// process.run's Ok payload, `ProcessResult` named through the
+		// module's qualifier; the record's key is what an arm binding's
+		// field reads walk by.
+		if !e.isLocalName(n.Qual) {
+			if sk := e.resolveStd(n.Qual); sk != "" && len(n.Args) == 0 {
+				key := "std." + sk + "." + n.Name
+				if _, ok := e.records[key]; ok {
+					return abiGc, key, true
+				}
+			}
 		}
 		return abiVoid, "", false
 	}

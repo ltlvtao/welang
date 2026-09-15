@@ -22,6 +22,7 @@ func TestStdModuleLoadsParsedSources(t *testing.T) {
 		{"std.test", []string{"assertTrue", "assertFalse", "assertEqual"}},
 		{"std.time", []string{"now", "sleep"}},
 		{"std.fs", []string{"readFile", "writeFile", "appendFile", "removeFile", "makeDir", "removeDir", "listDir"}},
+		{"std.process", []string{"run"}},
 	}
 	for _, tc := range cases {
 		file, ok := StdModule(tc.key)
@@ -32,7 +33,7 @@ func TestStdModuleLoadsParsedSources(t *testing.T) {
 		for _, it := range file.Items {
 			fn, isFn := it.(*ast.FnDecl)
 			if !isFn {
-				continue // fs carries its FsError sum beside the fns
+				continue // fs and process carry their sums and records beside the fns
 			}
 			if !fn.Pub {
 				t.Fatalf("%s: %s is not pub", tc.key, fn.Name)

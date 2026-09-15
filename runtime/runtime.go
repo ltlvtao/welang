@@ -47,3 +47,6 @@ var ListSource string
 
 //go:embed c/fs.c
 var FsSource string
+
+//go:embed c/process.c
+var ProcessSource string

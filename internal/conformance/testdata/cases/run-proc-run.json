@@ -1,0 +1,16 @@
+{
+ "name": "run-proc-run",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.process\n\npub fn main() effect io -> Result<(), process.ProcessError> {\n    match process.run(\"/bin/echo\", [\"hi\"]) {\n        Ok(pr) => {\n            io.print(pr.stdout)\n            io.println(\"code ${pr.exitCode}\")\n        }\n        Err(_) => { io.println(\"bad\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "hi\ncode 0\n",
+ "stderr": ""
+}

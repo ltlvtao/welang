@@ -1,0 +1,12 @@
+// std.process — captured subprocess spawn (B2a design D4, ruling 3's
+// capture-style face: run one command to completion, both output pipes
+// collected, stdin inherited). The body is the keyed fiction: the checker
+// walks it like any body, and codegen replaces the call site with the
+// runtime entry. ProcessError is the module's own sum — a caller that
+// propagates with ? names it qualified, Result<_, process.ProcessError> —
+// and ProcessResult is its own record, the C side carving the answer.
+pub type ProcessError = ProcessFailed(String)
+
+pub record ProcessResult { exitCode: Int64, stdout: String, stderr: String }
+
+pub fn run(cmd: String, args: List<String>) effect io -> Result<ProcessResult, ProcessError> { Err(ProcessFailed("fiction")) }
