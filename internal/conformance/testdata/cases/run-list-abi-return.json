@@ -1,0 +1,16 @@
+{
+  "name": "run-list-abi-return",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn make() -> List<Int64> {\n    return [1, 2, 3]\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let ys = make()\n    let s = 0\n    for v in ys {\n        s = s + v\n    }\n    io.println(\"${s}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "6\n",
+  "stderr": ""
+}

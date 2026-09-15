@@ -6046,6 +6046,46 @@ func (e *emitter) listSource(x ast.Expr) (string, listElem, *NotImplemented) {
 	return "", listElem{}, e.bnd()
 }
 
+// emitListOperand answers the carrier operand one List-valued expression
+// names, with the element face the site that fixed it carried: a binding
+// (local or module-level), a literal built here at its own position, or a
+// call whose result is a List carrier (a collect, or a program fn whose
+// signature carries the face). Every other expression — a record value the
+// ownership protocol would copy, a construction — has no carrier to hand
+// over and stops; the ABI positions that reach here (an argument to a List
+// parameter, a List return) are the boundary contract's own.
+func (e *emitter) emitListOperand(x ast.Expr) (string, listElem, *NotImplemented) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		if b, ok := e.listEnv[v.Name]; ok {
+			return b.reg, b.elem, nil
+		}
+		if ts, ok := e.topName(v.Name); ok {
+			if b, ok := e.topListRead(ts); ok {
+				return b.reg, b.elem, nil
+			}
+		}
+	case *ast.Member:
+		if ts, ok := e.topMember(v); ok {
+			if b, ok := e.topListRead(ts); ok {
+				return b.reg, b.elem, nil
+			}
+		}
+	case *ast.ListLit:
+		return e.emitListLit(v, nil)
+	case *ast.Call:
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return "", listElem{}, ni
+		}
+		if res.kind != ckGc || res.list == nil {
+			return "", listElem{}, e.bnd()
+		}
+		return res.gcReg, *res.list, nil
+	}
+	return "", listElem{}, e.bnd()
+}
+
 // listFaceOf classifies a for statement's source without emitting: the
 // element face where the source is a List binding or a list literal, false
 // for every other iterable — the dispatch a for statement needs before it
@@ -6238,13 +6278,24 @@ func (e *emitter) emitListElemValue(x ast.Expr, face listElem) (string, *NotImpl
 // empty literal with no annotation to read (which the check stage already
 // rejects, E1501), report false.
 func (e *emitter) listElemFace(typ ast.TypeRef, x *ast.ListLit) (listElem, bool) {
-	if n, ok := typ.(*ast.NamedType); ok && n.Qual == "" && n.Name == "List" && len(n.Args) == 1 {
-		return e.elemFaceOfType(n.Args[0])
+	if arg, ok := listArgOf(typ); ok {
+		return e.elemFaceOfType(arg)
 	}
 	if len(x.Elems) == 0 {
 		return listElem{}, false
 	}
 	return e.elemFaceOfExpr(x.Elems[0])
+}
+
+// listArgOf reports whether t is a bare List reference and answers its one
+// type argument — the shape test behind every element-face read: the literal
+// annotation arm above, the classifier's carrier arm, and carrierElemFace
+// all ask it before asking what face the argument fixes.
+func listArgOf(t ast.TypeRef) (ast.TypeRef, bool) {
+	if n, ok := t.(*ast.NamedType); ok && n.Qual == "" && n.Name == "List" && len(n.Args) == 1 {
+		return n.Args[0], true
+	}
+	return nil, false
 }
 
 // elemFaceOfType reads one element type's face through the ABI classifier
@@ -6257,6 +6308,14 @@ func (e *emitter) listElemFace(typ ast.TypeRef, x *ast.ListLit) (listElem, bool)
 // false.
 func (e *emitter) elemFaceOfType(t ast.TypeRef) (listElem, bool) {
 	t = e.derefNewtype(t)
+	// A nested collection refuses here rather than downstream: the carrier
+	// an element would occupy is itself a value whose own face would have
+	// be written down too, and no base type names it. The ban starts at
+	// this one gate — the classifier's List arm asks the same read, so a
+	// signature slot and an element read cannot disagree about it.
+	if _, nested := listArgOf(t); nested {
+		return listElem{}, false
+	}
 	kind, key, ok := e.classType(t)
 	if !ok {
 		return listElem{}, false
@@ -6287,6 +6346,19 @@ func (e *emitter) elemFaceOfExpr(x ast.Expr) (listElem, bool) {
 	}
 	if key, ok := e.recordKeyOf(x); ok {
 		return listElem{rec: key, gc: true}, true
+	}
+	return listElem{}, false
+}
+
+// carrierElemFace answers the element face a List type reference carries —
+// the face its argument fixed, where the classifier already admitted the
+// carrier. The classifier is the one authority on nameability, so this read
+// cannot disagree with it; it exists to carry the face into an ABI entry
+// (fitAbi's return, bindTupleParams' parameters), where the signature alone
+// otherwise knows only the handle.
+func (e *emitter) carrierElemFace(t ast.TypeRef) (listElem, bool) {
+	if arg, ok := listArgOf(e.derefNewtype(e.resolveRef(t))); ok {
+		return e.elemFaceOfType(arg)
 	}
 	return listElem{}, false
 }
@@ -12748,6 +12820,12 @@ type fnParamAbi struct {
 	decl  ast.TypeRef // the declared type itself, where a position names one
 	elems []tupleElem // the element shapes (abiTuple)
 	sig   *fnAbi      // the parameter's own signature (abiFn)
+	// list is the element face a List parameter's carrier holds (abiGc);
+	// nil at every other parameter. The handle does not say what a walk
+	// over it binds into, so the face rides the signature the same way a
+	// record's key rides it, and the callee's binding reads it back
+	// (bindDefineParams routes a List parameter to the list environment).
+	list *listElem
 }
 
 // fnAbi is one fn's calling shape: the return family plus one entry per
@@ -12763,7 +12841,13 @@ type fnAbi struct {
 	// the same index. A return writes its payload words through it, and a
 	// caller matching on the result binds them back through it.
 	retShapes []sumVariantShape
-	params    []fnParamAbi
+	// retList is the element face a List-typed return's carrier holds
+	// (abiGc); nil at every other return. The face travels the signature
+	// both directions: fnRetOperand emits the carrier the returned value
+	// names, and the caller's callResult carries the face back out (T8-1's
+	// collect entry) so a binding over the result walks by it.
+	retList *listElem
+	params  []fnParamAbi
 }
 
 // sumVariantNames is the name column of a shape table — the same list
@@ -12868,6 +12952,23 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 		// whole of the classifier's Dyn support, and fitAbi gains no arm.
 		// The empty key is what makes the box share rather than copy
 		// wherever a record's key would have sent it to emitOwnedRecord.
+		return abiGc, "", true
+	}
+	if n.Name == "List" && len(n.Args) == 1 {
+		// The builtin List's carrier (design D9 cluster 4): one gc handle
+		// whose element face the argument fixes. The face is elemFaceOf-
+		// Type's own domain — one authority — so the carrier a signature
+		// admits and the walk a callee binds over it read the same answer;
+		// a nested List has no element face there, and a String element
+		// none in this build's width, so both refuse here rather than at
+		// some deeper emission. The empty key is the box's precedent: the
+		// handle shares rather than copies wherever a record's key would
+		// have sent it to emitOwnedRecord, and the face rides the ABI
+		// entry instead (fitAbi and bindTupleParams carry it).
+		arg := e.derefNewtype(e.resolveRef(n.Args[0]))
+		if _, ok := e.elemFaceOfType(arg); !ok {
+			return abiVoid, "", false
+		}
 		return abiGc, "", true
 	}
 	if len(n.Args) != 0 {
@@ -13122,6 +13223,12 @@ func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
 			abi.retTyp = "{ ptr, i64 }"
 		case abiGc:
 			abi.retTyp = "ptr"
+			// A List return adds the face its argument fixed — the
+			// classifier already admitted the carrier; every other gc
+			// handle (a record, a box) has none to carry.
+			if face, ok := e.carrierElemFace(t); ok {
+				abi.retList = &face
+			}
 		case abiSum:
 			abi.retTyp = "{ i64, i64, i64 }"
 			// The variant table and its payload shapes are one answer read
@@ -13199,8 +13306,16 @@ func (e *emitter) bindTupleParams(abi *fnAbi, params []ast.Param) (fnAbi, bool) 
 		// The name is the resolved one, as at the return position: inside
 		// an instantiation the declared spelling is a type parameter, and
 		// the binding's domain is the argument it was applied at.
-		abi.params = append(abi.params, fnParamAbi{kind: k, key: key, decl: p.Type,
-			typ: baseTypeName(e.derefNewtype(e.resolveRef(p.Type)))})
+		pa := fnParamAbi{kind: k, key: key, decl: p.Type,
+			typ: baseTypeName(e.derefNewtype(e.resolveRef(p.Type)))}
+		// A List parameter carries the element face its argument fixed, as
+		// the return does: the callee binds the name into the list
+		// environment by it, and the call site hands the carrier over
+		// through the same entry.
+		if face, ok := e.carrierElemFace(p.Type); ok {
+			pa.list = &face
+		}
+		abi.params = append(abi.params, pa)
 	}
 	return *abi, true
 }
@@ -13902,7 +14017,17 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 		case abiGc:
 			ps = append(ps, "ptr %"+p.Name)
 			if p.Name != "_" {
-				e.gcEnv[p.Name] = gcBinding{rec: pa.key, reg: "%" + p.Name}
+				// A List parameter is a carrier, not a record: the name
+				// binds into the list environment (the face the signature
+				// carried), where for and the combinators find it — the
+				// empty key leaves gcEnv nothing to say about it. A box
+				// parameter (the other empty-key gc family) keeps the
+				// gcBinding path, its dyn face being a T6 concern.
+				if pa.list != nil {
+					e.listEnv[p.Name] = listBinding{reg: "%" + p.Name, elem: *pa.list}
+				} else {
+					e.gcEnv[p.Name] = gcBinding{rec: pa.key, reg: "%" + p.Name}
+				}
 			}
 		case abiTuple:
 			// The words arrive flat (design D4's per-field spread) and the
@@ -14471,6 +14596,16 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 		if !hasValue {
 			return "", bndFn()
 		}
+		// A List return is the carrier its value names — the face rides
+		// the signature both sides share, and the record protocol has no
+		// key to copy by (the empty key is what shares it).
+		if abi.retList != nil {
+			reg, _, ni := e.emitListOperand(value)
+			if ni != nil {
+				return "", ni
+			}
+			return "ptr " + reg, nil
+		}
 		// The returned value copies out of the body when its record is a
 		// value record (chapter 8's "return copies the whole value"); a
 		// fresh construction is already the caller's own object.
@@ -14804,6 +14939,17 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 			}
 			ops = append(ops, "ptr "+p, "i64 "+l)
 		case abiGc:
+			if abi.params[i].list != nil {
+				// A List parameter takes the carrier its expression names
+				// (emitListOperand's four forms); the record protocol has
+				// no key to copy by — the empty key is what shares it.
+				reg, _, ni := e.emitListOperand(a)
+				if ni != nil {
+					return callResult{}, ni
+				}
+				ops = append(ops, "ptr "+reg)
+				continue
+			}
 			// An argument of a value-category record copies at the call
 			// site (chapter 8's "Passing copies"); a gc or resource
 			// record passes its own reference.
@@ -14888,7 +15034,14 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 		e.use("__we_root_push")
 		e.pushes++
 		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
-		return callResult{kind: ckGc, gcReg: reg, recKey: abi.retKey}, nil
+		res := callResult{kind: ckGc, gcReg: reg, recKey: abi.retKey}
+		// A List return carries its face back out (the ABI entry is where
+		// the caller's walk reads it from, T8-1's entry shape); a record
+		// or box return has none to carry.
+		if abi.retList != nil {
+			res.list = abi.retList
+		}
+		return res, nil
 	case abiSum:
 		v := e.value()
 		e.inst(fmt.Sprintf("%%%s = call %s %s(%s)", v, abi.retTyp, callee, join))

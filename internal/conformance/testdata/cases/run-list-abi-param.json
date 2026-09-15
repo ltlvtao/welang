@@ -1,0 +1,16 @@
+{
+  "name": "run-list-abi-param",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn tally(xs: List<Int64>) effect io -> Int64 {\n    let s = 0\n    for x in xs {\n        s = s + x\n    }\n    return s\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [1, 2, 3]\n    io.println(\"${tally(xs)}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "6\n",
+  "stderr": ""
+}

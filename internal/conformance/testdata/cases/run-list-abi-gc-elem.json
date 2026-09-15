@@ -1,0 +1,16 @@
+{
+  "name": "run-list-abi-gc-elem",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { hi: Int64 }\n\nfn total(xs: List<Cell>) -> Int64 {\n    let s = 0\n    for c in xs {\n        s = s + c.hi\n    }\n    return s\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs = [Cell { hi: 3 }, Cell { hi: 4 }]\n    io.println(\"${total(xs)}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "7\n",
+  "stderr": ""
+}
