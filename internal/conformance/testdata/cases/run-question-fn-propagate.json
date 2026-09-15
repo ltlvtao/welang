@@ -1,0 +1,16 @@
+{
+ "name": "run-question-fn-propagate",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Inner { seed: Int64 }\n\nimpl Inner {\n    fn fetch(self) -> Result<Int64, AppError> {\n        return Err(Failed(\"inner-bang\"))\n    }\n}\n\nrecord Outer { inner: Inner }\n\nimpl Outer {\n    fn fetch(self) -> Result<Int64, AppError> {\n        let v = self.inner.fetch()?\n        return Ok(v + 1i64)\n    }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let o = Outer { inner: Inner { seed: 1 } }\n    let v = o.fetch()?\n    io.println(\"v ${v}\")\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "",
+ "stderr": "error: Failed: inner-bang\n"
+}

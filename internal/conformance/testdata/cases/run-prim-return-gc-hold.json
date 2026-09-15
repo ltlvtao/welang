@@ -1,0 +1,16 @@
+{
+ "name": "run-prim-return-gc-hold",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nrecord Cell { seed: Int64 }\n\nfn make() -> conc.Mutex<Int64> {\n    return conc.Mutex(41)\n}\n\nfn hold() -> Int64 {\n    let m = make()\n    for i in 0..200000 {\n        let junk = Cell { seed: i }\n    }\n    return m.get()\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    io.println(\"m ${hold()}\")\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "m 41\n",
+ "stderr": ""
+}

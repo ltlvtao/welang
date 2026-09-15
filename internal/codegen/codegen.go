@@ -8767,18 +8767,35 @@ func (e *emitter) eqVariantNameOp(tag string, names []string) string {
 // a panic-message payload (an await's TaskPanic) hands the C string to
 // the task-fail ABI, a static report line (a timeout scope) writes the
 // M8 fail constant — and the Ok branch continues with the payload as
-// the expression's value. The two tails are the entry's faces (the
-// scheduler settles the report and the exit); inside a fn a `?` stops —
-// a fn returns its Result, the B-track widens the propagation.
+// the expression's value. The two widened tails read the slot's own
+// table: inside a fn that returns its Result the three words propagate
+// whole through the exit protocol a return takes, and at an entry the
+// report line renders from the variant the value carries — the same
+// joining the error tail's rendering uses, so the bytes match.
 func (e *emitter) emitQuestion(p *ast.Prop) (callResult, *NotImplemented) {
-	if e.ctx == ctxFn {
-		return callResult{}, bndFn()
-	}
 	res, ni := e.emitSumSource(p.X)
 	if ni != nil {
 		return callResult{}, ni
 	}
 	slot := res.sum
+	// The gates read the table before any control flow emits; both are
+	// pure reads of the shapes. A fn propagates its own Result whole —
+	// the Err side is the caller's match to read, never a line to name —
+	// so only the Ok face must bind in one word. An entry (main, or a
+	// task body's own timeout scopes) reports: the Ok face binds for the
+	// same reason, and the Err side must name a line.
+	fnSide := e.ctx == ctxFn
+	errName, errStr, errOK := questionErrLine(slot.shapes)
+	propagate := fnSide && e.exit != nil && e.exit.kind == exitFn &&
+		e.exit.abi.ret == abiSum && questionOkFace(slot.shapes)
+	report := !fnSide && !slot.errPanic && slot.errMsg == "" &&
+		errOK && questionOkFace(slot.shapes)
+	if !slot.errPanic && slot.errMsg == "" && !propagate && !report {
+		if fnSide {
+			return callResult{}, bndFn()
+		}
+		return callResult{}, e.bnd()
+	}
 	tag := e.loadNum(slot.tag, false)
 	c := e.value()
 	e.inst(fmt.Sprintf("%%%s = icmp eq i64 %s, 0", c, tag))
@@ -8788,25 +8805,139 @@ func (e *emitter) emitQuestion(p *ast.Prop) (callResult, *NotImplemented) {
 	errL := fmt.Sprintf("qerr%d", n)
 	e.inst(fmt.Sprintf("br i1 %%%s, label %%%s, label %%%s", c, okL, errL))
 	e.label(errL)
-	if slot.errPanic {
+	switch {
+	case slot.errPanic:
 		msg := e.loadNum(slot.pay, false)
 		pv := e.value()
 		e.inst(fmt.Sprintf("%%%s = inttoptr i64 %s to ptr", pv, msg))
 		e.use("__we_task_fail")
 		e.inst(fmt.Sprintf("call void @__we_task_fail(ptr %%%s)", pv))
-	} else {
+		e.inst("unreachable")
+	case slot.errMsg != "":
 		line := slot.errMsg
-		if line == "" {
-			return callResult{}, e.bnd()
-		}
 		e.use("__we_fail")
 		cn := e.cstr("q", line, "\\0A")
 		e.inst(fmt.Sprintf("call void @__we_fail(ptr %s, i64 %d)", cn, len(line)+1))
+		e.inst("unreachable")
+	case propagate:
+		// The fn's own Result leaves whole. The slot's three words rebuild
+		// the return's aggregate — the insertvalue face a register sum
+		// return builds (fnRetOperand) — then the exit protocol a return
+		// takes closes the body. No diverged: `?` is a mid-expression
+		// exit, and the Ok path below keeps emitting into the same body.
+		// The tag need not load again — the branch's own compare read it,
+		// and the entry block dominates both arms.
+		w0 := e.loadNum(slot.pay, false)
+		w1 := e.loadNum(slot.pay1, false)
+		cur := "undef"
+		insert := func(w string, at int) {
+			v := e.value()
+			e.inst(fmt.Sprintf("%%%s = insertvalue { i64, i64, i64 } %s, i64 %s, %d", v, cur, w, at))
+			cur = "%" + v
+		}
+		insert(tag, 0)
+		insert(w0, 1)
+		insert(w1, 2)
+		// inExit guards re-entry the way emitReturn's does: a deferred
+		// block that itself returns or unwraps must not reopen the exit
+		// machinery mid-drain.
+		e.inExit = true
+		defer func() { e.inExit = false }()
+		e.unwind(0)
+		if ni := e.drainDefers(); ni != nil {
+			return callResult{}, ni
+		}
+		e.popRoots()
+		e.inst("ret { i64, i64, i64 } " + cur)
+	default: // report
+		if errStr {
+			// The line interpolates the value's own String payload: the
+			// head names the variant, the payload pair rides after the
+			// colon, the newline joins as a constant segment — the same
+			// fold as the error tail's rendering, so the bytes match.
+			head := "error: " + errName + ": "
+			p, l, ni := e.errFold([]strPart{
+				{e.intern(head), strconv.Itoa(len(head))},
+				{e.wordPtr(e.loadNum(slot.pay, false)), e.loadNum(slot.pay1, false)},
+				{e.intern("\n"), "1"},
+			})
+			if ni != nil {
+				return callResult{}, ni
+			}
+			e.use("__we_fail")
+			e.inst(fmt.Sprintf("call void @__we_fail(ptr %s, i64 %s)", p, l))
+		} else {
+			// A payload-less variant's line is a compile-time constant —
+			// the same global form the static arm writes.
+			head := "error: " + errName
+			e.use("__we_fail")
+			cn := e.cstr("q", head, "\\0A")
+			e.inst(fmt.Sprintf("call void @__we_fail(ptr %s, i64 %d)", cn, len(head)+1))
+		}
+		e.inst("unreachable")
 	}
-	e.inst("unreachable")
 	e.label(okL)
 	pay := e.loadNum(slot.pay, false)
-	return callResult{kind: ckI64, i64: pay}, nil
+	// The bound name reads the Ok payload's own face: the table's shape
+	// entry carries the declared base name, the same source a match arm's
+	// binding reads, so the interpolation domain and the arithmetic width
+	// answer downstream exactly as a returned scalar's do.
+	tn := ""
+	if len(slot.shapes) > 0 && len(slot.shapes[0].pay) == 1 &&
+		slot.shapes[0].pay[0].kind == abiI64 {
+		tn = slot.shapes[0].pay[0].typ
+	}
+	return callResult{kind: ckI64, i64: pay, typeName: tn, num: narrowName(tn)}, nil
+}
+
+// questionOkFace reports whether the Ok side of a `?`'s table can bind as
+// this build's one-word expression value: every payload position is
+// either void or a single i64 word. A wider Ok face — a String pair, a gc
+// handle, a Float64's bits riding unchecked, a prim's pointer word — has
+// no reading here: the Ok path below would hand the caller a raw word
+// read as a number, so the face refuses and the `?` stops honestly.
+func questionOkFace(shapes []sumVariantShape) bool {
+	if !isResultShapes(shapes) {
+		return false
+	}
+	words := 0
+	for _, p := range shapes[0].pay {
+		switch p.kind {
+		case abiVoid:
+		case abiI64:
+			words++
+			if words > 1 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// questionErrLine names the report line a `?`'s Err side can give an
+// entry tail: the variant's own name, and whether its one payload
+// position is a runtime String whose pair the line interpolates after
+// the colon. Only a table with exactly one error variant reaches an
+// answer (a Result's fused table has Ok at its head, so the rest is the
+// error sum); a multi-variant error face has no single name to print and
+// the entry's `?` stops on it — the fn side propagates the three words
+// whole and never asks.
+func questionErrLine(shapes []sumVariantShape) (name string, strPayload bool, ok bool) {
+	if !isResultShapes(shapes) || len(shapes) != 2 {
+		return "", false, false
+	}
+	sh := shapes[1]
+	switch len(sh.pay) {
+	case 0:
+		return sh.name, false, true
+	case 1:
+		if sh.pay[0].kind == abiStr {
+			return sh.name, true, true
+		}
+	}
+	return "", false, false
 }
 
 // emitSumSource evaluates the expression under a `?` or a select source:
@@ -12801,6 +12932,11 @@ func constErrPayload(args []ast.Expr) (string, bool) {
 	return b.String(), true
 }
 
+// strPart is one segment of a joined String: the data operand and the
+// length operand of a piece — an interned constant names its global, a
+// computed piece its register.
+type strPart struct{ p, l string }
+
 // errReport renders one report line at run time: the literal head, every
 // payload position through the value-to-String face interpolation uses,
 // and the newline, joined by the runtime's concatenation. The positions
@@ -12808,26 +12944,35 @@ func constErrPayload(args []ast.Expr) (string, bool) {
 // text the constant path writes — so whether a line is folded at compile
 // time is unobservable in what it prints.
 func (e *emitter) errReport(head string, args []ast.Expr) (string, string, *NotImplemented) {
-	type pair struct{ p, l string }
-	parts := []pair{{e.intern(head), strconv.Itoa(len(head))}}
+	parts := []strPart{{e.intern(head), strconv.Itoa(len(head))}}
 	for i, a := range args {
 		if i > 0 {
-			parts = append(parts, pair{e.intern(", "), "2"})
+			parts = append(parts, strPart{e.intern(", "), "2"})
 		}
 		res, ni := e.emitHole(a)
 		if ni != nil {
 			return "", "", ni
 		}
-		parts = append(parts, pair{res.strBind.dataOp, res.strBind.lenOp})
+		parts = append(parts, strPart{res.strBind.dataOp, res.strBind.lenOp})
 	}
-	parts = append(parts, pair{e.intern("\n"), "1"})
+	parts = append(parts, strPart{e.intern("\n"), "1"})
+	return e.errFold(parts)
+}
+
+// errFold folds one report line's segments into the (data, len) pair
+// __we_fail takes. Every segment joins through the runtime's own
+// concatenation, so constant and computed pieces fold alike — where a
+// line's bytes came from is unobservable in what it prints. The question
+// mark's entry tail renders through this same fold (emitQuestion), one
+// joining discipline for every report line the entry can write.
+func (e *emitter) errFold(parts []strPart) (string, string, *NotImplemented) {
 	acc := parts[0]
 	for _, p := range parts[1:] {
 		d, l, ni := e.concatStr(acc.p, acc.l, p.p, p.l)
 		if ni != nil {
 			return "", "", ni
 		}
-		acc = pair{d, l}
+		acc = strPart{d, l}
 	}
 	return acc.p, acc.l, nil
 }
@@ -13298,15 +13443,16 @@ func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
 			abi.retShapes = shapes
 			abi.variants = sumVariantNames(shapes)
 		case abiPrim:
-			// The parameter position is the face this build widened. A
-			// prim coming back has no spelling here — retTyp would go
-			// unset and the define would name no return type — so the
-			// signature is refused at classification, and a call site to
-			// such a fn refuses on the same answer rather than on a body
-			// it never sees. fnRetOperand's own switch has no abiPrim arm
-			// and refuses it as well; the two guards agree, and the T9-3
-			// battery records that either alone holds.
-			return abi, false
+			// The prim rides the signature as its handle's one pointer
+			// word — the face the parameter position already carries
+			// (T9-3 widened the parameter; this arm widens the return).
+			// fnRetOperand spells the value side: a name the body holds
+			// in e.prims, or a call answering ckPrim. The T9-3 battery
+			// once recorded that either guard alone held — two guards
+			// agreeing on a refusal; the refusal lifts here and the
+			// operand arm below keeps the pair honest in the other
+			// direction.
+			abi.retTyp = "ptr"
 		}
 	default:
 		return abi, false
@@ -14702,6 +14848,34 @@ func (e *emitter) fnRetOperand(abi fnAbi, value ast.Expr, hasValue bool) (string
 		insert(wordOr0(words, 0), 1)
 		insert(wordOr0(words, 1), 2)
 		return "{ i64, i64, i64 } " + cur, nil
+	case abiPrim:
+		if !hasValue {
+			return "", bndFn()
+		}
+		// The prim's one word is the handle itself: a binding the body
+		// holds names it in e.prims (the same environment a parameter
+		// rides), and a call that answers one resolves through the
+		// emitter every other operand face uses. Any other value face
+		// has no spelling here — the honest stop; the value faces beyond
+		// the return stay this build's boundary.
+		switch v := value.(type) {
+		case *ast.Ident:
+			p, ok := e.prims[v.Name]
+			if !ok {
+				return "", bndFn()
+			}
+			return "ptr " + p, nil
+		case *ast.Call:
+			res, ni := e.emitCall(v, nil)
+			if ni != nil {
+				return "", ni
+			}
+			if res.kind != ckPrim {
+				return "", bndFn()
+			}
+			return "ptr " + res.i64, nil
+		}
+		return "", bndFn()
 	}
 	return "", bndFn()
 }
@@ -15112,6 +15286,19 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 			tag: ts, pay: pp, pay1: p1,
 			variants: abi.variants, shapes: abi.retShapes, key: abi.retKey,
 		}}, nil
+	case abiPrim:
+		// A synchronous type crosses back as its own pointer. The ckPrim
+		// contract roots a primitive where it is made; the callee's root
+		// died at its exit, so the caller re-roots the fresh answer the
+		// way the gc-record return above does — no allocation sits
+		// between the call and the push.
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr %s(%s)", v, callee, join))
+		reg := "%" + v
+		e.use("__we_root_push")
+		e.pushes++
+		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", reg))
+		return callResult{kind: ckPrim, i64: reg}, nil
 	}
 	return callResult{}, e.bnd()
 }

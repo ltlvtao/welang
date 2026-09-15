@@ -1,0 +1,16 @@
+{
+ "name": "run-prim-return",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.concurrent as conc\nimport std.io\n\npub type AppError = Failed(String)\n\nfn make() -> conc.Mutex<Int64> {\n    return conc.Mutex(41)\n}\n\nfn bump(m: conc.Mutex<Int64>) -> Int64 {\n    let _ = m.set(m.get() + 1i64)\n    return m.get()\n}\n\nfn viaLet() -> Int64 {\n    let m = make()\n    return bump(m)\n}\n\nfn viaArg() -> Int64 {\n    return bump(make())\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let m = make()\n    io.println(\"main ${bump(m)}\")\n    io.println(\"let ${viaLet()}\")\n    io.println(\"arg ${viaArg()}\")\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "main 42\nlet 42\narg 42\n",
+ "stderr": ""
+}

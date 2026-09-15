@@ -195,25 +195,24 @@ func TestM9aSyncTypedParameterBindsThePointer(t *testing.T) {
 		"  %v5 = call i64 %v3(ptr %v4)", "the inline-construction argument")
 }
 
-// The prim face is a parameter face only. A chapter 18 object coming back
-// would need a callee-side operand the result face has not got, and the
-// caller would read the value it hands over as a scalar; fitAbi refuses
-// the return face rather than guess, and the refusal carries the body word
-// because the return is written in the body.
-func TestM9aPrimReturnStaysAtTheBoundary(t *testing.T) {
+// A synchronous type comes back as its own pointer: the define's return
+// word is `ptr`, the value is the prim constructor's own answer, and the
+// root it pushed at construction is popped at the exit — the caller
+// re-roots the fresh answer on its side of the call.
+func TestM9aPrimReturnCrossesAsAPointer(t *testing.T) {
 	f := &ast.File{Items: []ast.Item{
 		&ast.Import{Path: []string{"std", "concurrent"}, Alias: "conc"},
 		appError(),
 		pubFn("make", nil, syncMutex(), retValue(mutexCtor())),
 		mainDecl(okReturn()),
 	}}
-	_, ni := Emit(f, "demo")
-	if ni == nil {
-		t.Fatal("expected a boundary for a prim-returning fn, got clean emission")
+	ir, ni := Emit(f, "demo")
+	if ni != nil {
+		t.Fatalf("boundary: %s", ni.What)
 	}
-	if ni.What != bndFnBody {
-		t.Fatalf("boundary What %q, want %q", ni.What, bndFnBody)
-	}
+	wantIR(t, ir, "define ptr @main.make() {", "the prim-returning define")
+	wantIR(t, ir, "  %v0 = call ptr @__we_prim_new_mutex(i64 0)", "the constructor's own answer")
+	wantIR(t, ir, "  ret ptr %v0", "the pointer handed out")
 }
 
 // The adapter a fn value crosses as is built from the same word list the
