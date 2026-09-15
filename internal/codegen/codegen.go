@@ -14704,48 +14704,72 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 // ride, and the real body's symbol the restore stores back. A std entry
 // classifies by its restated signature — the entries' types are the base
 // scalars and String, which classify under any module's tables.
-func (e *emitter) mockTarget(md *ast.MockDecl) (fnAbi, string, string, *NotImplemented) {
+// mockTarget resolves one mock declaration's interception face: the ABI
+// its body lowers under, the slot the runtime swaps, the slot's default
+// the restore writes back, and whether the target's calling shape is the
+// out trio (the fs family's C entries answer a fused Result through a
+// trailing [3 x i64] out block — a shape no std entry and no program fn
+// shares, so the mock's install carries it too: the target's own calling
+// shape, the mock's one transparency rule).
+func (e *emitter) mockTarget(md *ast.MockDecl) (fnAbi, string, string, bool, *NotImplemented) {
 	if md.TargetQual != "" {
 		if k := e.resolveQual(md.TargetQual); k != "" {
 			fd, ok := e.fnTable[k+"."+md.Target]
 			if !ok {
-				return fnAbi{}, "", "", e.bnd()
+				return fnAbi{}, "", "", false, e.bnd()
 			}
 			abi, ok := e.classify(fd)
 			if !ok {
-				return fnAbi{}, "", "", bndFn()
+				return fnAbi{}, "", "", false, bndFn()
 			}
 			slot := fd.key + "." + fd.name
 			// The restore returns to the slot's default: the gate for a
 			// custom-effect fn, the real body otherwise (M10c D6 — the
 			// post-mock default is the gate again, never the real body).
-			return abi, slot, fnSlotTarget(fd), nil
+			return abi, slot, fnSlotTarget(fd), false, nil
 		}
 		if sk := e.resolveStd(md.TargetQual); sk != "" {
-			ent, ok := stdFnEntries[sk][md.Target]
-			if !ok {
-				return fnAbi{}, "", "", e.bnd()
+			if ent, ok := stdFnEntries[sk][md.Target]; ok {
+				abi, ok := e.fnAbiOf(&ast.FnDecl{Params: md.Params, Ret: md.Ret})
+				if !ok {
+					return fnAbi{}, "", "", false, bndFn()
+				}
+				return abi, sk + "." + md.Target, "@" + ent.sym, false, nil
 			}
-			abi, ok := e.fnAbiOf(&ast.FnDecl{Params: md.Params, Ret: md.Ret})
-			if !ok {
-				return fnAbi{}, "", "", bndFn()
+			// The fs family rides its own table beside the std entries
+			// (B2a design D3), every entry answering through the out
+			// trio — so the mock the slot installs must take that shape
+			// too. The ABI the mock's body lowers under stays the sum it
+			// declares; the wrapper emitMockDefine adds for the outTrio
+			// flag hands that sum's three words to the caller's out
+			// block, which is exactly what the C entry the slot defaults
+			// to does. process.run keeps the honest stop: its Ok half is
+			// a record handle, a payload face no mock body has yet.
+			if sk == "fs" {
+				if ent, ok := fsEntries[md.Target]; ok {
+					abi, ok := e.fnAbiOf(&ast.FnDecl{Params: md.Params, Ret: md.Ret})
+					if !ok {
+						return fnAbi{}, "", "", false, bndFn()
+					}
+					return abi, "fs." + md.Target, "@" + ent.sym, true, nil
+				}
 			}
-			return abi, sk + "." + md.Target, "@" + ent.sym, nil
+			return fnAbi{}, "", "", false, e.bnd()
 		}
-		return fnAbi{}, "", "", e.bnd()
+		return fnAbi{}, "", "", false, e.bnd()
 	}
 	fd, ok := e.fnTable[e.curKey+"."+md.Target]
 	if !ok {
-		return fnAbi{}, "", "", e.bnd()
+		return fnAbi{}, "", "", false, e.bnd()
 	}
 	abi, ok := e.classify(fd)
 	if !ok {
-		return fnAbi{}, "", "", bndFn()
+		return fnAbi{}, "", "", false, bndFn()
 	}
 	slot := fd.key + "." + fd.name
 	// The unqualified face mirrors the qualified one: the restore returns
 	// to the slot's default (the gate for a custom-effect fn, M10c D6).
-	return abi, slot, fnSlotTarget(fd), nil
+	return abi, slot, fnSlotTarget(fd), false, nil
 }
 
 // emitMockDefine emits one mock fn under "<key>.mock.<n>" with the
@@ -14753,9 +14777,14 @@ func (e *emitter) mockTarget(md *ast.MockDecl) (fnAbi, string, string, *NotImple
 // so the mock carries the target's own calling shape) and the mock's
 // parameter names, the body walking as a fn body — the one-tail-return
 // discipline and the family's return through fnRetVal. No slot: the mock
-// is never itself a call face, only a value a slot holds.
+// is never itself a call face, only a value a slot holds. The fs family's
+// out-trio targets answer through a trailing out block rather than a
+// register return, so their mock rides two defines: the body under the
+// sum ABI the declaration spells, and the void wrapper mockOutWrapper
+// adds — the slot installs the wrapper, the one shape callers call
+// through and the one the C entry's slot default already has.
 func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInstall, *NotImplemented) {
-	abi, slot, restore, ni := e.mockTarget(md)
+	abi, slot, restore, outTrio, ni := e.mockTarget(md)
 	if ni != nil {
 		return mockInstall{}, ni
 	}
@@ -14834,9 +14863,16 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 		body := e.bodyText()
 		restoreState()
 		sym := fmt.Sprintf("%s.mock.%d", key, n)
+		def := sym
+		if outTrio {
+			def = sym + ".body"
+		}
 		e.fnsDone = append(e.fnsDone, fmt.Sprintf(
 			"define %s @%s(%s) {\nentry:\n%s}\n",
-			abi.retTyp, sym, strings.Join(ps, ", "), body))
+			abi.retTyp, def, strings.Join(ps, ", "), body))
+		if outTrio {
+			e.fnsDone = append(e.fnsDone, mockOutWrapper(sym, abi.retTyp, ps))
+		}
 		return mockInstall{slot: slot, mock: "@" + sym, restore: restore}, nil
 	}
 	ret, ni := e.fnRetVal(abi, tail)
@@ -14855,10 +14891,38 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	body := e.bodyText()
 	restoreState()
 	sym := fmt.Sprintf("%s.mock.%d", key, n)
+	def := sym
+	if outTrio {
+		def = sym + ".body"
+	}
 	e.fnsDone = append(e.fnsDone, fmt.Sprintf(
 		"define %s @%s(%s) {\nentry:\n%s  ret %s\n}\n",
-		abi.retTyp, sym, strings.Join(ps, ", "), body, ret))
+		abi.retTyp, def, strings.Join(ps, ", "), body, ret))
+	if outTrio {
+		e.fnsDone = append(e.fnsDone, mockOutWrapper(sym, abi.retTyp, ps))
+	}
 	return mockInstall{slot: slot, mock: "@" + sym, restore: restore}, nil
+}
+
+// mockOutWrapper hand-assembles the void wrapper an out-trio mock rides
+// on: the calling shape the slot's default already has (the caller's
+// words, then the trailing out block), forwarding to the body define and
+// handing the sum's three registers to the out block — extractvalue index
+// N mirrors the reader's gepLoadI64 at 8*N, so tag, pay, and pay1 keep
+// the register order the sum ABI gave them. Hand-named registers in a
+// scope of its own: the wrapper is assembled text, not e.inst, so the
+// body's SSA counter never sees it and the two defines stay independent.
+func mockOutWrapper(sym, retTyp string, ps []string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("define void @%s(%s, ptr %%__out) {\nentry:\n", sym, strings.Join(ps, ", ")))
+	b.WriteString(fmt.Sprintf("  %%m = call %s @%s.body(%s)\n", retTyp, sym, strings.Join(ps, ", ")))
+	for i := 0; i < 3; i++ {
+		b.WriteString(fmt.Sprintf("  %%m%d = extractvalue %s %%m, %d\n", i, retTyp, i))
+		b.WriteString(fmt.Sprintf("  %%w%d = getelementptr i8, ptr %%__out, i64 %d\n", i, 8*i))
+		b.WriteString(fmt.Sprintf("  store i64 %%m%d, ptr %%w%d\n", i, i))
+	}
+	b.WriteString("  ret void\n}\n")
+	return b.String()
 }
 
 // emitTestDefine emits one test fn under "<key>.test.<n>" — void, no

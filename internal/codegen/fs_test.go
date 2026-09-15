@@ -3,6 +3,9 @@ package codegen
 import (
 	"strings"
 	"testing"
+
+	"github.com/ltlvtao/welang/internal/parser"
+	"github.com/ltlvtao/welang/internal/typecheck"
 )
 
 // B2a T2's face: the fs family's seven entries answer a fused Result
@@ -178,4 +181,60 @@ func TestQuestionOnListOkStillStops(t *testing.T) {
 	if ni.What != bndMainBody {
 		t.Fatalf("boundary word: %q", ni.What)
 	}
+}
+
+// TestFsMockRidesTheOutTrio: the fs family's mockable face is the C entry
+// behind its own slot (not a stdFnEntries sym), so the mock installs over
+// that slot and restores back to the entry. And because the entry answers
+// a fused Result through a trailing out block — a calling shape no std
+// entry and no program fn shares — the mock rides two defines: the body
+// under the sum ABI the declaration spells, and the void wrapper the slot
+// installs, forwarding the sum's three registers to the caller's out
+// block at the offsets the C side's own readers gep (8*N — extractvalue
+// index N mirrors gepLoadI64 at 8*N, so tag, pay, pay1 keep their order).
+func TestFsMockRidesTheOutTrio(t *testing.T) {
+	// The real test-module pipeline: std.fs rides the check graph as a
+	// dep (its FsError registration is what `Result<_, fs.FsError>` in
+	// the mock's own signature resolves through) and is filtered from
+	// the program face, whose call faces are the emitter's own table.
+	f, d, pni := parser.Parse("m_test.we", []byte(`import std.fs
+
+test "mocked read" {
+    mock fs.readFile(path: String) -> Result<String, fs.FsError> effect io {
+        return Ok("stub")
+    }
+    match fs.readFile("/etc/hostname") {
+        Ok(_) => { }
+        Err(_) => { }
+    }
+}
+`))
+	if d != nil || pni != nil {
+		t.Fatalf("parse: d=%v ni=%v", d, pni)
+	}
+	f.IsTestModule = true
+	sf, ok := typecheck.StdModule("std.fs")
+	if !ok || sf == nil {
+		t.Fatal("std.fs not registered")
+	}
+	td, tni, sh := typecheck.CheckTestRoot(f, "tests/m_test.we", "tests.m_test", []typecheck.Module{
+		{Key: "std.fs", Path: "std/fs.we", File: sf},
+	})
+	if td != nil || tni != nil {
+		t.Fatalf("check: %v %+v", td, tni)
+	}
+	ir, ni := EmitProgram(ModeTest, []ProgModule{
+		{Key: "tests.m_test", ID: "demo", File: f, Shapes: sh},
+	})
+	if ni != nil {
+		t.Fatalf("boundary %q over the fs mock face:\n%s", ni.What, ir)
+	}
+	wantIR(t, ir, "@slot.fs.readFile = global ptr @__we_fs_read_file", "the family's own slot defaults to the C entry")
+	wantIR(t, ir, "store ptr @tests.m_test.mock.0, ptr @slot.fs.readFile", "install")
+	wantIR(t, ir, "store ptr @__we_fs_read_file, ptr @slot.fs.readFile", "restore returns to the C entry")
+	wantIR(t, ir, "define { i64, i64, i64 } @tests.m_test.mock.0.body(ptr %path0, i64 %path1)", "the body define keeps the sum ABI")
+	wantIR(t, ir, "define void @tests.m_test.mock.0(ptr %path0, i64 %path1, ptr %__out)", "the wrapper takes the entry's own calling shape")
+	wantIR(t, ir, "call { i64, i64, i64 } @tests.m_test.mock.0.body(ptr %path0, i64 %path1)", "the wrapper forwards to the body")
+	wantIR(t, ir, "extractvalue { i64, i64, i64 } %m, 2", "the third sum register comes out")
+	wantIR(t, ir, "getelementptr i8, ptr %__out, i64 16", "and lands at the out block's +16 word")
 }

@@ -1,0 +1,16 @@
+{
+ "name": "run-proc-signal",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.process\n\npub fn main() effect io -> Result<(), process.ProcessError> {\n    match process.run(\"/bin/sh\", [\"-c\", \"kill -9 $$\"]) {\n        Ok(pr) => {\n            if pr.exitCode == 137 {\n                io.println(\"sig-ok\")\n            } else {\n                io.println(\"sig-bad ${pr.exitCode}\")\n            }\n        }\n        Err(_) => { io.println(\"spawn-failed\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "sig-ok\n",
+ "stderr": ""
+}

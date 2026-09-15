@@ -1,0 +1,16 @@
+{
+  "name": "test-fs-mock",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.fs\n\ntest \"mocked read\" {\n    mock fs.readFile(path: String) -> Result<String, fs.FsError> effect io {\n        return Ok(\"stub\")\n    }\n    match fs.readFile(\"/etc/hostname\") {\n        Ok(c) => { assert(c == \"stub\", \"mocked\") }\n        Err(_) => { assert(false, \"mocked\") }\n    }\n}\n\ntest \"restored\" {\n    match fs.readFile(\"/no/such/file\") {\n        Ok(_) => { assert(false, \"restored\") }\n        Err(_) => { assert(true, \"restored\") }\n    }\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "pass  tests/m_test.we: mocked read (0ms)\npass  tests/m_test.we: restored (0ms)\ntotal 2, passed 2, failed 0 (0ms)\n",
+  "stderr": ""
+}
