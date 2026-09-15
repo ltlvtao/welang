@@ -395,6 +395,7 @@ func (e *env) compileProgram(buildDir, base, ir string, nativeObjs []string) (st
 		{filepath.Join(buildDir, "rt-str.c"), weruntime.StrSource},
 		{filepath.Join(buildDir, "list.h"), weruntime.ListHeader},
 		{filepath.Join(buildDir, "rt-list.c"), weruntime.ListSource},
+		{filepath.Join(buildDir, "rt-fs.c"), weruntime.FsSource},
 	} {
 		if err := os.WriteFile(f.path, []byte(f.content), 0o644); err != nil {
 			return "", e.fsError(err)
@@ -419,6 +420,7 @@ func (e *env) compileProgram(buildDir, base, ir string, nativeObjs []string) (st
 		filepath.Join(buildDir, "rt-io.o"),
 		filepath.Join(buildDir, "rt-str.o"),
 		filepath.Join(buildDir, "rt-list.o"),
+		filepath.Join(buildDir, "rt-fs.o"),
 	}
 	linkArgs = append(linkArgs, nativeObjs...)
 	linkArgs = append(linkArgs, "-o", filepath.Join(buildDir, base))
@@ -434,6 +436,7 @@ func (e *env) compileProgram(buildDir, base, ir string, nativeObjs []string) (st
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-io.c"), "-o", filepath.Join(buildDir, "rt-io.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-str.c"), "-o", filepath.Join(buildDir, "rt-str.o")}},
 		{"clang", []string{"-c", filepath.Join(buildDir, "rt-list.c"), "-o", filepath.Join(buildDir, "rt-list.o")}},
+		{"clang", []string{"-c", filepath.Join(buildDir, "rt-fs.c"), "-o", filepath.Join(buildDir, "rt-fs.o")}},
 		{"clang", linkArgs},
 	} {
 		if code := e.runClang(c.name, c.args...); code != exitOK {

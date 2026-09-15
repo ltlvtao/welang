@@ -1,0 +1,17 @@
+{
+  "name": "run-fs-question",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "app.conf": "config-ok",
+      "src/main.we": "import std.io\nimport std.fs\n\npub fn readConfig() effect io -> Result<String, fs.FsError> {\n    let body = fs.readFile(\"app.conf\")?\n    return Ok(body)\n}\n\npub fn main() effect io -> Result<(), fs.FsError> {\n    let conf = readConfig()?\n    io.println(conf)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "config-ok\n",
+  "stderr": ""
+}

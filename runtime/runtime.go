@@ -44,3 +44,6 @@ var ListHeader string
 
 //go:embed c/list.c
 var ListSource string
+
+//go:embed c/fs.c
+var FsSource string

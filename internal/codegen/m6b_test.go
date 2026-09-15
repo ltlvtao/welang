@@ -24,7 +24,9 @@ func resultOf(t, e ast.TypeRef) *ast.NamedType {
 func q(x ast.Expr) *ast.Prop { return &ast.Prop{X: x} }
 
 // The two gates are pure reads of the table: the Ok face must bind in
-// one word (or none), and the report line must name exactly one error
+// one word, one String pair, or none (B2a T2 widened the pair in — the
+// whole-read's `?` binds the two payload words as the String itself),
+// and the report line must name exactly one error
 // variant whose one payload is a String — or none at all. Everything
 // else the gates refuse, so the `?` stops honestly rather than handing
 // the caller a raw word read as a number, or printing a line the table
@@ -45,7 +47,7 @@ func TestQuestionGatesAnswerByFace(t *testing.T) {
 		{"unit Ok", okFace(), true},
 		{"one i64 word", okFace(i64), true},
 		{"two i64 words", okFace(i64, i64), false},
-		{"a String pair", okFace(str), false},
+		{"a String pair", okFace(str), true},
 		{"a gc handle", okFace(gc), false},
 		{"a Float64's bits", okFace(f64), false},
 		{"not a Result head", []sumVariantShape{{name: "Some", pay: []fnParamAbi{i64}}}, false},

@@ -21,6 +21,7 @@ func TestStdModuleLoadsParsedSources(t *testing.T) {
 		{"std.io", []string{"println", "print"}},
 		{"std.test", []string{"assertTrue", "assertFalse", "assertEqual"}},
 		{"std.time", []string{"now", "sleep"}},
+		{"std.fs", []string{"readFile", "writeFile", "appendFile", "removeFile", "makeDir", "removeDir", "listDir"}},
 	}
 	for _, tc := range cases {
 		file, ok := StdModule(tc.key)
@@ -31,7 +32,7 @@ func TestStdModuleLoadsParsedSources(t *testing.T) {
 		for _, it := range file.Items {
 			fn, isFn := it.(*ast.FnDecl)
 			if !isFn {
-				t.Fatalf("%s: item %T is not a fn decl", tc.key, it)
+				continue // fs carries its FsError sum beside the fns
 			}
 			if !fn.Pub {
 				t.Fatalf("%s: %s is not pub", tc.key, fn.Name)
@@ -78,11 +79,22 @@ func TestStdConcurrentStaysSynthetic(t *testing.T) {
 	}
 }
 
-// TestStdFsIsNotYetAStandardModule: T2's red-first anchor — no fs source
-// is embedded yet, so the loader answers not-found and E1302's std form
-// stays the observable face for import std.fs.
-func TestStdFsIsNotYetAStandardModule(t *testing.T) {
-	if f, ok := StdModule("std.fs"); ok {
-		t.Fatalf("std.fs registered with %d items", len(f.Items))
+// TestStdFsIsNotYetAStandardModule was T2's red-first anchor — fs landed
+// with T2, so the anchor retires here: the loader answers with the parsed
+// source, and the module's own FsError sum rides beside the seven fns
+// (a caller names it qualified — Result<_, fs.FsError>).
+func TestStdFsIsAStandardModule(t *testing.T) {
+	file, ok := StdModule("std.fs")
+	if !ok || file == nil {
+		t.Fatal("std.fs not registered")
+	}
+	var sums int
+	for _, it := range file.Items {
+		if _, isSum := it.(*ast.SumDecl); isSum {
+			sums++
+		}
+	}
+	if sums != 1 {
+		t.Fatalf("std.fs carries %d sum decls, want 1 (FsError)", sums)
 	}
 }

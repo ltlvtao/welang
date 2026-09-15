@@ -1,0 +1,15 @@
+// std.fs — whole-file filesystem operations (B2a design D3, ruling 3's
+// black-box shape: no handle types, no streams, no permission bits). The
+// bodies are the keyed fictions: the checker walks them like any body,
+// and codegen replaces each call site with the runtime entry. FsError is
+// the module's own sum, so a caller that propagates with ? names it
+// qualified — Result<_, fs.FsError> — the same reach conc's types have.
+pub type FsError = FsFailed(String)
+
+pub fn readFile(path: String) effect io -> Result<String, FsError> { Err(FsFailed("fiction")) }
+pub fn writeFile(path: String, data: String) effect io -> Result<(), FsError> { Err(FsFailed("fiction")) }
+pub fn appendFile(path: String, data: String) effect io -> Result<(), FsError> { Err(FsFailed("fiction")) }
+pub fn removeFile(path: String) effect io -> Result<(), FsError> { Err(FsFailed("fiction")) }
+pub fn makeDir(path: String) effect io -> Result<(), FsError> { Err(FsFailed("fiction")) }
+pub fn removeDir(path: String) effect io -> Result<(), FsError> { Err(FsFailed("fiction")) }
+pub fn listDir(path: String) effect io -> Result<List<String>, FsError> { Err(FsFailed("fiction")) }

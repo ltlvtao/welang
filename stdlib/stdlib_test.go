@@ -8,12 +8,12 @@ import (
 	"github.com/ltlvtao/welang/internal/parser"
 )
 
-// TestEmbeddedSourceSet: the embedded key set is exactly the migrated
-// three (B2a T1) — fs, process, and string join in T2–T4; concurrent
-// never does (design D1-5 keeps it synthetic). A key landing here
-// unannounced is a slice violation the gate should catch early.
+// TestEmbeddedSourceSet: the embedded key set is exactly the landed set
+// (B2a T1's three plus T2's fs) — process and string join in T3–T4;
+// concurrent never does (design D1-5 keeps it synthetic). A key landing
+// here unannounced is a slice violation the gate should catch early.
 func TestEmbeddedSourceSet(t *testing.T) {
-	want := []string{"io", "test", "time"}
+	want := []string{"fs", "io", "test", "time"}
 	got := make([]string, 0, len(Sources()))
 	for k := range Sources() {
 		got = append(got, k)

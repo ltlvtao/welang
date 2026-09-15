@@ -1,7 +1,7 @@
 {
- "name": "build-bnd-question-wide-ok-face",
+ "name": "run-question-string-ok-face",
  "args": [
-  "build",
+  "run",
   "."
  ],
  "setup": {
@@ -10,7 +10,7 @@
    "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nrecord Fetcher { seed: String }\n\nimpl Fetcher {\n    fn fetch(self) -> Result<String, AppError> {\n        return Ok(self.seed)\n    }\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let f = Fetcher { seed: \"s\" }\n    let v = f.fetch()?\n    io.println(\"v ${v}\")\n    return Ok(())\n}\n"
   }
  },
- "exit": 70,
- "stdout": "",
- "stderr": "we: main bodies beyond the M9b statement set (scalars, strings, records, primitives, io, task/scope/select, ?, match, while/if, defer, one tail return) are not implemented in this reference build yet\n"
+ "exit": 0,
+ "stdout": "v s\n",
+ "stderr": ""
 }

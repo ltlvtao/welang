@@ -1,0 +1,16 @@
+{
+  "name": "run-fs-roundtrip",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.fs\n\npub fn main() effect io -> Result<(), fs.FsError> {\n    match fs.makeDir(\"rt\") {\n        Ok(_) => { io.println(\"mkdir-ok\") }\n        Err(_) => { io.println(\"mkdir-bad\") }\n    }\n    match fs.writeFile(\"rt/a.txt\", \"alpha\") {\n        Ok(_) => { io.println(\"write-ok\") }\n        Err(_) => { io.println(\"write-bad\") }\n    }\n    match fs.readFile(\"rt/a.txt\") {\n        Ok(c) => {\n            if c == \"alpha\" { io.println(\"read-ok\") } else { io.println(\"read-bad\") }\n        }\n        Err(_) => { io.println(\"read-bad\") }\n    }\n    match fs.appendFile(\"rt/a.txt\", \"-beta\") {\n        Ok(_) => { io.println(\"append-ok\") }\n        Err(_) => { io.println(\"append-bad\") }\n    }\n    match fs.readFile(\"rt/a.txt\") {\n        Ok(c) => {\n            if c == \"alpha-beta\" { io.println(\"append-read-ok\") } else { io.println(\"append-read-bad\") }\n        }\n        Err(_) => { io.println(\"append-read-bad\") }\n    }\n    match fs.listDir(\"rt\") {\n        Ok(xs) => {\n            var n: Int64 = 0\n            for _ in xs { n = n + 1 }\n            if n == 1 { io.println(\"list-ok\") } else { io.println(\"list-bad\") }\n        }\n        Err(_) => { io.println(\"list-bad\") }\n    }\n    match fs.removeFile(\"rt/a.txt\") {\n        Ok(_) => { io.println(\"rm-ok\") }\n        Err(_) => { io.println(\"rm-bad\") }\n    }\n    match fs.removeDir(\"rt\") {\n        Ok(_) => { io.println(\"rmdir-ok\") }\n        Err(_) => { io.println(\"rmdir-bad\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "mkdir-ok\nwrite-ok\nread-ok\nappend-ok\nappend-read-ok\nlist-ok\nrm-ok\nrmdir-ok\n",
+  "stderr": ""
+}

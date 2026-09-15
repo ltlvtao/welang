@@ -1,0 +1,16 @@
+{
+  "name": "run-fs-read-missing",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.fs\n\npub fn main() effect io -> Result<(), fs.FsError> {\n    let text = fs.readFile(\"no-such-file\")?\n    io.println(text)\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: FsFailed: read no-such-file: No such file or directory\n"
+}

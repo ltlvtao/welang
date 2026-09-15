@@ -1,0 +1,16 @@
+{
+  "name": "run-fs-listdir-order",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.fs\n\npub fn main() effect io -> Result<(), fs.FsError> {\n    match fs.makeDir(\"ld\") {\n        Ok(_) => { io.println(\"mkdir-ok\") }\n        Err(_) => { io.println(\"mkdir-bad\") }\n    }\n    match fs.writeFile(\"ld/z.txt\", \"z\") {\n        Ok(_) => { io.println(\"z-ok\") }\n        Err(_) => { io.println(\"z-bad\") }\n    }\n    match fs.writeFile(\"ld/M.txt\", \"m\") {\n        Ok(_) => { io.println(\"m-ok\") }\n        Err(_) => { io.println(\"m-bad\") }\n    }\n    match fs.writeFile(\"ld/a.txt\", \"a\") {\n        Ok(_) => { io.println(\"a-ok\") }\n        Err(_) => { io.println(\"a-bad\") }\n    }\n    match fs.listDir(\"ld\") {\n        Ok(xs) => {\n            for n in xs { io.println(\"entry:${n}\") }\n        }\n        Err(_) => { io.println(\"list-bad\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "mkdir-ok\nz-ok\nm-ok\na-ok\nentry:M.txt\nentry:a.txt\nentry:z.txt\n",
+  "stderr": ""
+}

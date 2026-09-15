@@ -213,6 +213,18 @@ var declareLines = []struct{ sym, line string }{
 	// takes a slot's address, not a handle; a program with no gc top-level
 	// binding registers nothing and declares nothing.
 	{"__we_gc_root_global", "declare void @__we_gc_root_global(ptr)"},
+	// B2a T2 (design D3/D7): the fs family, appended under the same
+	// discipline — a program that touches no file declares none. Every
+	// entry returns through the out-parameter trio: the String arguments
+	// cross as their (ptr, i64) pairs, and the three words the C side
+	// writes are the fused Result's {tag, pay0, pay1}.
+	{"__we_fs_read_file", "declare void @__we_fs_read_file(ptr, i64, ptr)"},
+	{"__we_fs_write_file", "declare void @__we_fs_write_file(ptr, i64, ptr, i64, ptr)"},
+	{"__we_fs_append_file", "declare void @__we_fs_append_file(ptr, i64, ptr, i64, ptr)"},
+	{"__we_fs_remove_file", "declare void @__we_fs_remove_file(ptr, i64, ptr)"},
+	{"__we_fs_make_dir", "declare void @__we_fs_make_dir(ptr, i64, ptr)"},
+	{"__we_fs_remove_dir", "declare void @__we_fs_remove_dir(ptr, i64, ptr)"},
+	{"__we_fs_list_dir", "declare void @__we_fs_list_dir(ptr, i64, ptr)"},
 }
 
 // ProgModule is one module of a program emission (design D1): the module
@@ -278,6 +290,32 @@ var stdFnEntries = map[string]map[string]stdEntry{
 		"now":   {sym: "__we_time_now", ret: true, typ: "Int64"},
 		"sleep": {sym: "__we_time_sleep"},
 	},
+}
+
+// fsEntry is one fs-family entry's keyed face (B2a design D3/D7): the
+// runtime symbol its slot holds, whether a second String argument (the
+// data pair) rides beside the path, and the Ok payload's face — "" for
+// the unit, "str" for the whole-read, "list" for the directory listing.
+// The Err half is the same for all seven: FsError's one String variant,
+// so it needs no per-entry column.
+type fsEntry struct {
+	sym  string
+	data bool
+	ok   string
+}
+
+// fsEntries is the fs family's closed table, keyed like stdFnEntries.
+// The entries are slottable call faces for the same reason the io pair
+// is: the check face accepts mocks on these literals, so the run face
+// must reach them through slots.
+var fsEntries = map[string]fsEntry{
+	"readFile":   {sym: "__we_fs_read_file", ok: "str"},
+	"writeFile":  {sym: "__we_fs_write_file", data: true},
+	"appendFile": {sym: "__we_fs_append_file", data: true},
+	"removeFile": {sym: "__we_fs_remove_file"},
+	"makeDir":    {sym: "__we_fs_make_dir"},
+	"removeDir":  {sym: "__we_fs_remove_dir"},
+	"listDir":    {sym: "__we_fs_list_dir", ok: "list"},
 }
 
 // A record field's emission shape: String is the double word (16 bytes,
@@ -1053,7 +1091,44 @@ func (e *emitter) resolveStd(name string) string {
 	if _, ok := stdFnEntries[name]; ok {
 		return name
 	}
+	if name == "fs" {
+		return name // the fs family rides its own table beside the std entries
+	}
 	return ""
+}
+
+// registerStdSums enters one std module's sum declarations under the
+// module's own dotted key ("std.fs.FsError"), the same tables a program
+// module's pass-one walk fills — a std module declares no program module,
+// so this registration at the import site is the only walk it gets. The
+// guard makes it idempotent: a program may import std.fs in several
+// modules, and the second import must not rewrite the first's tables.
+func (e *emitter) registerStdSums(modKey string) *NotImplemented {
+	if _, ok := e.sumsOrd[modKey]; ok {
+		return nil
+	}
+	file, ok := typecheck.StdModule(modKey)
+	if !ok || file == nil {
+		return e.bnd() // the gate guarantees the source; this is the honest stop if it drifts
+	}
+	for _, it := range file.Items {
+		d, isSum := it.(*ast.SumDecl)
+		if !isSum || len(d.TypeParams) != 0 {
+			continue
+		}
+		variants := make(map[string][]ast.TypeRef, len(d.Variants))
+		names := make([]string, len(d.Variants))
+		for i, v := range d.Variants {
+			variants[v.Name] = v.Payload
+			names[i] = v.Name
+		}
+		key := modKey + "." + d.Name
+		e.sums[key] = variants
+		e.sumsOrd[key] = names
+		e.sumDecls[key] = d
+	}
+	e.sumsOrd[modKey] = nil // the marker that says the module was walked
+	return nil
 }
 
 // recRef pairs a record declaration with its module-qualified name — the
@@ -1646,6 +1721,20 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 						switch d.Path[1] {
 						case "concurrent":
 							e.concAlias[a] = true
+						case "fs":
+							e.stdQuals[a] = d.Path[1]
+							// The module's own sums register here: a std
+							// module is never a program module, so its
+							// declarations reach no pass-one walk of their
+							// own — yet a caller spells FsError qualified
+							// (Result<_, fs.FsError>), and the fused table
+							// that spell needs is built from the sum's own
+							// declaration. Only the sums register; the fns
+							// are the keyed fiction codegen replaces, and a
+							// define for a fiction would be dead IR.
+							if ni := e.registerStdSums("std.fs"); ni != nil {
+								return "", ni
+							}
 						case "io", "test", "time":
 							e.stdQuals[a] = d.Path[1]
 						default:
@@ -3621,6 +3710,14 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			if sk == "test" && fn.Name == "assertEqual" {
 				return e.emitAssertEqual(call.Args)
 			}
+			if sk == "fs" {
+				// The fs family rides its own table beside the std entries:
+				// every entry answers a fused Result through the out trio,
+				// which is a face none of the std entries share.
+				if ent, ok := fsEntries[fn.Name]; ok {
+					return e.emitFsEntryCall("fs."+fn.Name, ent, call.Args)
+				}
+			}
 			if ent, ok := stdFnEntries[sk][fn.Name]; ok {
 				if sk == "io" {
 					// The scalar shortcut stays a direct call: the i64
@@ -3684,6 +3781,86 @@ func (e *emitter) emitStdEntryCall(name string, ent stdEntry, args []ast.Expr) (
 	}
 	e.inst(fmt.Sprintf("call void %%%s(i64 %s)", fp, op))
 	return callResult{kind: ckVoid}, nil
+}
+
+// emitFsEntryCall emits one fs-family entry call through its slot: the
+// path — and the data, where the entry takes one — cross as their String
+// pairs, and the answer comes back through the out-parameter trio the C
+// side writes (design D7-2): the fused Result's tag, then its payload
+// pair. The three words land in three fresh i64 slots, which is the sum
+// slot's whole shape, so every downstream consumer (a match, a `?`, a
+// binding) reads the call like any other sum-yielding face.
+func (e *emitter) emitFsEntryCall(name string, ent fsEntry, args []ast.Expr) (callResult, *NotImplemented) {
+	want := 1
+	if ent.data {
+		want = 2
+	}
+	if len(args) != want {
+		return callResult{}, e.bnd()
+	}
+	p, l, ni := e.emitStringExpr(args[0])
+	if ni != nil {
+		return callResult{}, ni
+	}
+	slot := e.slotFor(name, "@"+ent.sym)
+	e.use(ent.sym)
+	fp := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
+	out := e.slot("[3 x i64]")
+	if ent.data {
+		d, dl, ni := e.emitStringExpr(args[1])
+		if ni != nil {
+			return callResult{}, ni
+		}
+		e.inst(fmt.Sprintf("call void %%%s(ptr %s, i64 %s, ptr %s, i64 %s, ptr %s)", fp, p, l, d, dl, out))
+	} else {
+		e.inst(fmt.Sprintf("call void %%%s(ptr %s, i64 %s, ptr %s)", fp, p, l, out))
+	}
+	// The fused table a `Result<_, fs.FsError>` signature builds: Ok's
+	// payload is the entry's own face (the unit, the whole-read's String,
+	// or the listing's carrier), and the Err half is FsError's variants —
+	// the tags a match arm tests are the tags the C side wrote.
+	okPay := []ast.TypeRef{&ast.UnitType{}}
+	switch ent.ok {
+	case "str":
+		okPay = []ast.TypeRef{&ast.NamedType{Name: "String"}}
+	case "list":
+		okPay = []ast.TypeRef{&ast.NamedType{Name: "List", Args: []ast.TypeRef{&ast.NamedType{Name: "String"}}}}
+	}
+	okShape, ok := e.payloadShape("Ok", okPay)
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	errShapes, ok := e.namedSumShapes(&ast.NamedType{Qual: "fs", Name: "FsError"})
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	shapes := append([]sumVariantShape{okShape}, errShapes...)
+	tag := e.gepLoadI64(out, 0)
+	pay := e.gepLoadI64(out, 8)
+	pay1 := e.gepLoadI64(out, 16)
+	ts := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", tag, ts))
+	pp := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay, pp))
+	p1 := e.slot("i64")
+	e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay1, p1))
+	if ent.ok == "list" {
+		// listDir's Ok handle is a gc reference the C side rooted only
+		// across its own construction loop; the caller re-roots it the way
+		// every gc return does, before any further allocation can run
+		// (D2's discipline, mirrored from the call arm). Nothing sits
+		// between the load and the push.
+		h := e.value()
+		e.inst(fmt.Sprintf("%%%s = inttoptr i64 %s to ptr", h, pay))
+		e.use("__we_root_push")
+		e.pushes++
+		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", h))
+	}
+	return callResult{kind: ckSum, sum: sumSlot{
+		tag: ts, pay: pp, pay1: p1,
+		variants: sumVariantNames(shapes), shapes: shapes, key: "Result",
+	}}, nil
 }
 
 // emitCtorCall is the bare record-constructor face: positional arguments
@@ -7785,14 +7962,19 @@ func (e *emitter) emitTopLetInits() *NotImplemented {
 // arm joins one continuation. Payload bindings (Some(x)) load the
 // payload word into the scalar domain.
 func (e *emitter) emitMatch(s *ast.Match, vf *valueForm) *NotImplemented {
-	id, ok := s.Scrutinee.(*ast.Ident)
-	if !ok {
+	// The scrutinee is the same source a `?` reads — a name already bound
+	// to a sum, or a call that yields one (B2a's fs entries match
+	// directly at the call site) — emitted here so a call's words land
+	// before the tag load reads them. Every other scrutinee form keeps
+	// stopping at the boundary, exactly as it did when only a name read.
+	res, ni := e.emitSumSource(s.Scrutinee)
+	if ni != nil {
+		return ni
+	}
+	if res.kind != ckSum {
 		return e.bnd()
 	}
-	slot, ok := e.sums2[id.Name]
-	if !ok {
-		return e.bnd()
-	}
+	slot := res.sum
 	n := e.blocks
 	e.blocks++
 	join := fmt.Sprintf("mjoin%d", n)
@@ -8038,7 +8220,14 @@ func (e *emitter) bindArmWord(slot sumSlot, w int, p fnParamAbi, pat ast.Pattern
 			lenOp:  e.loadNum(slot.pay1, false),
 		}
 	case abiGc:
-		e.gcEnv[b.Name] = gcBinding{rec: p.key, reg: e.wordPtr(e.loadNum(at, false))}
+		reg := e.wordPtr(e.loadNum(at, false))
+		e.gcEnv[b.Name] = gcBinding{rec: p.key, reg: reg}
+		// A List payload's arm binding registers the walk face too — the
+		// same name the gc environment holds, answerable to a `for` over
+		// it (payloadShape carried the face here for exactly this read).
+		if p.list != nil {
+			e.listEnv[b.Name] = listBinding{reg: reg, elem: *p.list}
+		}
 	}
 	return nil
 }
@@ -8889,38 +9078,49 @@ func (e *emitter) emitQuestion(p *ast.Prop) (callResult, *NotImplemented) {
 		e.inst("unreachable")
 	}
 	e.label(okL)
-	pay := e.loadNum(slot.pay, false)
 	// The bound name reads the Ok payload's own face: the table's shape
 	// entry carries the declared base name, the same source a match arm's
 	// binding reads, so the interpolation domain and the arithmetic width
-	// answer downstream exactly as a returned scalar's do.
-	tn := ""
+	// answer downstream exactly as a returned scalar's do. The String pair
+	// (B2a's whole-read) answers as a String expression — the two payload
+	// words are the pair, the same read a match arm's String binding makes.
+	if len(slot.shapes) > 0 && len(slot.shapes[0].pay) == 1 &&
+		slot.shapes[0].pay[0].kind == abiStr {
+		return callResult{kind: ckStr, strBind: strBinding{
+			dataOp: e.wordPtr(e.loadNum(slot.pay, false)),
+			lenOp:  e.loadNum(slot.pay1, false),
+		}}, nil
+	}
+	pay := e.loadNum(slot.pay, false)
 	if len(slot.shapes) > 0 && len(slot.shapes[0].pay) == 1 &&
 		slot.shapes[0].pay[0].kind == abiI64 {
-		tn = slot.shapes[0].pay[0].typ
+		tn := slot.shapes[0].pay[0].typ
+		return callResult{kind: ckI64, i64: pay, typeName: tn, num: narrowName(tn)}, nil
 	}
-	return callResult{kind: ckI64, i64: pay, typeName: tn, num: narrowName(tn)}, nil
+	return callResult{kind: ckI64, i64: pay}, nil
 }
 
 // questionOkFace reports whether the Ok side of a `?`'s table can bind as
-// this build's one-word expression value: every payload position is
-// either void or a single i64 word. A wider Ok face — a String pair, a gc
-// handle, a Float64's bits riding unchecked, a prim's pointer word — has
-// no reading here: the Ok path below would hand the caller a raw word
-// read as a number, so the face refuses and the `?` stops honestly.
+// this build's expression value: no payload position, or exactly one
+// position that is a single i64 word or the String pair (B2a's whole-read
+// — the Ok path answers a String expression from the slot's two payload
+// words). A wider Ok face — a gc handle, a Float64's bits riding
+// unchecked, a prim's pointer word, two positions — has no reading here:
+// the Ok path below would hand the caller a raw word read as a number, so
+// the face refuses and the `?` stops honestly.
 func questionOkFace(shapes []sumVariantShape) bool {
 	if !isResultShapes(shapes) {
 		return false
 	}
-	words := 0
+	seen := false
 	for _, p := range shapes[0].pay {
 		switch p.kind {
 		case abiVoid:
-		case abiI64:
-			words++
-			if words > 1 {
+		case abiI64, abiStr:
+			if seen {
 				return false
 			}
+			seen = true
 		default:
 			return false
 		}
@@ -13287,15 +13487,29 @@ func (e *emitter) variantShapes(t ast.TypeRef) ([]sumVariantShape, bool) {
 }
 
 // namedSumShapes shapes a sum the walked module declares. The key is the
-// module's own — a sum reached by a qualified name belongs to another
-// module's tables and stops here, which is the same discipline classType
-// applies to a qualified reference.
+// module's own — with one widening: a qualifier that names the walked
+// module's std import reaches that module's table instead (B2a's
+// fs.FsError, the spelling a `Result<_, fs.FsError>` signature carries;
+// the import site registered the module's sums, so the table is the
+// declaration's own). Any other qualified name belongs to another
+// program module's tables and stops here, which is the same discipline
+// classType applies to a qualified reference.
 func (e *emitter) namedSumShapes(t ast.TypeRef) ([]sumVariantShape, bool) {
 	n, ok := e.resolveRef(t).(*ast.NamedType)
-	if !ok || n.Qual != "" || len(n.Args) != 0 {
+	if !ok || len(n.Args) != 0 {
 		return nil, false
 	}
 	key := e.namedKey(e.curKey, n)
+	if n.Qual != "" {
+		sk := ""
+		if !e.isLocalName(n.Qual) {
+			sk = e.resolveStd(n.Qual)
+		}
+		if sk == "" {
+			return nil, false
+		}
+		key = "std." + sk + "." + n.Name
+	}
 	ord, ok := e.sumsOrd[key]
 	if !ok {
 		return nil, false
@@ -13337,7 +13551,17 @@ func (e *emitter) payloadShape(name string, payload []ast.TypeRef) (sumVariantSh
 		if !ok || k == abiVoid || k == abiTuple || k == abiFn || k == abiSum {
 			return sumVariantShape{}, false
 		}
-		s.pay = append(s.pay, fnParamAbi{kind: k, key: key, typ: baseTypeName(e.derefNewtype(p))})
+		pa := fnParamAbi{kind: k, key: key, typ: baseTypeName(e.derefNewtype(p))}
+		// A List payload position carries the element face its argument
+		// fixed — the same read fitAbi and bindTupleParams make for their
+		// List positions, so an arm binding `Ok(xs)` over a
+		// Result<List<String>, _> registers the walk the body's `for`
+		// needs (the ABI entry is where the face rides; the handle alone
+		// does not say).
+		if face, ok := e.carrierElemFace(p); ok {
+			pa.list = &face
+		}
+		s.pay = append(s.pay, pa)
 		if s.payWords() > sumPayloadWords {
 			return sumVariantShape{}, false
 		}
