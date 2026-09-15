@@ -69,8 +69,11 @@ func TestMemberResolution(t *testing.T) {
 	wantOK(t, "record User { name: String }\n\nfn label(u: User) -> String {\n    return u.name\n}\n")
 	wantDiag(t, "record User { name: String }\n\nfn f(u: User) {\n    let n = u.email\n}\n",
 		"E0816", `"User" has no member "email"`, 4, 15)
-	// Base-type receivers keep the chapter-15 boundary (D10: unchanged).
-	wantBnd(t, "fn f(s: String) -> Int64 {\n    let n = s.length\n    return 1\n}\n", bndStdModules)
+	// Base-type receivers answer the same E0816 (B2a design D6): the
+	// stdlib surface past the anchored methods is not spec-approved, so
+	// the miss is the honest member answer.
+	wantDiag(t, "fn f(s: String) -> Int64 {\n    let n = s.length\n    return 1\n}\n",
+		"E0816", `"length" is not a member of String`, 2, 15)
 }
 
 // --- D7: control-flow typing ---------------------------------------------------

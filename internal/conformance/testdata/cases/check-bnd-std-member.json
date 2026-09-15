@@ -9,9 +9,9 @@
       "demo/main.we": "fn f(s: String) -> Int64 {\n    let n = s.length\n    return 1\n}"
     }
   },
-  "exit": 70,
+  "exit": 1,
   "stdout": "",
-  "stderr": "we: standard-library modules (chapter 15) are not implemented in this reference build yet\n",
+  "stderr": "demo/main.we:2:15: error[E0816]: no such member on the receiver's type — \"length\" is not a member of String; member access names a field or a method of the receiver's type\n",
   "files": {
     "demo/main.we": "fn f(s: String) -> Int64 {\n    let n = s.length\n    return 1\n}"
   }

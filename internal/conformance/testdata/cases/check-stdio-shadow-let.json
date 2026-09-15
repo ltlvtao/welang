@@ -9,9 +9,9 @@
       "demo/main.we": "import std.io\n\nfn work() {\n    let io = 1\n    io.println(\"x\")\n    return\n}\n"
     }
   },
-  "exit": 70,
+  "exit": 1,
   "stdout": "",
-  "stderr": "we: standard-library modules (chapter 15) are not implemented in this reference build yet\n",
+  "stderr": "demo/main.we:5:8: error[E0816]: no such member on the receiver's type — \"println\" is not a member of Int64; member access names a field or a method of the receiver's type\n",
   "files": {
     "demo/main.we": "import std.io\n\nfn work() {\n    let io = 1\n    io.println(\"x\")\n    return\n}\n"
   }

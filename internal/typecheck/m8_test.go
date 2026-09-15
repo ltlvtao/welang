@@ -69,11 +69,12 @@ func TestStdIoShadow(t *testing.T) {
 	}
 	// A block-local binding shadows the import name (P5): io resolves to
 	// the Int64 local, so the form is member access on a base type —
-	// println is no anchored Int64 member, and un-anchored stdlib members
-	// stop at the honest boundary (design D10: never privately rejected).
+	// println is no anchored Int64 member, and the miss answers E0816
+	// (B2a design D6): the stdlib surface past the anchored methods is
+	// not spec-approved, so the diagnostic is the honest member answer.
 	// E1304's qualifier form belongs to the undeclared-receiver face only.
-	wantBnd(t, "import std.io\n\nfn work() {\n    let io = 1\n    io.println(\"x\")\n    return\n}\n",
-		"standard-library modules (chapter 15)")
+	wantDiag(t, "import std.io\n\nfn work() {\n    let io = 1\n    io.println(\"x\")\n    return\n}\n",
+		"E0816", `"println" is not a member of Int64`, 5, 8)
 	// Without the import at all, the same qualifier face answers (lock).
 	wantDiag(t, "fn work() {\n    io.println(\"x\")\n    return\n}\n",
 		"E1304", `the qualifier "io" of "io.println" is not an import name`, 2, 5)

@@ -51,7 +51,11 @@ type NotImplemented struct{ What string }
 // milestone deletes its rows; the two spec-gap rows carry their follow-up
 // registration.
 const (
-	bndStdModules = "standard-library modules (chapter 15)"
+	// The standard-library row left with B2a T5 (design D6): a member no
+	// anchored family names on a base or collection receiver is E0816
+	// now, the same rule every other receiver takes — the standard
+	// library's surface is not spec-approved, so the miss is the honest
+	// answer, and the boundary word has no host.
 	// T10 retires this stage's assertEqual-domain word (design D9): the
 	// comparand domain is now inEqDomain, and a comparand outside it stops
 	// at the same residual row code generation's own stops use, so the two
@@ -6946,14 +6950,19 @@ func (c *checker) memberOfType(t Type, x *ast.Member, asCall bool) Type {
 			return substFn(m.fn, t.args, nil)
 		}
 		if collectionSum(t.decl) {
-			// the spec-anchored families resolve; the rest of the
-			// collection surface is the standard library's (design D10 —
-			// never privately rejected)
+			// The spec-anchored families resolve; a member past them is
+			// a miss on the receiver's type, the same E0816 every other
+			// receiver takes (B2a design D6): the collection surface
+			// beyond the anchored family is the standard library's, and
+			// the standard library's surface is not spec-approved — one
+			// rule, one code, never a private reject.
 			if view, ok := collectionMembers(t)[x.Name]; ok {
 				c.methodUse(x, asCall)
 				return view
 			}
-			c.bnd(bndStdModules)
+			c.fail(x.NameLine, x.NameCol, "E0816", fmt.Sprintf(
+				"no such member on the receiver's type — %q is not a member of %s; member access names a field or a method of the receiver's type",
+				x.Name, t.String()))
 		}
 		if concurrentType(t.decl) {
 			// the chapter 18 faces are the language's own closed sets
@@ -7004,10 +7013,16 @@ func (c *checker) memberOfType(t Type, x *ast.Member, asCall bool) Type {
 				return view
 			}
 		}
-		// the stdlib surface (the conversion methods, the byte views) —
-		// a member no anchored family names is never privately rejected
-		// (design D10)
-		c.bnd(bndStdModules)
+		// A member no anchored family names is a miss on the receiver's
+		// type (B2a design D6) — the base types' surface beyond the
+		// anchored methods is the standard library's, and that surface is
+		// not spec-approved, so the honest answer is the one every other
+		// receiver already takes. This is the site the shadowed qualifier
+		// lands in too (`let string: Int64 = 7` then `string.join(...)`):
+		// an Int64 receiver has no members, and the diagnostic says so.
+		c.fail(x.NameLine, x.NameCol, "E0816", fmt.Sprintf(
+			"no such member on the receiver's type — %q is not a member of %s; member access names a field or a method of the receiver's type",
+			x.Name, t.String()))
 	case paramRef:
 		// A bounded parameter reaches its bounds' granted method sets
 		// (design D6's union — the face's application substitutes the
