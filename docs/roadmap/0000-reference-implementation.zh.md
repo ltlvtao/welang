@@ -34,7 +34,7 @@
 | M14 | `lsp` | LSP 文档与 `we lsp` | done |
 | M15 | `benchmarks` | 评测套件（First-Pass Compile Rate 等）：方法论文档、18 任务种子集（参考解自证）、in-process 批次跑器（五桶判定机）、校准与黑盒测试面 | done 2026-09-09 |
 | B1a | `codegen-mono` | 单态值塔（B1 的前半）：M9b 语句集拓宽、表达式值形、含插值的 String 全链、record/方法/元组/newtype 值面、闭包捕获与 fn 值、List 载体与其迭代、顶层绑定、sum 三槽 ABI、assertEqual 的 Eq 域、窄整型逐宽检查，以及边界词对账与值位控制形分类；conformance 701 → 810，follow-up #16 的支配缺陷已修 | done 2026-09-11 |
-| B1b | `codegen-full` | B1 的余下部分——codegen 未实现集合收缩至零：泛型单态化、Dyn 派发，以及 B1a 对账后仍在停的面（五个边界词、fn 值在值串位或操作数位的调用、内置所产 `Option` 载荷读入 `String` 位、`List` 的 `String` 元素面、用户方法的 `?`、同步型作返回型） | pending |
+| B1b | `codegen-full` | B1 余下部分按实现落地：泛型单态化端到端（检查器自持的实例化登记表贯通到逐实例化发射）、Dyn 盒与 vtable 派发、迭代器协议与用户 `Iterable` 源、组合子补全到十一枚、值塔五簇、`List<String>` 载体面、入口界线两侧用户 `Result` 上的 `?`、同步型返回位、普通 scope 值形；conformance 810 → 881、codegen 顶层单测 321 → 445，登记 follow-up #24 与 #25；未实现集未达字面归零——五个边界词存活、守卫着十一枚负例黄金，残停面披露于 `docs/benchmarks.md` | done 2026-09-15 |
 | B2 | `stdlib-real` | 编译器所需的标准库实库面：文件与目录 I/O、子进程 spawn（钉版 clang）、字符串构建、集合面背后的真数据结构 | pending |
 | B3 | `bootstrap` | 自举：编译器从 Go 移植到 We，以三段式闭环验收——Go 宿主构建编译 We 编译器，其产物再编译编译器一次，两段产物逐字节一致；conformance 套件在 We 宿主编译器下全绿 | pending |
 
