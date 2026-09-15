@@ -9466,20 +9466,52 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 	// Reading it before the body — which is what the emitter used to do —
 	// yields the value the body opened with, not the one it left (defect
 	// D10-2: legal IR, wrong value).
+	// The two value shapes split on the timeout: the plain and collectAll
+	// forms' value is the body's block value under chapter 2, so the tail's
+	// own face is the scope's face; the timeout forms' value is Ok(b) /
+	// Err(TimedOut) — a Result by spec — whose payload word is the one
+	// number the sum can carry.
 	bodyVal := "0"
+	ownFace := callResult{kind: ckVoid}
 	if tail != nil && !e.diverged {
-		res, ni := e.emitNumericValue(tail)
-		if ni != nil {
-			return callResult{}, ni
-		}
-		switch {
-		case res.kind == ckVoid:
-			// A valueless tail: the body ran for its effect, the payload
-			// word stays zero (the tag carries the outcome).
-		case res.kind == ckI64 && !res.isFloat:
-			bodyVal = res.i64
-		default:
-			return callResult{}, e.bnd() // a payload the sum's word cannot carry
+		if s.Timeout == nil {
+			// The plain face is the tail's (the same split a `let` reads):
+			// a String tail binds its pair, a numeric tail its word, a
+			// valueless tail binds nothing (the block's value is `()`).
+			if e.valueKind(tail) == skStr {
+				p, l, ni := e.emitStringExpr(tail)
+				if ni != nil {
+					return callResult{}, ni
+				}
+				ownFace = callResult{kind: ckStr, strBind: strBinding{dataOp: p, lenOp: l}}
+			} else {
+				res, ni := e.emitNumericValue(tail)
+				if ni != nil {
+					return callResult{}, ni
+				}
+				switch res.kind {
+				case ckVoid:
+				case ckI64:
+					ownFace = callResult{kind: ckI64, i64: res.i64, isFloat: res.isFloat,
+						typeName: strKindName(e.valueKind(tail)), num: res.num}
+				default:
+					return callResult{}, e.bnd() // a face the value form does not carry
+				}
+			}
+		} else {
+			res, ni := e.emitNumericValue(tail)
+			if ni != nil {
+				return callResult{}, ni
+			}
+			switch {
+			case res.kind == ckVoid:
+				// A valueless tail: the body ran for its effect, the payload
+				// word stays zero (the tag carries the outcome).
+			case res.kind == ckI64 && !res.isFloat:
+				bodyVal = res.i64
+			default:
+				return callResult{}, e.bnd() // a payload the sum's word cannot carry
+			}
 		}
 	}
 	e.popEnv()
@@ -9496,6 +9528,12 @@ func (e *emitter) emitScope(s *ast.ScopeExpr, valueForm bool) (callResult, *NotI
 	e.inst(fmt.Sprintf("%%%s = call i64 @__we_scope_leave(ptr %%%s)", to, sc))
 	if !valueForm {
 		return callResult{kind: ckVoid}, nil
+	}
+	if s.Timeout == nil {
+		// The plain and collectAll forms hand the body's own face to
+		// whatever binds the scope — the value tower routes it exactly as
+		// a `let` over the tail itself would be routed.
+		return ownFace, nil
 	}
 	tagSlot := e.slot("i64")
 	e.inst(fmt.Sprintf("store i64 %%%s, ptr %s", to, tagSlot))

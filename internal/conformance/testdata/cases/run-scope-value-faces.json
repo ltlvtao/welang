@@ -1,0 +1,16 @@
+{
+ "name": "run-scope-value-faces",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\nfn f() -> Int64 {\n    let r = scope {\n        5\n    }\n    return r\n}\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = scope {\n        7\n    }\n    let n = 10\n    let b = scope {\n        let n = 3\n        n + 4\n    }\n    let c = scope {\n        3\n    }\n    let d = scope collectAll {\n        9\n    }\n    let w = c + 5\n    if a == 7 {\n        io.println(\"seven\")\n    }\n    if d == 9 {\n        io.println(\"nine\")\n    }\n    io.println(\"v ${b}\")\n    io.println(\"w ${w}\")\n    io.println(\"fn ${f()}\")\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "seven\nnine\nv 7\nw 8\nfn 5\n",
+ "stderr": ""
+}

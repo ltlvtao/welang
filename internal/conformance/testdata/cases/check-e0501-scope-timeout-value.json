@@ -1,0 +1,16 @@
+{
+ "name": "check-e0501-scope-timeout-value",
+ "args": [
+  "check",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let r = scope timeout(1000) {\n        7\n    }\n    if r == 7 {\n        io.println(\"seven\")\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 1,
+ "stdout": "",
+ "stderr": "src/main.we:9:10: error[E0501]: mixed types \u2014 operands of \"==\" are Result<Int64, TimeoutError> and Int64; no coercion is ever inserted\n"
+}
