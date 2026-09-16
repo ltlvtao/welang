@@ -182,3 +182,182 @@ func TestStrPanicHarness(t *testing.T) {
 		[]string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"},
 		"charAt tag=1 msg=String charAt out of range\nbyteSlice tag=1 msg=String byteSlice out of range\n")
 }
+
+// strParseHarness pins the conversion family's C entries (B3a design
+// D3): the three parse entries answer the Option trio through the out
+// parameter (tag 1/0, payload in word 1, word 2 zeroed so the three-word
+// form never carries stale stack bytes), the four bridge entries are
+// total — runeCode/runeFrom the i64 identity over code points (no range
+// validation exists anywhere in the Rune face today, design D5; the
+// renderer's U+FFFD replacement is where an out-of-domain value lands),
+// floatBits/floatFromBits the bit reinterpretation. The parse acceptance
+// is the decimal core (design D2): nonempty digit runs for the integers
+// (no sign, prefix, underscore, or whitespace), digits-dot-digits with an
+// optional signed decimal exponent for the float — never strtod's wider
+// face (no inf/nan/hex-float/leading space), and range errors answer
+// None on both the overflow and the underflow side.
+const strParseHarnessMain = `#include <stdio.h>
+#include "str.h"
+
+void __we_gc_boot(void);
+
+static int failures = 0;
+#define CHECK(cond) do { \
+    if (!(cond)) { printf("FAIL %d: %s\n", __LINE__, #cond); failures++; } \
+} while (0)
+
+int main(void) {
+    __we_gc_boot();
+    long long out[3];
+    union { unsigned long long b; double d; } u;
+
+    /* parseInt: the decimal core. A plain run, zero, and leading zeros
+       (the face reads digit runs; the literal grammar's no-leading-zero
+       rule is the lexer's business, not the parse's). */
+    __we_string_parse_int("12", 2, out);
+    CHECK(out[0] == 1 && out[1] == 12 && out[2] == 0);
+    __we_string_parse_int("0", 1, out);
+    CHECK(out[0] == 1 && out[1] == 0);
+    __we_string_parse_int("007", 3, out);
+    CHECK(out[0] == 1 && out[1] == 7);
+
+    /* parseInt: the exact upper bound carries; one past it, and any
+       twenty-digit overflow, is None. */
+    __we_string_parse_int("9223372036854775807", 19, out);
+    CHECK(out[0] == 1 && out[1] == 9223372036854775807LL);
+    __we_string_parse_int("9223372036854775808", 19, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_int("99999999999999999999", 20, out);
+    CHECK(out[0] == 0);
+
+    /* parseInt: everything off the core form is None — signs, empty,
+       garbage, whitespace (leading or embedded), and a NUL mid-run
+       (length 4, not the C view's 2). */
+    __we_string_parse_int("-5", 2, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_int("+5", 2, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_int("", 0, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_int("12a", 3, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_int(" 12", 3, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_int("1 2", 3, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_int("12\0x", 4, out);
+    CHECK(out[0] == 0);
+
+    /* parseUInt: the unsigned view — the full inventory carries, one
+       past it is None, and a sign is off the core form. */
+    __we_string_parse_uint("18446744073709551615", 20, out);
+    CHECK(out[0] == 1 && (unsigned long long)out[1] == 18446744073709551615ULL);
+    __we_string_parse_uint("18446744073709551616", 20, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_uint("0", 1, out);
+    CHECK(out[0] == 1 && out[1] == 0);
+    __we_string_parse_uint("-1", 2, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_uint("12\0x", 4, out);
+    CHECK(out[0] == 0);
+
+    /* parseFloat: the core form — digits, dot, digits, optional decimal
+       exponent with optional sign, both e and E. The payload word is the
+       double's bits (the carrier's own word for a Float64). */
+    __we_string_parse_float("1.5", 3, out);
+    CHECK(out[0] == 1);
+    u.b = (unsigned long long)out[1]; CHECK(u.d == 1.5);
+    __we_string_parse_float("0.25", 4, out);
+    u.b = (unsigned long long)out[1]; CHECK(out[0] == 1 && u.d == 0.25);
+    __we_string_parse_float("1.500", 5, out);
+    u.b = (unsigned long long)out[1]; CHECK(out[0] == 1 && u.d == 1.5);
+    __we_string_parse_float("1.5e2", 5, out);
+    u.b = (unsigned long long)out[1]; CHECK(out[0] == 1 && u.d == 150.0);
+    __we_string_parse_float("1.5E+2", 6, out);
+    u.b = (unsigned long long)out[1]; CHECK(out[0] == 1 && u.d == 150.0);
+    __we_string_parse_float("1.5e-2", 6, out);
+    u.b = (unsigned long long)out[1]; CHECK(out[0] == 1 && u.d == 0.015);
+    __we_string_parse_float("2.5e-320", 8, out);
+    u.b = (unsigned long long)out[1]; CHECK(out[0] == 1 && u.d == 2.5e-320);
+
+    /* parseFloat: both range errors answer None — the overflow to
+       infinity and the underflow toward zero. */
+    __we_string_parse_float("1.0e999", 7, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("1.0e-999", 8, out);
+    CHECK(out[0] == 0);
+
+    /* parseFloat: everything off the core form is None — the dotless
+       exponent, a missing side of the dot, a signless-tail exponent, a
+       truncated exponent sign, trailing whitespace, strtod's own wider
+       vocabulary, and a NUL mid-run. */
+    __we_string_parse_float("1e5", 3, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float(".5", 2, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("5.", 2, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("1.5e", 4, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("1.5e+", 5, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("1.5 ", 4, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float(" 1.5", 4, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("inf", 3, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("nan", 3, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("0x1.8p1", 7, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("1.\05", 4, out);
+    CHECK(out[0] == 0);
+    __we_string_parse_float("", 0, out);
+    CHECK(out[0] == 0);
+
+    /* runeCode/runeFrom: the identity both ways, total over whatever the
+       caller hands it — an out-of-domain value crosses unchanged (the
+       face adds no validation; design D5). */
+    CHECK(__we_string_rune_code('A') == 65);
+    CHECK(__we_string_rune_code(0xe9) == 0xe9);
+    CHECK(__we_string_rune_code(0x1f600) == 0x1f600);
+    CHECK(__we_string_rune_from(65) == 'A');
+    CHECK(__we_string_rune_from(0x10ffff) == 0x10ffff);
+    CHECK(__we_string_rune_from(-1) == -1);
+    CHECK(__we_string_rune_from(0x110000) == 0x110000);
+    CHECK(__we_string_rune_from(0xd800) == 0xd800);
+    CHECK(__we_string_rune_from(__we_string_rune_code(0x4e2d)) == 0x4e2d);
+
+    /* floatBits/floatFromBits: the bit reinterpretation both ways, the
+       sign bit carried, the denormal row included. */
+    CHECK(__we_string_float_bits(1.0) == 0x3ff0000000000000LL);
+    CHECK(__we_string_float_bits(0.0) == 0);
+    CHECK(__we_string_float_bits(-0.0) == (long long)0x8000000000000000ULL);
+    CHECK(__we_string_float_bits(2.5) == 0x4004000000000000LL);
+    u.d = 5e-324;
+    CHECK(__we_string_float_bits(5e-324) == (long long)u.b);
+    CHECK(__we_string_float_from_bits(0x3ff0000000000000LL) == 1.0);
+    u.b = 0x8000000000000000ULL;
+    CHECK(__we_string_float_from_bits((long long)0x8000000000000000ULL) == u.d);
+    CHECK(__we_string_float_from_bits(__we_string_float_bits(2.5)) == 2.5);
+    CHECK(__we_string_float_from_bits(__we_string_float_bits(5e-324)) == 5e-324);
+    CHECK(__we_string_float_from_bits(__we_string_float_bits(-3.75)) == -3.75);
+
+    if (failures == 0) {
+        printf("str parse harness: all checks passed\n");
+    }
+    return failures != 0;
+}
+`
+
+func TestStrParseHarness(t *testing.T) {
+	compileAndRun(t,
+		map[string]string{
+			"gc.c": GCSource, "sched.c": SchedSource, "sched.h": SchedHeader,
+			"conc.c": ConcSource, "test.c": TestSource, "str.h": StrHeader,
+			"str.c": StrSource, "main.c": strParseHarnessMain,
+		},
+		[]string{"gc.c", "sched.c", "conc.c", "test.c", "str.c", "main.c"},
+		"str parse harness: all checks passed\n")
+}

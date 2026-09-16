@@ -21,6 +21,7 @@
 // discipline (chapter 14).
 #include "str.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -235,4 +236,209 @@ struct we_str __we_str_of_rune(long long v) {
     r.p = str_alloc(len);
     memcpy((char *)r.p, buf, (size_t)len);
     return r;
+}
+
+// ---------------------------------------------------------------------------
+// The conversion family (B3a design D3): std.string's parse faces and the
+// four bridges. The parses answer the Option trio through the out words
+// with the same layout the collection get family fixed (tag 1/0, payload
+// in word 1, word 2 zeroed); the bridges are total and never allocate.
+// ----------------------------------------------------------------------------
+
+// The Option trio writers, in the layout coll.c fixed (None tag 0, Some
+// tag 1, the payload in pay0, pay1 zeroed so the three-word form never
+// carries stale stack bytes).
+static void parse_none(long long out[3]) {
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+}
+
+static void parse_some(long long out[3], long long v) {
+    out[0] = 1;
+    out[1] = v;
+    out[2] = 0;
+}
+
+// all_digits reports whether the n bytes are one nonempty decimal digit
+// run — the integer core (design D2). A sign, whitespace, an embedded
+// NUL, or any other byte fails here, before any library call.
+static int all_digits(const char *s, long long n) {
+    if (n <= 0) {
+        return 0;
+    }
+    for (long long i = 0; i < n; i++) {
+        if (s[i] < '0' || s[i] > '9') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// float_core reports whether the n bytes are the float core (design D2):
+// digits '.' digits, then optionally one decimal exponent — e or E, an
+// optional sign, digits. The scan is total over any byte string and
+// never reads past n, so an embedded NUL fails it like any other byte.
+static int float_core(const char *s, long long n) {
+    long long i = 0;
+    long long before = 0;
+    while (i < n && s[i] >= '0' && s[i] <= '9') {
+        i++;
+        before++;
+    }
+    if (before == 0 || i >= n || s[i] != '.') {
+        return 0;
+    }
+    i++;
+    long long after = 0;
+    while (i < n && s[i] >= '0' && s[i] <= '9') {
+        i++;
+        after++;
+    }
+    if (after == 0) {
+        return 0;
+    }
+    if (i < n) {
+        if (s[i] != 'e' && s[i] != 'E') {
+            return 0;
+        }
+        i++;
+        if (i < n && (s[i] == '+' || s[i] == '-')) {
+            i++;
+        }
+        long long exp = 0;
+        while (i < n && s[i] >= '0' && s[i] <= '9') {
+            i++;
+            exp++;
+        }
+        if (exp == 0) {
+            return 0;
+        }
+    }
+    return i == n;
+}
+
+// zcopy copies the n bytes into a fresh NUL-terminated buffer — the
+// scratch the strtoll/strtoull/strtod family needs (they stop at a NUL,
+// so the length discipline is the copy plus the endptr check). The
+// buffer is scratch, not a String's provenance, so the caller frees it.
+static char *zcopy(const char *s, long long n) {
+    char *z = str_alloc(n + 1);
+    memcpy(z, s, (size_t)n);
+    z[n] = 0;
+    return z;
+}
+
+// The three parses share one discipline over the library call: the core
+// form was validated first, so the call's own failure faces are the range
+// error and a short end. Every path — including the failing ones — writes
+// the out trio, so a None never leaves the caller reading a stale Some.
+
+void __we_string_parse_int(const char *s, long long n, long long out[3]) {
+    if (!all_digits(s, n)) {
+        parse_none(out);
+        return;
+    }
+    char *z = zcopy(s, n);
+    errno = 0;
+    char *end = NULL;
+    long long v = strtoll(z, &end, 10);
+    // A pure digit run leaves the range error as the only failure:
+    // strtoll clamps to the bound and raises ERANGE (end still spans
+    // the whole run, so the end check alone would not catch it).
+    int ok = errno == 0 && end == z + n;
+    free(z);
+    if (ok) {
+        parse_some(out, v);
+    } else {
+        parse_none(out);
+    }
+}
+
+void __we_string_parse_uint(const char *s, long long n, long long out[3]) {
+    if (!all_digits(s, n)) {
+        parse_none(out);
+        return;
+    }
+    char *z = zcopy(s, n);
+    errno = 0;
+    char *end = NULL;
+    unsigned long long v = strtoull(z, &end, 10);
+    int ok = errno == 0 && end == z + n;
+    free(z);
+    if (ok) {
+        parse_some(out, (long long)v);
+    } else {
+        parse_none(out);
+    }
+}
+
+// bits_is_finite reads the double's exponent field from its bit word —
+// the all-ones field is inf and nan, and the core form never parses a
+// nan, so this is the overflow face. Reading the register word instead
+// of pulling math.h keeps the file's include set as it was.
+static int bits_is_finite(long long b) {
+    return ((unsigned long long)b >> 52 & 0x7ffULL) != 0x7ffULL;
+}
+
+void __we_string_parse_float(const char *s, long long n, long long out[3]) {
+    if (!float_core(s, n)) {
+        parse_none(out);
+        return;
+    }
+    char *z = zcopy(s, n);
+    errno = 0;
+    char *end = NULL;
+    double v = strtod(z, &end);
+    union {
+        double d;
+        long long b;
+    } u;
+    u.d = v;
+    // The range error's two honest faces — overflow to infinity, and an
+    // underflow whose rounded answer is zero — answer None. glibc raises
+    // ERANGE for a subnormal answer too, but a subnormal is representable,
+    // so the error only counts when the answer left the finite nonzero
+    // inventory: the bit word's exponent field full, or the zero itself.
+    int ok = end == z + n && (errno != ERANGE || (v != 0.0 && bits_is_finite(u.b)));
+    free(z);
+    if (ok) {
+        // The payload word is the double's bits — the carrier's own word
+        // for a Float64, the form the emitter reads back on the Some side.
+        parse_some(out, u.b);
+    } else {
+        parse_none(out);
+    }
+}
+
+// The four bridges: identities and reinterpretations over the registers,
+// total by construction. runeCode/runeFrom add no range validation — the
+// Rune face carries none anywhere today, and the renderer's U+FFFD
+// replacement is where an out-of-domain value lands (design D5's
+// disclosure); floatBits/floatFromBits move the same bits between the
+// two register readings.
+long long __we_string_rune_code(long long c) {
+    return c;
+}
+
+long long __we_string_rune_from(long long n) {
+    return n;
+}
+
+long long __we_string_float_bits(double f) {
+    union {
+        double d;
+        long long b;
+    } u;
+    u.d = f;
+    return u.b;
+}
+
+double __we_string_float_from_bits(long long n) {
+    union {
+        double d;
+        long long b;
+    } u;
+    u.b = n;
+    return u.d;
 }
