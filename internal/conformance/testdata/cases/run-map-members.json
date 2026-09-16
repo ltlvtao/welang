@@ -1,0 +1,16 @@
+{
+  "name": "run-map-members",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.collections\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let m = collections.mapOf([1, 2, 3], [10, 20, 30])\n    m.put(4, 40)\n    match m.get(2) {\n        Some(v) => { io.println(\"two:${v}\") }\n        None => { io.println(\"two:none\") }\n    }\n    match m.remove(1) {\n        Some(v) => { io.println(\"rm:${v}\") }\n        None => { io.println(\"rm:none\") }\n    }\n    let ks = m.keys()\n    for k in ks {\n        match m.get(k) {\n            Some(x) => { io.println(\"k:${k}=${x}\") }\n            None => { io.println(\"miss\") }\n        }\n    }\n    io.println(\"size:${m.size()}\")\n    let n = collections.mapOf([\"a\", \"b\"], [1, 2])\n    n.put(\"c\", 3)\n    match n.get(\"b\") {\n        Some(v) => { io.println(\"b:${v}\") }\n        None => { io.println(\"b:none\") }\n    }\n    io.println(\"nsize:${n.size()}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "two:20\nrm:10\nk:2=20\nk:3=30\nk:4=40\nsize:3\nb:2\nnsize:3\n",
+  "stderr": ""
+}

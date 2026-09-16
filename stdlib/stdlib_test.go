@@ -9,11 +9,12 @@ import (
 )
 
 // TestEmbeddedSourceSet: the embedded key set is exactly the landed set
-// (B2a T1's three, T2's fs, T3's process, T4's string) — the set is
-// concurrent never does (design D1-5 keeps it synthetic). A key landing
-// here unannounced is a slice violation the gate should catch early.
+// (B2a T1's three, T2's fs, T3's process, T4's string, B2b T5's
+// collections) — the set is concurrent never does (design D1-5 keeps it
+// synthetic). A key landing here unannounced is a slice violation the
+// gate should catch early.
 func TestEmbeddedSourceSet(t *testing.T) {
-	want := []string{"fs", "io", "process", "string", "test", "time"}
+	want := []string{"collections", "fs", "io", "process", "string", "test", "time"}
 	got := make([]string, 0, len(Sources()))
 	for k := range Sources() {
 		got = append(got, k)

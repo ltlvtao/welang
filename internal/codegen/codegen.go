@@ -219,6 +219,27 @@ var declareLines = []struct{ sym, line string }{
 	// for the walks, which stay inside their lengths by construction.
 	{"__we_coll_list_get", "declare void @__we_coll_list_get(ptr, i64, ptr)"},
 	{"__we_coll_list_remove_at", "declare void @__we_coll_list_remove_at(ptr, i64, ptr)"},
+	// B2b T5 (design D5-2/D6): the Map and Set family, appended under the
+	// same discipline. The two constructors carry the domain tags as i64
+	// immediates the call site reads off the faces it is already emitting
+	// — kdom names the key domain (0 the identity eight and Bool, 1
+	// String) and vtrace whether a value word holds a reference the
+	// collector traces — and answer a handle the caller re-roots (the T12
+	// return discipline). The members spell the answer families the List
+	// pair set: an Option through the out trio, keys as a fresh List
+	// handle, and the one-word answers (size, the Set's Bool pair) as
+	// plain i64.
+	{"__we_coll_map_of", "declare ptr @__we_coll_map_of(ptr, ptr, i64, i64)"},
+	{"__we_coll_set_of", "declare ptr @__we_coll_set_of(ptr, i64)"},
+	{"__we_coll_map_put", "declare void @__we_coll_map_put(ptr, i64, i64)"},
+	{"__we_coll_map_get", "declare void @__we_coll_map_get(ptr, i64, ptr)"},
+	{"__we_coll_map_remove", "declare void @__we_coll_map_remove(ptr, i64, ptr)"},
+	{"__we_coll_map_keys", "declare ptr @__we_coll_map_keys(ptr)"},
+	{"__we_coll_map_size", "declare i64 @__we_coll_map_size(ptr)"},
+	{"__we_coll_set_add", "declare void @__we_coll_set_add(ptr, i64)"},
+	{"__we_coll_set_remove", "declare i64 @__we_coll_set_remove(ptr, i64)"},
+	{"__we_coll_set_has", "declare i64 @__we_coll_set_has(ptr, i64)"},
+	{"__we_coll_set_size", "declare i64 @__we_coll_set_size(ptr)"},
 	// T8-2B (design D7): the module-level root table. The registration
 	// takes a slot's address, not a handle; a program with no gc top-level
 	// binding registers nothing and declares nothing.
@@ -439,6 +460,51 @@ func (f listElem) traces() bool {
 	return f.gc || f.kind == skStr
 }
 
+// collBinding is one Map or Set value's handle (B2b design D2): the
+// carrier pointer plus the key and value faces its construction fixed.
+// The faces are listElem because the keyed families hold their keys and
+// values as exactly the one word a List element occupies — the same
+// element pipeline answers at every member call — and a Set is the
+// one-face member of the pair (its slots are keys; val stays zero).
+type collBinding struct {
+	reg   string // the carrier handle
+	isMap bool
+	key   listElem // a Set's slot face
+	val   listElem // a Map's value face
+}
+
+// keyDom maps a key face onto the C side's domain word (B2b design D2-2):
+// the identity eight and Bool hash and compare as their own words, and a
+// String crosses as its box handle to hash and compare by bytes. The
+// other one-word families refuse — a Float64's bit pattern is not a
+// bijection on its values (NaN, the signed zeros), a Rune is not an
+// integer — and the refusal is the emitter's domain gate, the same
+// layer a Float payload's reduce stops at. The Eq domain here and the
+// assertEqual leaf domain are one list by design (D2-2).
+func (f listElem) keyDom() (int64, bool) {
+	switch f.kind {
+	case skI64, skU64, skBool:
+		return 0, true
+	case skStr:
+		return 1, true
+	}
+	return 0, false
+}
+
+// collMember names the seven Map and Set members the member face answers
+// (B2b design D5-2's keyed rows). The names the List pair shares — get,
+// add, remove, size — disambiguate by the receiver's environment, never
+// by the name alone; a name past the keyed families is no face of this
+// arm and falls to the faces below it. keys is Map-only and has no
+// spelling a List could borrow.
+func collMember(name string) bool {
+	switch name {
+	case "put", "get", "remove", "keys", "size", "add", "has":
+		return true
+	}
+	return false
+}
+
 // fnValue is one bound function value (design D5): the single pointer a
 // binding holds — a gc carrier whose first word is the thunk's code
 // pointer and whose second is its capture environment (null when the
@@ -514,6 +580,14 @@ type emitter struct {
 	// is a static fact the value does not carry, so the typecheck-time
 	// knowledge has to ride the environment to the iteration site.
 	listEnv map[string]listBinding
+	// collEnv holds a Map or Set binding's handle (B2b design D5-1): the
+	// carrier pointer plus the key and value faces the construction fixed.
+	// The C side's block header carries the domain words the members read
+	// (M_KDOM, M_VTRACE — the carrier is self-describing), but the emitter
+	// keeps its own copy for what the block cannot answer: which word
+	// pipeline a key or value expression must ride at a member call, the
+	// same job listEnv's element face does for the walk.
+	collEnv map[string]collBinding
 	// tupEnv holds a tuple binding's handle: the stack aggregate that IS
 	// the tuple value, plus the shape its elements were classified with.
 	tupEnv map[string]tupBinding
@@ -1540,6 +1614,7 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 		strEnv:         make(map[string]strBinding),
 		gcEnv:          make(map[string]gcBinding),
 		listEnv:        make(map[string]listBinding),
+		collEnv:        make(map[string]collBinding),
 		tupEnv:         make(map[string]tupBinding),
 		ntEnv:          make(map[string]string),
 		newtypes:       make(map[string]ast.TypeRef),
@@ -1777,6 +1852,17 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 								return "", ni
 							}
 						case "io", "test", "time":
+							e.stdQuals[a] = d.Path[1]
+						case "collections":
+							// The keyed collection module (B2b design D3-2):
+							// mapOf and setOf are intercepted at the call by
+							// the std key, so the qualifier needs only this
+							// row. No registerStdModule leg — the module
+							// declares no sums or records for a fused table
+							// or a payload read to want — and no curImports
+							// leg, because the constructors ride the keyed
+							// interception rather than the program fn face
+							// std.string alone takes.
 							e.stdQuals[a] = d.Path[1]
 						case "string":
 							// The one std module whose bodies are real (B2a
@@ -2136,6 +2222,13 @@ func (e *emitter) emitLetBinding(s *ast.Binding) *NotImplemented {
 			e.listEnv[s.Name] = b
 			return nil
 		}
+		// So is a Map or a Set (B2b): the alias shares the handle and the
+		// faces — the visibility point of the stable handle is that two
+		// names see one carrier, the List pair's own argument.
+		if b, ok := e.collEnv[init.Name]; ok {
+			e.collEnv[s.Name] = b
+			return nil
+		}
 		if k, is := e.ntEnv[init.Name]; is {
 			e.ntEnv[s.Name] = k
 		}
@@ -2473,6 +2566,18 @@ func (e *emitter) bindResult(name string, res callResult) *NotImplemented {
 				e.listEnv[name] = listBinding{reg: res.gcReg, elem: *res.list}
 				return nil
 			}
+			// The keyed carrier binds the same way (B2b T5): a Map or Set
+			// is no record — the handle's members answer through the coll
+			// entries, not a layout — so the faces ride their own
+			// environment and gcEnv has nothing to say about it. The reg
+			// fills from gcReg here so an ABI return (whose entry carries
+			// no register) and a constructor (which does) land the same.
+			if res.coll != nil {
+				cb := *res.coll
+				cb.reg = res.gcReg
+				e.collEnv[name] = cb
+				return nil
+			}
 			e.gcEnv[name] = gcBinding{rec: res.recKey, reg: res.gcReg, dyn: res.dyn}
 		}
 		return nil
@@ -2613,6 +2718,12 @@ type callResult struct {
 	// place one is built, so the fact has to ride the result the way a
 	// literal's rides its own binding site.
 	list *listElem
+	// coll is the key/value face pair a Map or Set result carries (B2b
+	// T5); nil at every other result, kind is ckGc where it is set. The
+	// reg inside is set by whichever producer fixed the faces — the
+	// constructors name the register they just carved, the ABI return
+	// leaves it empty for the binding to fill from gcReg.
+	coll *collBinding
 }
 
 // isLocalName reports whether name is bound in the current body — locals
@@ -3752,6 +3863,16 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		// through to the qualifier faces below.
 		return e.emitStrMember(fn.Recv, fn.Name, call.Args)
 	}
+	if res, is, ni := e.emitCollMember(fn, call); is {
+		// A Map or Set member over a keyed binding (B2b design D5): the
+		// same gate shape the List pair takes — the environment
+		// classifies the receiver with its key/value faces, so a
+		// receiver outside the family falls through to the faces below
+		// unchanged. A chained receiver (mapOf(...).put(...)) is no
+		// binding and classifies nowhere: it stops, and the bind-first
+		// form is the canonical one (the T8-3 precedent).
+		return res, ni
+	}
 	if recv, ok := fn.Recv.(*ast.Ident); ok && !e.isLocalName(recv.Name) {
 		// A program module's fn: the qualifier resolves through the walked
 		// module's imports first, then by the module's own key (the
@@ -3788,6 +3909,20 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 				// std entry and no fs entry answers.
 				if fn.Name == "run" {
 					return e.emitProcRunCall(call.Args)
+				}
+			}
+			if sk == "collections" {
+				// The keyed constructors (B2b design D3) replace their call
+				// sites with the runtime entries, so this module rides no
+				// slot — the contrast with fs and process is the point: a
+				// mock of these names hits the checker's generic-category
+				// refusal (E1804) before any slot face could matter, and
+				// the two constructors are the module's whole surface.
+				if fn.Name == "mapOf" {
+					return e.emitCollCtorCall(true, call.Args)
+				}
+				if fn.Name == "setOf" {
+					return e.emitCollCtorCall(false, call.Args)
 				}
 			}
 			if ent, ok := stdFnEntries[sk][fn.Name]; ok {
@@ -4103,6 +4238,235 @@ func (e *emitter) emitListMember(fn *ast.Member, call *ast.Call) (callResult, bo
 			variants: []string{"None", "Some"}, shapes: optionShapes(p), key: "Option",
 		}}, true, nil
 	}
+}
+
+// emitCollCtorCall emits one keyed constructor call (B2b design D3/D5):
+// collections.mapOf and collections.setOf, each replaced by its runtime
+// entry. The domain tags are i64 immediates read off the faces the
+// operands themselves carry — emitListOperand answers the element face a
+// walk over the same list would bind by, so the constructor, the walk,
+// and the member calls downstream all read one authority, and no
+// Shape-to-face converter sits between the checker's registration and
+// the words the IR spells. A key face outside the Eq domain stops here
+// (ruling 4's honest boundary); the answer is a handle the caller
+// re-roots the way every gc return does, before any further allocation
+// can run.
+func (e *emitter) emitCollCtorCall(isMap bool, args []ast.Expr) (callResult, *NotImplemented) {
+	if (isMap && len(args) != 2) || (!isMap && len(args) != 1) {
+		return callResult{}, e.bnd()
+	}
+	kreg, kface, ni := e.emitListOperand(args[0])
+	if ni != nil {
+		return callResult{}, ni
+	}
+	kdom, ok := kface.keyDom()
+	if !ok {
+		return callResult{}, e.bnd()
+	}
+	b := collBinding{isMap: isMap, key: kface}
+	e.use("__we_root_push")
+	if !isMap {
+		e.use("__we_coll_set_of")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr @__we_coll_set_of(ptr %s, i64 %d)", v, kreg, kdom))
+		b.reg = "%" + v
+	} else {
+		vreg, vface, ni := e.emitListOperand(args[1])
+		if ni != nil {
+			return callResult{}, ni
+		}
+		b.val = vface
+		vtrace := 0
+		if vface.traces() {
+			vtrace = 1
+		}
+		e.use("__we_coll_map_of")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr @__we_coll_map_of(ptr %s, ptr %s, i64 %d, i64 %d)", v, kreg, vreg, kdom, vtrace))
+		b.reg = "%" + v
+	}
+	e.pushes++
+	e.inst(fmt.Sprintf("call void @__we_root_push(ptr %s)", b.reg))
+	return callResult{kind: ckGc, gcReg: b.reg, coll: &b}, nil
+}
+
+// emitCollMember emits one Map or Set member call (B2b design D5): the
+// receiver crosses as the handle its binding holds — rooted already, by
+// the construction discipline that holds every gc value from its carve
+// to its body's exit — and the key and value words ride the same element
+// pipeline a List's elements do, the one authority for the one-word
+// faces. put and add write and answer nothing; get and remove ride the
+// out trio as the List pair does, the payload face gating the read-back
+// the same way; keys answers a fresh List carrier over the key words —
+// re-rooted on arrival, carried with the key face so a binding over it
+// walks as any List does — and that List is the iteration idiom's whole
+// sanctioned path (D0-3). size answers i64; the Set's remove and has
+// answer the Bool domain.
+func (e *emitter) emitCollMember(fn *ast.Member, call *ast.Call) (callResult, bool, *NotImplemented) {
+	if !collMember(fn.Name) {
+		return callResult{}, false, nil
+	}
+	b, ok := e.collFaceOf(fn.Recv)
+	if !ok {
+		return callResult{}, false, nil
+	}
+	recv := b.reg
+	switch fn.Name {
+	case "put":
+		if !b.isMap || len(call.Args) != 2 {
+			return callResult{}, true, e.bnd()
+		}
+		k, ni := e.emitListElemValue(call.Args[0], b.key)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		w, ni := e.emitListElemValue(call.Args[1], b.val)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		e.use("__we_coll_map_put")
+		e.inst(fmt.Sprintf("call void @__we_coll_map_put(ptr %s, i64 %s, i64 %s)", recv, k, w))
+		return callResult{kind: ckVoid}, true, nil
+	case "add":
+		if b.isMap || len(call.Args) != 1 {
+			return callResult{}, true, e.bnd()
+		}
+		w, ni := e.emitListElemValue(call.Args[0], b.key)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		e.use("__we_coll_set_add")
+		e.inst(fmt.Sprintf("call void @__we_coll_set_add(ptr %s, i64 %s)", recv, w))
+		return callResult{kind: ckVoid}, true, nil
+	case "keys":
+		if !b.isMap || len(call.Args) != 0 {
+			return callResult{}, true, e.bnd()
+		}
+		e.use("__we_coll_map_keys")
+		e.use("__we_root_push")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr @__we_coll_map_keys(ptr %s)", v, recv))
+		e.pushes++
+		e.inst(fmt.Sprintf("call void @__we_root_push(ptr %%%s)", v))
+		face := b.key
+		return callResult{kind: ckGc, gcReg: "%" + v, list: &face}, true, nil
+	case "size":
+		if len(call.Args) != 0 {
+			return callResult{}, true, e.bnd()
+		}
+		sym := "__we_coll_map_size"
+		if !b.isMap {
+			sym = "__we_coll_set_size"
+		}
+		e.use(sym)
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 @%s(ptr %s)", v, sym, recv))
+		return callResult{kind: ckI64, i64: "%" + v, typeName: "Int64"}, true, nil
+	case "has":
+		if b.isMap || len(call.Args) != 1 {
+			return callResult{}, true, e.bnd()
+		}
+		w, ni := e.emitListElemValue(call.Args[0], b.key)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		e.use("__we_coll_set_has")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 @__we_coll_set_has(ptr %s, i64 %s)", v, recv, w))
+		return callResult{kind: ckI64, i64: "%" + v, typeName: "Bool"}, true, nil
+	default:
+		// get on a Map; remove on either family. The key crosses as its
+		// word (the checker held the argument to K at E0501 — get is
+		// key-typed, never index-typed), and a Map's Option comes back
+		// through the out trio the fs family pioneered.
+		if len(call.Args) != 1 {
+			return callResult{}, true, e.bnd()
+		}
+		k, ni := e.emitListElemValue(call.Args[0], b.key)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		if !b.isMap {
+			if fn.Name != "remove" {
+				return callResult{}, true, e.bnd()
+			}
+			e.use("__we_coll_set_remove")
+			v := e.value()
+			e.inst(fmt.Sprintf("%%%s = call i64 @__we_coll_set_remove(ptr %s, i64 %s)", v, recv, k))
+			return callResult{kind: ckI64, i64: "%" + v, typeName: "Bool"}, true, nil
+		}
+		if fn.Name != "get" && fn.Name != "remove" {
+			return callResult{}, true, e.bnd()
+		}
+		// The payload face answers before the call, exactly as the List
+		// pair's read does: a Some word this build cannot read back (a
+		// String's pair is two words; the payload is one) stops here
+		// rather than binding half a value.
+		p, ok := payloadFace(b.val)
+		if !ok {
+			return callResult{}, true, e.bnd()
+		}
+		sym := "__we_coll_map_get"
+		if fn.Name == "remove" {
+			sym = "__we_coll_map_remove"
+		}
+		e.use(sym)
+		out := e.slot("[3 x i64]")
+		e.inst(fmt.Sprintf("call void @%s(ptr %s, i64 %s, ptr %s)", sym, recv, k, out))
+		tag := e.gepLoadI64(out, 0)
+		pay := e.gepLoadI64(out, 8)
+		pay1 := e.gepLoadI64(out, 16)
+		ts := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", tag, ts))
+		pp := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay, pp))
+		p1 := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay1, p1))
+		return callResult{kind: ckSum, sum: sumSlot{
+			tag: ts, pay: pp, pay1: p1,
+			variants: []string{"None", "Some"}, shapes: optionShapes(p), key: "Option",
+		}}, true, nil
+	}
+}
+
+// emitCollOperand yields one Map or Set value in operand position: the
+// carrier handle the expression names, with the faces it was fixed with.
+// The argument positions (a parameter of the Map families at a call) are
+// this face's whole audience — a receiver classifies through collFaceOf,
+// which is binding-only by the chained-receiver ruling.
+func (e *emitter) emitCollOperand(x ast.Expr) (string, collBinding, *NotImplemented) {
+	switch v := x.(type) {
+	case *ast.Ident:
+		if b, ok := e.collEnv[v.Name]; ok {
+			return b.reg, b, nil
+		}
+	case *ast.Call:
+		res, ni := e.emitCall(v, nil)
+		if ni != nil {
+			return "", collBinding{}, ni
+		}
+		if res.kind != ckGc || res.coll == nil {
+			return "", collBinding{}, e.bnd()
+		}
+		return res.gcReg, *res.coll, nil
+	}
+	return "", collBinding{}, e.bnd()
+}
+
+// collFaceOf classifies a member call's receiver without emitting: the
+// key and value faces where the receiver is a Map or Set binding, false
+// for every other receiver — the dispatch gate emitCollMember needs
+// before it commits. Binding-only by design: a chained receiver (a call
+// result read directly as a receiver) has no binding to carry the faces,
+// and the bind-first form is the canonical one — the same boundary
+// listFaceOf draws for the List pair.
+func (e *emitter) collFaceOf(x ast.Expr) (collBinding, bool) {
+	if id, ok := x.(*ast.Ident); ok {
+		if b, ok := e.collEnv[id.Name]; ok {
+			return b, true
+		}
+	}
+	return collBinding{}, false
 }
 
 // emitCtorCall is the bare record-constructor face: positional arguments
@@ -5068,6 +5432,7 @@ func (e *emitter) emitClosure(cl *ast.Closure, expected *fnAbi) (closureParts, f
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedList := e.listEnv
+	savedColl := e.collEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -5083,6 +5448,7 @@ func (e *emitter) emitClosure(cl *ast.Closure, expected *fnAbi) (closureParts, f
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.listEnv = savedList
+		e.collEnv = savedColl
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -5382,6 +5748,7 @@ type envFrame struct {
 	strEnv  map[string]strBinding
 	gcEnv   map[string]gcBinding
 	listEnv map[string]listBinding
+	collEnv map[string]collBinding
 	tupEnv  map[string]tupBinding
 	ntEnv   map[string]string
 	sums2   map[string]sumSlot
@@ -5394,13 +5761,14 @@ type envFrame struct {
 func (e *emitter) pushEnv() {
 	e.frames = append(e.frames, envFrame{
 		scalars: e.scalars, strEnv: e.strEnv, gcEnv: e.gcEnv,
-		listEnv: e.listEnv,
-		tupEnv:  e.tupEnv, ntEnv: e.ntEnv, sums2: e.sums2, prims: e.prims,
+		listEnv: e.listEnv, collEnv: e.collEnv,
+		tupEnv: e.tupEnv, ntEnv: e.ntEnv, sums2: e.sums2, prims: e.prims,
 	})
 	e.scalars = maps.Clone(e.scalars)
 	e.strEnv = maps.Clone(e.strEnv)
 	e.gcEnv = maps.Clone(e.gcEnv)
 	e.listEnv = maps.Clone(e.listEnv)
+	e.collEnv = maps.Clone(e.collEnv)
 	e.tupEnv = maps.Clone(e.tupEnv)
 	e.ntEnv = maps.Clone(e.ntEnv)
 	e.sums2 = maps.Clone(e.sums2)
@@ -5411,7 +5779,7 @@ func (e *emitter) pushEnv() {
 func (e *emitter) popEnv() {
 	f := e.frames[len(e.frames)-1]
 	e.frames = e.frames[:len(e.frames)-1]
-	e.scalars, e.strEnv, e.gcEnv, e.listEnv, e.tupEnv, e.ntEnv = f.scalars, f.strEnv, f.gcEnv, f.listEnv, f.tupEnv, f.ntEnv
+	e.scalars, e.strEnv, e.gcEnv, e.listEnv, e.collEnv, e.tupEnv, e.ntEnv = f.scalars, f.strEnv, f.gcEnv, f.listEnv, f.collEnv, f.tupEnv, f.ntEnv
 	e.sums2, e.prims = f.sums2, f.prims
 }
 
@@ -6842,6 +7210,46 @@ func (e *emitter) carrierElemFace(t ast.TypeRef) (listElem, bool) {
 	return listElem{}, false
 }
 
+// carrierCollFace answers the key and value faces a Map or Set type
+// reference carries — the faces its arguments fixed, where the classifier
+// already admitted the carrier (and, for the key, the domain gate). The
+// classifier is the one authority on nameability, so this read cannot
+// disagree with it; it exists to carry the faces into an ABI entry
+// (fitAbi's return, bindTupleParams' parameters), where the signature
+// alone otherwise knows only the handle. The register stays empty: the
+// position that binds the value fills it.
+func (e *emitter) carrierCollFace(t ast.TypeRef) (collBinding, bool) {
+	n, ok := e.derefNewtype(e.resolveRef(t)).(*ast.NamedType)
+	if !ok {
+		return collBinding{}, false
+	}
+	if n.Name == "Map" && len(n.Args) == 2 {
+		kf, ok := e.elemFaceOfType(n.Args[0])
+		if !ok {
+			return collBinding{}, false
+		}
+		if _, ok := kf.keyDom(); !ok {
+			return collBinding{}, false
+		}
+		vf, ok := e.elemFaceOfType(n.Args[1])
+		if !ok {
+			return collBinding{}, false
+		}
+		return collBinding{isMap: true, key: kf, val: vf}, true
+	}
+	if n.Name == "Set" && len(n.Args) == 1 {
+		sf, ok := e.elemFaceOfType(n.Args[0])
+		if !ok {
+			return collBinding{}, false
+		}
+		if _, ok := sf.keyDom(); !ok {
+			return collBinding{}, false
+		}
+		return collBinding{key: sf}, true
+	}
+	return collBinding{}, false
+}
+
 // recordKeyOf statically names the record an expression denotes where its
 // own form says so — a gc binding, a construction in this module or a
 // qualified one that resolves. A form whose record only the emission could
@@ -8025,6 +8433,7 @@ func (e *emitter) emitInitDefine(key string, lets []*ast.TopLet) *NotImplemented
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedList := e.listEnv
+	savedColl := e.collEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -8038,6 +8447,7 @@ func (e *emitter) emitInitDefine(key string, lets []*ast.TopLet) *NotImplemented
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.listEnv = savedList
+		e.collEnv = savedColl
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -9784,6 +10194,7 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedList := e.listEnv
+	savedColl := e.collEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -9797,6 +10208,7 @@ func (e *emitter) emitTask(t *ast.TaskExpr, _ ast.TypeRef) (callResult, *NotImpl
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.listEnv = savedList
+		e.collEnv = savedColl
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -11299,6 +11711,27 @@ func (e *emitter) callStrKind(call *ast.Call) strKind {
 		if _, ok := e.listFaceOf(fn.Recv); ok {
 			if fn.Name == "size" {
 				return skI64
+			}
+			return skNone
+		}
+	}
+	// A Map or Set member's result family (B2b design D5-2's keyed rows):
+	// size joins the i64 domain and the Set's remove and has join the
+	// Bool one. put and add answer no value; get and a Map's remove
+	// answer sums; keys answers a carrier — none of those is a single
+	// kind a String position renders, and the match or the walk stays
+	// their reader.
+	if collMember(fn.Name) {
+		if b, ok := e.collFaceOf(fn.Recv); ok {
+			switch fn.Name {
+			case "size":
+				return skI64
+			case "has":
+				return skBool
+			case "remove":
+				if !b.isMap {
+					return skBool
+				}
 			}
 			return skNone
 		}
@@ -13535,6 +13968,11 @@ type fnParamAbi struct {
 	// record's key rides it, and the callee's binding reads it back
 	// (bindDefineParams routes a List parameter to the list environment).
 	list *listElem
+	// coll is the key/value face pair a Map or Set parameter's carrier
+	// holds (abiGc, B2b T5); nil at every other parameter. The same ride
+	// list takes, for the member calls the callee makes on the name; the
+	// register is the parameter's own slot, which bindDefineParams fills.
+	coll *collBinding
 }
 
 // fnAbi is one fn's calling shape: the return family plus one entry per
@@ -13556,6 +13994,11 @@ type fnAbi struct {
 	// names, and the caller's callResult carries the face back out (T8-1's
 	// collect entry) so a binding over the result walks by it.
 	retList *listElem
+	// retColl is the key/value face pair a Map or Set-typed return's
+	// carrier holds (abiGc, B2b T5); nil at every other return. The same
+	// ride retList takes — the returned handle crosses as one rooted
+	// pointer and the faces come back through the caller's callResult.
+	retColl *collBinding
 	params  []fnParamAbi
 }
 
@@ -13690,6 +14133,41 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 		// it).
 		arg := e.derefNewtype(e.resolveRef(n.Args[0]))
 		if _, ok := e.elemFaceOfType(arg); !ok {
+			return abiVoid, "", false
+		}
+		return abiGc, "", true
+	}
+	if n.Name == "Map" && len(n.Args) == 2 {
+		// The builtin Map's carrier (B2b design D5-1): the List arm's own
+		// shape over two arguments, with the Eq-domain gate the keyed
+		// families add — the key argument must fix a face keyDom names,
+		// which is what makes a `fn f(m: Map<Float64, Int64>)` signature
+		// refuse here rather than emit calls whose words the carrier could
+		// not hash. The value argument takes the one-word domain elemFace-
+		//OfType holds it to; the empty key shares as the List's does.
+		kf, ok := e.elemFaceOfType(n.Args[0])
+		if !ok {
+			return abiVoid, "", false
+		}
+		if _, ok := kf.keyDom(); !ok {
+			return abiVoid, "", false
+		}
+		if _, ok := e.elemFaceOfType(n.Args[1]); !ok {
+			return abiVoid, "", false
+		}
+		return abiGc, "", true
+	}
+	if n.Name == "Set" && len(n.Args) == 1 {
+		// The builtin Set's carrier: one face, the slot domain — a Set's
+		// slots are keys, so the Eq-domain gate applies to the element
+		// itself and a Set of gc references is unconstructible by
+		// construction (the C side traces slots only where kdom says
+		// String).
+		sf, ok := e.elemFaceOfType(n.Args[0])
+		if !ok {
+			return abiVoid, "", false
+		}
+		if _, ok := sf.keyDom(); !ok {
 			return abiVoid, "", false
 		}
 		return abiGc, "", true
@@ -13976,6 +14454,12 @@ func (e *emitter) fitAbi(ret ast.TypeRef, params []ast.Param) (fnAbi, bool) {
 			if face, ok := e.carrierElemFace(t); ok {
 				abi.retList = &face
 			}
+			// A Map or Set return adds the pair, for the same ride (B2b
+			// T5): the handle crosses rooted, the faces come back so the
+			// caller's members on a binding over the result classify.
+			if cb, ok := e.carrierCollFace(t); ok {
+				abi.retColl = &cb
+			}
 		case abiSum:
 			abi.retTyp = "{ i64, i64, i64 }"
 			// The variant table and its payload shapes are one answer read
@@ -14062,6 +14546,11 @@ func (e *emitter) bindTupleParams(abi *fnAbi, params []ast.Param) (fnAbi, bool) 
 		// through the same entry.
 		if face, ok := e.carrierElemFace(p.Type); ok {
 			pa.list = &face
+		}
+		// A Map or Set parameter carries the face pair the same way (B2b
+		// T5), for the member calls the callee's body makes on the name.
+		if cb, ok := e.carrierCollFace(p.Type); ok {
+			pa.coll = &cb
 		}
 		abi.params = append(abi.params, pa)
 	}
@@ -14613,6 +15102,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedList := e.listEnv
+	savedColl := e.collEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -14627,6 +15117,7 @@ func (e *emitter) emitFnDefine(fd *fnDef) *NotImplemented {
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.listEnv = savedList
+		e.collEnv = savedColl
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -14773,6 +15264,14 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 				// gcBinding path, its dyn face being a T6 concern.
 				if pa.list != nil {
 					e.listEnv[p.Name] = listBinding{reg: "%" + p.Name, elem: *pa.list}
+				} else if pa.coll != nil {
+					// A Map or Set parameter is the same third case the
+					// List is (B2b T5): a keyed carrier, not a record —
+					// the member calls the body makes ride the coll
+					// entries through the faces the signature carried.
+					cb := *pa.coll
+					cb.reg = "%" + p.Name
+					e.collEnv[p.Name] = cb
 				} else {
 					e.gcEnv[p.Name] = gcBinding{rec: pa.key, reg: "%" + p.Name}
 				}
@@ -14934,6 +15433,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedList := e.listEnv
+	savedColl := e.collEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -14947,6 +15447,7 @@ func (e *emitter) emitMockDefine(md *ast.MockDecl, key string, n int) (mockInsta
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.listEnv = savedList
+		e.collEnv = savedColl
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -15078,6 +15579,7 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 	savedFns := e.fnEnv
 	savedStr, savedGc := e.strEnv, e.gcEnv
 	savedList := e.listEnv
+	savedColl := e.collEnv
 	savedTup, savedNt := e.tupEnv, e.ntEnv
 	savedPushes, savedDefers, savedCaps := e.pushes, e.defers, e.caps
 	savedFrames := e.frames
@@ -15091,6 +15593,7 @@ func (e *emitter) emitTestDefine(td *ast.TestDecl, key string, n int) *NotImplem
 		e.fnEnv = savedFns
 		e.strEnv, e.gcEnv = savedStr, savedGc
 		e.listEnv = savedList
+		e.collEnv = savedColl
 		e.tupEnv, e.ntEnv = savedTup, savedNt
 		e.pushes, e.defers, e.caps = savedPushes, savedDefers, savedCaps
 		e.frames = savedFrames
@@ -15790,6 +16293,19 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 				ops = append(ops, "ptr "+reg)
 				continue
 			}
+			if abi.params[i].coll != nil {
+				// A Map or Set parameter takes the keyed carrier its
+				// expression names (B2b T5), the same sharing the List
+				// takes and for the same reason: the handle IS the value's
+				// identity, and the empty key leaves the record protocol
+				// nothing to copy.
+				reg, _, ni := e.emitCollOperand(a)
+				if ni != nil {
+					return callResult{}, ni
+				}
+				ops = append(ops, "ptr "+reg)
+				continue
+			}
 			// An argument of a value-category record copies at the call
 			// site (chapter 8's "Passing copies"); a gc or resource
 			// record passes its own reference.
@@ -15880,6 +16396,12 @@ func (e *emitter) emitCallCore(abi fnAbi, callee string, preOps []string, args [
 		// or box return has none to carry.
 		if abi.retList != nil {
 			res.list = abi.retList
+		}
+		// A Map or Set return carries the face pair back out the same way
+		// (B2b T5); the register is the caller's own, which bindResult
+		// fills from gcReg.
+		if abi.retColl != nil {
+			res.coll = abi.retColl
 		}
 		return res, nil
 	case abiSum:

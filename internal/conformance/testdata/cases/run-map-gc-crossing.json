@@ -1,0 +1,16 @@
+{
+  "name": "run-map-gc-crossing",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.collections\n\npub type AppError = Failed(String)\n\nrecord Cell { hi: Int64 }\n\npub fn main() effect io -> Result<(), AppError> {\n    let m = collections.mapOf([\"k0\", \"k1\"], [Cell { hi: 7 }, Cell { hi: 8 }])\n    var i: Int64 = 0\n    while i < 60000 {\n        let t = Cell { hi: i }\n        i = i + 1\n    }\n    match m.get(\"k0\") {\n        Some(c) => { io.println(\"k0:${c.hi}\") }\n        None => { io.println(\"k0:none\") }\n    }\n    match m.get(\"k1\") {\n        Some(c) => { io.println(\"k1:${c.hi}\") }\n        None => { io.println(\"k1:none\") }\n    }\n    io.println(\"size:${m.size()}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "k0:7\nk1:8\nsize:2\n",
+  "stderr": ""
+}

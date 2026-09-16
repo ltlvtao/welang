@@ -1,0 +1,16 @@
+{
+  "name": "run-mapof-length-mismatch",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.collections\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let m = collections.mapOf([1, 2], [3])\n    io.println(\"unreachable\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "error: Panicked: mapOf length mismatch\n"
+}

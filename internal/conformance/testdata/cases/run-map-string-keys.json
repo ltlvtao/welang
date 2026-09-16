@@ -1,0 +1,16 @@
+{
+  "name": "run-map-string-keys",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.collections\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let m = collections.mapOf([\"aa\", \"bb\", \"cc\"], [1, 2, 3])\n    m.put(\"bb\", 20)\n    match m.remove(\"aa\") {\n        Some(v) => { io.println(\"rm:${v}\") }\n        None => { io.println(\"rm:none\") }\n    }\n    m.put(\"aa\", 100)\n    match m.get(\"aa\") {\n        Some(v) => { io.println(\"aa:${v}\") }\n        None => { io.println(\"aa:none\") }\n    }\n    match m.get(\"bb\") {\n        Some(v) => { io.println(\"bb:${v}\") }\n        None => { io.println(\"bb:none\") }\n    }\n    match m.get(\"zz\") {\n        Some(v) => { io.println(\"zz:${v}\") }\n        None => { io.println(\"zz:none\") }\n    }\n    io.println(\"size:${m.size()}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "rm:1\naa:100\nbb:20\nzz:none\nsize:3\n",
+  "stderr": ""
+}

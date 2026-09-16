@@ -1,0 +1,16 @@
+{
+  "name": "run-set-members",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.collections\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let s = collections.setOf([1, 2])\n    s.add(3)\n    io.println(\"has3:${s.has(3)}\")\n    io.println(\"has9:${s.has(9)}\")\n    io.println(\"rm2:${s.remove(2)}\")\n    io.println(\"rm2again:${s.remove(2)}\")\n    io.println(\"ssize:${s.size()}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "has3:true\nhas9:false\nrm2:true\nrm2again:false\nssize:2\n",
+  "stderr": ""
+}

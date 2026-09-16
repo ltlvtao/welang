@@ -27,6 +27,7 @@ func TestStdModuleLoadsParsedSources(t *testing.T) {
 		{"std.fs", []string{"readFile", "writeFile", "appendFile", "removeFile", "makeDir", "removeDir", "listDir"}},
 		{"std.process", []string{"run"}},
 		{"std.string", []string{"join", "repeat"}},
+		{"std.collections", []string{"mapOf", "setOf"}},
 	}
 	for _, tc := range cases {
 		file, ok := StdModule(tc.key)

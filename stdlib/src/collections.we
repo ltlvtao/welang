@@ -1,0 +1,10 @@
+// std.collections — the Map and Set constructors (B2b design D3, ruling
+// 2's shape: mapOf/setOf free functions, no Builder). The bodies are the
+// keyed fictions: the checker walks them like any body, and codegen
+// replaces each call site with the runtime entry. The generic clauses are
+// the surface's own: K and V unify from the two lists' element types at
+// the call, and the return application Map<K, V> / Set<T> is what the
+// member face then reads. panic is the prelude's Never — it satisfies the
+// return position without constructing a value no We source can name.
+pub fn mapOf<K, V>(keys: List<K>, values: List<V>) -> Map<K, V> { panic("fiction") }
+pub fn setOf<T>(items: List<T>) -> Set<T> { panic("fiction") }
