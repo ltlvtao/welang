@@ -200,11 +200,11 @@ func TestCollectionsFace(t *testing.T) {
 	// golden table pins the other E0501 reuse sites).
 	wantDiag(t, "fn f() {\n    let xs = [1, \"a\"]\n}\n",
 		"E0501", "the elements are Int64 and String", 2, 18)
-	// A member the anchored families do not name is the honest E0816
-	// (B2a design D6): the collection surface past the anchored family
-	// is the standard library's, and that surface is not spec-approved.
-	wantDiag(t, "fn f(xs: List<Int64>) {\n    let ys = xs.add(1)\n}\n",
-		"E0816", `"add" is not a member of List<Int64>`, 2, 17)
+	// A member past the thirteen-member stdlib surface is the honest
+	// E0816 (B2a design D6, re-anchored by B2b T3: add is a member now,
+	// push still is not — the fall-through arm is unchanged).
+	wantDiag(t, "fn f(xs: List<Int64>) {\n    let ys = xs.push(1)\n}\n",
+		"E0816", `"push" is not a member of List<Int64>`, 2, 17)
 	// Method-call arity keeps the spec-gap boundary row (follow-up #5).
 	wantBnd(t, "interface Describable {\n    fn describe(self) -> String\n}\nrecord User { name: String }\nimpl Describable for User {\n    fn describe(self) -> String {\n        \"u\"\n    }\n}\nfn f(u: User) {\n    let text = u.describe(1)\n}\n", bndArityGap)
 }

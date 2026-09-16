@@ -1,0 +1,18 @@
+{
+  "name": "check-members-set",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(s: Set<Int64>) {\n    s.add(4)\n    let b = s.remove(4)\n    let c = s.has(4)\n    let n = s.size()\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn f(s: Set<Int64>) {\n    s.add(4)\n    let b = s.remove(4)\n    let c = s.has(4)\n    let n = s.size()\n}\n"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "check-members-list",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(xs: List<Int64>) {\n    let ys = xs.add(1)\n    let y = xs.removeAt(0)\n    let z = xs.get(0)\n    let n = xs.size()\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "",
+  "stderr": "",
+  "files": {
+    "demo/main.we": "fn f(xs: List<Int64>) {\n    let ys = xs.add(1)\n    let y = xs.removeAt(0)\n    let z = xs.get(0)\n    let n = xs.size()\n}\n"
+  }
+}

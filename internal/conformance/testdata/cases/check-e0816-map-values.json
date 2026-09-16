@@ -1,0 +1,18 @@
+{
+  "name": "check-e0816-map-values",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(m: Map<Int64, Int64>) {\n    m.values()\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:7: error[E0816]: no such member on the receiver's type — \"values\" is not a member of Map<Int64, Int64>; member access names a field or a method of the receiver's type\n",
+  "files": {
+    "demo/main.we": "fn f(m: Map<Int64, Int64>) {\n    m.values()\n}\n"
+  }
+}

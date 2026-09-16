@@ -1,0 +1,18 @@
+{
+  "name": "check-members-void-ret",
+  "args": [
+    "check",
+    "demo/main.we"
+  ],
+  "setup": {
+    "files": {
+      "demo/main.we": "fn f(xs: List<Int64>) {\n    let y: Int64 = xs.add(1)\n}\n"
+    }
+  },
+  "exit": 1,
+  "stdout": "",
+  "stderr": "demo/main.we:2:9: error[E0501]: mixed types — the expression is (), the annotation is Int64; no coercion is ever inserted\n",
+  "files": {
+    "demo/main.we": "fn f(xs: List<Int64>) {\n    let y: Int64 = xs.add(1)\n}\n"
+  }
+}

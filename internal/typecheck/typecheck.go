@@ -1347,12 +1347,18 @@ var stringMembers = map[string]fnType{
 	"charAt":     {params: []Type{baseType("Int64")}, ret: baseType("Rune")},
 }
 
-// collectionMembers holds each std collection's spec-anchored members:
-// the access family (chapter 17 — List.get and Map.get return Option,
-// Set.has returns Bool) and the iteration entry point (chapter 11
-// ratifies the three as iterables; Map iterates (K, V) entries). The
-// mutation surface and everything beyond is the standard library's
-// (design D10 — a miss stops at the std-modules boundary).
+// collectionMembers holds each std collection's builtin member table: the
+// spec-anchored families — the access family (chapter 17: List.get and
+// Map.get return Option, Set.has returns Bool) and the iteration entry
+// point (chapter 11 ratifies the three as iterables; Map iterates (K, V)
+// entries) — plus the thirteen-member stdlib surface (B2b design D4):
+// List{add, removeAt, get, size}, Map{put, remove, get, keys, size},
+// Set{add, remove, has, size}. The receiver's arguments substitute into
+// every clause position (the access family's mechanism); void members
+// return unit, and keys builds the List<K> named type from the receiver's
+// key argument. Everything past the thirteen stays the standard
+// library's: a miss falls through to the same E0816 every other receiver
+// takes (one rule, one code, never a private reject).
 func collectionMembers(t namedType) map[string]fnType {
 	m := map[string]fnType{}
 	switch t.decl {
@@ -1362,18 +1368,44 @@ func collectionMembers(t namedType) map[string]fnType {
 			params: []Type{baseType("Int64")},
 			ret:    namedType{decl: optionSum, args: []Type{t.args[0]}},
 		}
+		// fn add(self, e: T) -> ()
+		m["add"] = fnType{params: []Type{t.args[0]}, ret: unitType{}}
+		// fn removeAt(self, i: Int64) -> Option<T>
+		m["removeAt"] = fnType{
+			params: []Type{baseType("Int64")},
+			ret:    namedType{decl: optionSum, args: []Type{t.args[0]}},
+		}
+		// fn size(self) -> Int64
+		m["size"] = fnType{ret: baseType("Int64")}
 	case mapSum:
 		m["iterator"] = fnType{ret: ifaceType{decl: iteratorIface, args: []Type{tupleType{elems: t.args}}}}
 		m["get"] = fnType{
 			params: []Type{t.args[0]},
 			ret:    namedType{decl: optionSum, args: []Type{t.args[1]}},
 		}
+		// fn put(self, k: K, v: V) -> ()
+		m["put"] = fnType{params: []Type{t.args[0], t.args[1]}, ret: unitType{}}
+		// fn remove(self, k: K) -> Option<V>
+		m["remove"] = fnType{
+			params: []Type{t.args[0]},
+			ret:    namedType{decl: optionSum, args: []Type{t.args[1]}},
+		}
+		// fn keys(self) -> List<K>
+		m["keys"] = fnType{ret: namedType{decl: listSum, args: []Type{t.args[0]}}}
+		// fn size(self) -> Int64
+		m["size"] = fnType{ret: baseType("Int64")}
 	case setSum:
 		m["iterator"] = fnType{ret: ifaceType{decl: iteratorIface, args: []Type{t.args[0]}}}
 		m["has"] = fnType{
 			params: []Type{t.args[0]},
 			ret:    baseType("Bool"),
 		}
+		// fn add(self, e: T) -> ()
+		m["add"] = fnType{params: []Type{t.args[0]}, ret: unitType{}}
+		// fn remove(self, e: T) -> Bool
+		m["remove"] = fnType{params: []Type{t.args[0]}, ret: baseType("Bool")}
+		// fn size(self) -> Int64
+		m["size"] = fnType{ret: baseType("Int64")}
 	}
 	return m
 }
