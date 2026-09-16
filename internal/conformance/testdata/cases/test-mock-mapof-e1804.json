@@ -1,0 +1,16 @@
+{
+  "name": "test-mock-mapof-e1804",
+  "args": [
+    "test",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "tests/m_test.we": "import std.collections\n\ntest \"target\" {\n    mock collections.mapOf(keys: List<Int64>, values: List<Int64>) {\n        return\n    }\n}\n",
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n"
+    }
+  },
+  "exit": 2,
+  "stdout": "",
+  "stderr": "tests/m_test.we:4:22: error[E1804]: mock target is not a mockable function — mapOf is a generic fn; only a module-level monomorphic fn is mockable\n"
+}
