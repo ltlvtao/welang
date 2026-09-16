@@ -25,3 +25,24 @@ pub fn repeat(s: String, n: Int64) -> String {
     }
     return acc
 }
+
+// The conversion family's keyed fictions (B3a design D1, ruling 2's
+// shape: free functions on std.string, failures answered as an Option —
+// not members, not a panic). The three parses accept the decimal core
+// (design D2) and answer None for a malformed run or a range error; the
+// four bridges are total — runeCode/runeFrom are the i64 identity over
+// code points (the Rune face carries no range validation anywhere, and
+// the renderer's U+FFFD replacement is where an out-of-domain value
+// lands), floatBits/floatFromBits the bit reinterpretation. Like the
+// collections constructors, panic is the prelude's Never — it satisfies
+// each return position without constructing a value the keyed call
+// would discard anyway, and codegen replaces every call site with the
+// runtime entry (design D4's mixed dispatch: the alias answers its
+// keyed set first, then falls to the program face join and repeat ride).
+pub fn parseInt(s: String) -> Option<Int64> { panic("fiction") }
+pub fn parseUInt(s: String) -> Option<UInt64> { panic("fiction") }
+pub fn parseFloat(s: String) -> Option<Float64> { panic("fiction") }
+pub fn runeCode(c: Rune) -> Int64 { panic("fiction") }
+pub fn runeFrom(n: Int64) -> Rune { panic("fiction") }
+pub fn floatBits(f: Float64) -> Int64 { panic("fiction") }
+pub fn floatFromBits(n: Int64) -> Float64 { panic("fiction") }

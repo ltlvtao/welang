@@ -93,3 +93,10 @@ double __we_string_float_from_bits(i64 n);                // 同上反向
 ## 实现期补记
 
 **补记一（T1，2026-09-17）：ERANGE 判据的精化——glibc 对 subnormal 也置位。** D3 溢出映射句「strtod 的 ERANGE（上溢 inf 与下溢零同查）」在实现时暴露一枚载体陷阱：glibc 的 strtod 对 **subnormal（可表示的 denormal）结果同样置 ERANGE**，故「ERANGE 一刀切 ⇒ None」会把 `2.5e-320` 这类可表示值错杀。落地判据以**答案自身的形状**为准（与 D2 的措辞「上溢到 inf、下溢到零」逐字一致）：ERANGE 仅当舍入答案离开有限非零清单——位型指数字段全一（inf；核心形不产 nan）或答案为零——才 `None`；subnormal 存活为 `Some`（denormal 行因此进 harness 断言与 D7 的位型回环）。inf 判据读位字（`bits_is_finite`）而非引 math.h——str.c 的 include 集合保持原样（仅新增 errno.h）。
+
+**补记二（T2，2026-09-17）：panic 虚构体的程序面前提被推翻——键控名集随 T2 落。** D1 写「panic 体（Never 满足任意返回位，mapOf 先例）」，D4 写「真体白名单不动：join/repeat 的 define 发射白名单（programModules 侧）不收七原语」。两句各有一处被实现推翻：
+
+- **mapOf 先例的前提**是 collections **不走程序面**——发射器从不走其体，panic 虚构体因而从未被发射。std.string 是唯一走程序面的 std 模块（`build.go` `programModules` 整模块放行），其虚构体 define **会被走**，而 (a) 非 Never 返回 + panic 尾今日不可发射（用户侧同形探针 `fn f() -> Int64 { panic("boom") }` → build 70——虚构体声明落地后 join-only 程序同炸，零漂移破）；(b) 即使可发射，死 define 也漂移每个 import 者的 IR，逐字节零差缝不可过。
+- **「programModules 侧的白名单」并不存在**——`programModules` 是模块级放行（`m.Key != "std.string"` 才 continue），无 fn 级过滤。
+
+修正机制（as-built）：键控名集 `stringKeyedFns`（七名表，declare 表的键半）**随 T2 落**——发射器 define 收集臂对 `m.Key == "std.string"` 且名字在键控集者跳过 fnTable 与 fns（join/repeat 照走程序面；programModules 本身零触碰）。发射臂（out 三字组 + 四直返）与分派重排仍归 T3。修正后：七面 `we check` exit 0、虚构体调用 `we build` 停在调用点 `instCallee` 查无（70，「main bodies…」词）——T3 黄金所需红态由调用点诚实给出。零漂移结论（D4 末段）不变，机制落点由「白名单」订正为「发射器侧键控名跳过」。

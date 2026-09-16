@@ -22,12 +22,22 @@
 
 ## T2 面声明与装载零漂移
 
-- [ ] **string.we 七虚构体**：签名照 proposal 目标 1 表；panic 体（Never 满足任意返回位，mapOf 先例）；无 effect 段（join/repeat 纯性先例）。
+- [x] **string.we 七虚构体**：签名照 proposal 目标 1 表；panic 体（Never 满足任意返回位，mapOf 先例）；无 effect 段（join/repeat 纯性先例）。
   来源：proposal 目标 1/2；design D1、D2
   验证：探针项目 `import std.string` 调 `string.parseInt("12")` + match 两臂 → `we check` exit 0；`string.parseInt(12)` → E0501；`string.runeFrom("a")` → E0501（检查器零码改——typecheck 包零 diff）
-- [ ] **零漂移三缝**：既有黄金零改写 + hello IR 逐字节 + mock 黄金绿。
+- [x] **零漂移三缝**：既有黄金零改写 + hello IR 逐字节 + mock 黄金绿。
   来源：design D4（零漂移论证）
   验证：`go test ./internal/conformance/ -count=1` 919 枚零改写全绿；hello IR 对 HEAD worktree `cmp` 逐字节零差；既有 mock 黄金绿
+
+### T2 落地记（2026-09-17）
+
+- **面声明**（`stdlib/src/string.we` +7 虚构体 + 头注释段）：签名照 proposal 目标 1 表；panic 体沿 mapOf 先例形；无 effect 段（join/repeat 纯性先例）。
+- **红态（记档）**：声明未落时探针 `we check` → `error[E1304]: unresolved name — the module "std.string" declares no "parseInt"` exit 1。
+- **探针**：正面 `string.parseInt("12")` + match 两臂 → check exit 0；七面合探针（parseUInt/parseFloat 两 Option + 四桥，`+1` 算术钉 Int64 返回域）→ exit 0；负面 `string.parseInt(12)` / `string.runeFrom("a")` → E0501 逐字（实参 Int64/String 对参数位 String/Int64）。检查器**生产码零 diff**（typecheck 包改动仅 b2a_test.go 一枚重锚，见下）。
+- **实现期发现与机制修正（design 补记二）**：D1「panic 体，mapOf 先例」被实现推翻——mapOf 先例的前提是 collections 不走程序面（发射器从不走其体）；std.string 是唯一走程序面的 std 模块，虚构体 define 会被走，而 (a) 非 Never 返回 + panic 尾今日不可发射（用户侧同形探针 `fn f() -> Int64 { panic("boom") }` → build 70；虚构体落地后 join-only 程序同炸），(b) 即使可发射，死 define 也漂移每个 import 者的 IR。修正 = 键控名集 `stringKeyedFns`（七名表，declare 表的键半）随 T2 落：define 收集臂对 `m.Key == "std.string"` 且键控名者跳过 fnTable/fns——join/repeat 照走程序面，programModules 零触碰。发射臂与分派重排仍归 T3。修正后七面 check 0、虚构体调用 build 停在调用点 instCallee 查无（70，「main bodies…」词）——T3 黄金红态由调用点诚实给出。
+- **单测重锚一枚**：typecheck `TestStdModuleLoadsParsedSources` 的 std.string 行 `[join repeat]` → 九名（B2a 钉的是装载面条目清单，面真拓宽故重锚；测试文件注释同步）。
+- **零漂移三缝**：① conformance 全量 `-count=1` 164s exit 0，919 枚零改写（testdata `git status` 零改动）；② IR 对拍——HEAD worktree（`b982d0f`）与工作树双二进制各跑 string 密集项目（join+repeat）与经典 hello（io-only），`build/demo.ll` `cmp` **逐字节零差**（两形皆过）；③ mock 黄金随套件全绿。
+- **阶梯**：`go build` / `go vet ./internal/codegen/` / `gofmt -l`（0 文件）/ `go test -count=1` typecheck+codegen+cli+conformance 全绿；`git diff --check` 净；staged 无 `refr/`；`WE_UPDATE_GOLDEN` 未用。
 
 ## T3 键控拦截与混合分派
 

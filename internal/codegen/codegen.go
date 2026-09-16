@@ -328,6 +328,25 @@ var stdFnEntries = map[string]map[string]stdEntry{
 	},
 }
 
+// stringKeyedFns is std.string's keyed set (B3a design D1/D4): the
+// conversion family's seven names, whose call sites the keyed
+// interception replaces with the runtime entries. std.string is the one
+// std module whose bodies are real, so the set is what splits the two
+// routes the alias serves — join and repeat stay on the program face,
+// the seven keyed names never reach it. The define walk consults it to
+// keep a fiction's define out of the IR (the same dead-IR reason
+// registerStdModule leaves every keyed fn out); the call arms consult
+// it for the interception itself.
+var stringKeyedFns = map[string]bool{
+	"parseInt":      true,
+	"parseUInt":     true,
+	"parseFloat":    true,
+	"runeCode":      true,
+	"runeFrom":      true,
+	"floatBits":     true,
+	"floatFromBits": true,
+}
+
 // fsEntry is one fs-family entry's keyed face (B2a design D3/D7): the
 // runtime symbol its slot holds, whether a second String argument (the
 // data pair) rides beside the path, and the Ok payload's face — "" for
@@ -1705,6 +1724,18 @@ func EmitProgram(mode ProgramMode, mods []ProgModule) (string, *NotImplemented) 
 					// the symbol its arguments mangle to, when a site names
 					// them.
 					e.generics[m.Key+"."+d.Name] = d
+					continue
+				}
+				if m.Key == "std.string" && stringKeyedFns[d.Name] {
+					// A keyed fiction over the one program-face std module
+					// (B3a design D4): its call sites ride the keyed
+					// interception, so a define for the panic body would be
+					// dead IR — the same reason registerStdModule leaves the
+					// keyed fns out of every other std module's registration.
+					// Skipping the fnTable row too is what makes a call the
+					// interception does not yet serve (the arms arrive with
+					// the dispatch leg) stop honestly at the callee lookup
+					// instead of walking the fiction.
 					continue
 				}
 				if d.Name == "main" && m.Key == root.Key && mode == ModeBuild && entry == nil {

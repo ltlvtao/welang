@@ -15,7 +15,9 @@ import (
 // still riding importCall's dispatch ahead of the gate. std.string's two
 // are the first real bodies (B2a design D5): the row checks the names
 // the same way — the body's realness is the pipeline's business, not the
-// loader's.
+// loader's. The seven conversions appended to std.string (B3a design
+// D1) are the keyed fictions: the loader sees them the same way, and the
+// row re-anchors to the nine-name face.
 func TestStdModuleLoadsParsedSources(t *testing.T) {
 	cases := []struct {
 		key   string
@@ -26,7 +28,7 @@ func TestStdModuleLoadsParsedSources(t *testing.T) {
 		{"std.time", []string{"now", "sleep"}},
 		{"std.fs", []string{"readFile", "writeFile", "appendFile", "removeFile", "makeDir", "removeDir", "listDir"}},
 		{"std.process", []string{"run"}},
-		{"std.string", []string{"join", "repeat"}},
+		{"std.string", []string{"join", "repeat", "parseInt", "parseUInt", "parseFloat", "runeCode", "runeFrom", "floatBits", "floatFromBits"}},
 		{"std.collections", []string{"mapOf", "setOf"}},
 	}
 	for _, tc := range cases {
