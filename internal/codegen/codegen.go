@@ -261,6 +261,18 @@ var declareLines = []struct{ sym, line string }{
 	// command crosses as its (ptr, i64) pair, the argument list as its
 	// carrier handle, and the answer through the out-parameter trio.
 	{"__we_proc_run", "declare void @__we_proc_run(ptr, i64, ptr, ptr)"},
+	// B3a T3 (design D3/D4): std.string's conversion family. The three
+	// parses take the String pair and answer the Option through the
+	// out-parameter trio — the shape the coll get family takes — and the
+	// four bridges are the register forms: the rune identity pair i64 to
+	// i64, the bit reinterpretation pair double/i64 each way.
+	{"__we_string_parse_int", "declare void @__we_string_parse_int(ptr, i64, ptr)"},
+	{"__we_string_parse_uint", "declare void @__we_string_parse_uint(ptr, i64, ptr)"},
+	{"__we_string_parse_float", "declare void @__we_string_parse_float(ptr, i64, ptr)"},
+	{"__we_string_rune_code", "declare i64 @__we_string_rune_code(i64)"},
+	{"__we_string_rune_from", "declare i64 @__we_string_rune_from(i64)"},
+	{"__we_string_float_bits", "declare i64 @__we_string_float_bits(double)"},
+	{"__we_string_float_from_bits", "declare double @__we_string_float_from_bits(i64)"},
 }
 
 // ProgModule is one module of a program emission (design D1): the module
@@ -345,6 +357,20 @@ var stringKeyedFns = map[string]bool{
 	"runeFrom":      true,
 	"floatBits":     true,
 	"floatFromBits": true,
+}
+
+// stringParseEntries pairs the three parses' C entries with the payload
+// face each Some word carries (B3a design D3): the out trio's second
+// word is the answer's own domain — Int64 and UInt64 as their i64
+// words, Float64 as its bit word, which a Some arm reads back through
+// the bitcast the payload-face pipeline takes.
+var stringParseEntries = map[string]struct {
+	sym string
+	pay fnParamAbi
+}{
+	"parseInt":   {"__we_string_parse_int", fnParamAbi{kind: abiI64, typ: "Int64"}},
+	"parseUInt":  {"__we_string_parse_uint", fnParamAbi{kind: abiI64, typ: "UInt64"}},
+	"parseFloat": {"__we_string_parse_float", fnParamAbi{kind: abiDouble, typ: "Float64"}},
 }
 
 // fsEntry is one fs-family entry's keyed face (B2a design D3/D7): the
@@ -3905,6 +3931,16 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 		return res, ni
 	}
 	if recv, ok := fn.Recv.(*ast.Ident); ok && !e.isLocalName(recv.Name) {
+		// The mixed-module dispatch (B3a design D4): std.string is the
+		// one std module serving two routes — the keyed set answers
+		// first, and a name off it falls to the program face join and
+		// repeat ride. The qualifier's module is what resolveQual
+		// computes either way; only the string module's key carries a
+		// split, so the gate is that key and the name's membership in
+		// the keyed set.
+		if k := e.resolveQual(recv.Name); k == "std.string" && stringKeyedFns[fn.Name] {
+			return e.emitStringKeyedCall(fn.Name, call.Args)
+		}
 		// A program module's fn: the qualifier resolves through the walked
 		// module's imports first, then by the module's own key (the
 		// no-import form of a cross-module call resolves by key).
@@ -4019,6 +4055,83 @@ func (e *emitter) emitStdEntryCall(name string, ent stdEntry, args []ast.Expr) (
 	}
 	e.inst(fmt.Sprintf("call void %%%s(i64 %s)", fp, op))
 	return callResult{kind: ckVoid}, nil
+}
+
+// emitStringKeyedCall emits one keyed conversion call (B3a design D3):
+// the mixed dispatch's keyed half answered, so the call rides a slot —
+// the fs family's shape, and for the same reason: these are monomorphic
+// module fns, the check face's mockable literals, so the run face must
+// reach them through slots. The three parses cross as the String pair
+// and answer the Option's three words through the out pointer (the coll
+// get family's trio); the four bridges are the register forms — the
+// rune pair the i64 identity over code points, the float pair the bit
+// reinterpretation — each answer's typeName carrying the domain a
+// binding renders in.
+func (e *emitter) emitStringKeyedCall(name string, args []ast.Expr) (callResult, *NotImplemented) {
+	if len(args) != 1 {
+		return callResult{}, e.bnd()
+	}
+	if ent, ok := stringParseEntries[name]; ok {
+		p, l, ni := e.emitStringExpr(args[0])
+		if ni != nil {
+			return callResult{}, ni
+		}
+		slot := e.slotFor("string."+name, "@"+ent.sym)
+		e.use(ent.sym)
+		fp := e.value()
+		e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
+		out := e.slot("[3 x i64]")
+		e.inst(fmt.Sprintf("call void %%%s(ptr %s, i64 %s, ptr %s)", fp, p, l, out))
+		tag := e.gepLoadI64(out, 0)
+		pay := e.gepLoadI64(out, 8)
+		pay1 := e.gepLoadI64(out, 16)
+		ts := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", tag, ts))
+		pp := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay, pp))
+		p1 := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay1, p1))
+		return callResult{kind: ckSum, sum: sumSlot{
+			tag: ts, pay: pp, pay1: p1,
+			variants: []string{"None", "Some"}, shapes: optionShapes(ent.pay), key: "Option",
+		}}, nil
+	}
+	var sym, tn string
+	floatArg, floatRet := false, false
+	switch name {
+	case "runeCode":
+		sym, tn = "__we_string_rune_code", "Int64"
+	case "runeFrom":
+		sym, tn = "__we_string_rune_from", "Rune"
+	case "floatBits":
+		sym, tn, floatArg = "__we_string_float_bits", "Int64", true
+	case "floatFromBits":
+		sym, tn, floatRet = "__we_string_float_from_bits", "Float64", true
+	default:
+		return callResult{}, e.bnd()
+	}
+	op, isF, ni := e.emitNumExpr(args[0])
+	if ni != nil {
+		return callResult{}, ni
+	}
+	if isF != floatArg {
+		return callResult{}, e.bnd()
+	}
+	slot := e.slotFor("string."+name, "@"+sym)
+	e.use(sym)
+	fp := e.value()
+	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
+	v := e.value()
+	if floatRet {
+		e.inst(fmt.Sprintf("%%%s = call double %%%s(i64 %s)", v, fp, op))
+		return callResult{kind: ckI64, i64: "%" + v, isFloat: true, typeName: tn}, nil
+	}
+	if floatArg {
+		e.inst(fmt.Sprintf("%%%s = call i64 %%%s(double %s)", v, fp, op))
+	} else {
+		e.inst(fmt.Sprintf("%%%s = call i64 %%%s(i64 %s)", v, fp, op))
+	}
+	return callResult{kind: ckI64, i64: "%" + v, typeName: tn}, nil
 }
 
 // emitFsEntryCall emits one fs-family entry call through its slot: the

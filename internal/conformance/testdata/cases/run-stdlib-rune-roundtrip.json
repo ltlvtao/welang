@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-rune-roundtrip",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let r = string.runeFrom(string.runeCode('中'))\n    io.println(\"${r}\")\n    let s = string.runeFrom(97)\n    if string.runeCode(s) == 97 { io.println(\"rt-ok\") } else { io.println(\"rt-bad\") }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "中\nrt-ok\n",
+ "stderr": ""
+}

@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-float-bits",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let b = string.floatBits(1.0)\n    io.println(\"b ${b}\")\n    let n = string.floatBits(2.5)\n    io.println(\"n ${n}\")\n    let g = string.floatFromBits(n)\n    io.println(\"g ${g}\")\n    if string.floatFromBits(string.floatBits(0.25)) == 0.25 { io.println(\"rt-ok\") } else { io.println(\"rt-bad\") }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "b 4607182418800017408\nn 4612811918334230528\ng 2.5\nrt-ok\n",
+ "stderr": ""
+}

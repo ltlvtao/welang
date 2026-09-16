@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-parse-float",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = string.parseFloat(\"1.5\")\n    match a {\n        Some(w) => { io.println(\"got ${w}\") }\n        None => { io.println(\"a-none\") }\n    }\n    let b = string.parseFloat(\"1.500\")\n    match b {\n        Some(w) => { io.println(\"trim ${w}\") }\n        None => { io.println(\"b-none\") }\n    }\n    let c = string.parseFloat(\"1.5e2\")\n    match c {\n        Some(w) => { io.println(\"exp ${w}\") }\n        None => { io.println(\"c-none\") }\n    }\n    let d = string.parseFloat(\"1.0e999\")\n    match d {\n        Some(w) => { io.println(\"d-bad\") }\n        None => { io.println(\"d-none\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "got 1.5\ntrim 1.5\nexp 1.5e+02\nd-none\n",
+ "stderr": ""
+}
