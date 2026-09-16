@@ -50,3 +50,9 @@ var FsSource string
 
 //go:embed c/process.c
 var ProcessSource string
+
+//go:embed c/coll.h
+var CollHeader string
+
+//go:embed c/coll.c
+var CollSource string
