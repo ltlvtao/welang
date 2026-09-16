@@ -1,0 +1,16 @@
+{
+  "name": "run-list-alias-visibility",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs: List<Int64> = [1, 2, 3]\n    let ys = xs\n    xs.add(4)\n    io.println(\"ys:${ys.size()}\")\n    io.println(\"xs:${xs.size()}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "ys:4\nxs:4\n",
+  "stderr": ""
+}

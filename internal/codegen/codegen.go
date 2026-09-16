@@ -210,6 +210,15 @@ var declareLines = []struct{ sym, line string }{
 	{"__we_list_get", "declare i64 @__we_list_get(ptr, i64)"},
 	{"__we_list_len", "declare i64 @__we_list_len(ptr)"},
 	{"__we_list_snap", "declare ptr @__we_list_snap(ptr)"},
+	// B2b (design D6): the surface entries the List member face rides.
+	// They answer the fused Option through the trailing [3 x i64] out
+	// block — the fs family's shape — with None 0 / Some 1, the order
+	// the emitter's own Option table carries. get does not ride the
+	// carrier's __we_list_get on purpose: chapter 17's surface semantics
+	// make an out-of-range read absence, while the carrier's entry traps
+	// for the walks, which stay inside their lengths by construction.
+	{"__we_coll_list_get", "declare void @__we_coll_list_get(ptr, i64, ptr)"},
+	{"__we_coll_list_remove_at", "declare void @__we_coll_list_remove_at(ptr, i64, ptr)"},
 	// T8-2B (design D7): the module-level root table. The registration
 	// takes a slot's address, not a handle; a program with no gc top-level
 	// binding registers nothing and declares nothing.
@@ -3728,6 +3737,15 @@ func (e *emitter) emitCall(call *ast.Call, typ ast.TypeRef) (callResult, *NotImp
 			return e.emitMethodCall(fd, fn.Recv, call.Args)
 		}
 	}
+	if res, is, ni := e.emitListMember(fn, call); is {
+		// A List member over a List receiver (B2b design D5): the method
+		// table has already declined — a List binding names no record
+		// head — so a receiver the carrier environment classifies with an
+		// element face is this arm's. The gate is pure classification, so
+		// a receiver outside the family (a Map or Set binding, a String)
+		// falls through to the faces below unchanged.
+		return res, ni
+	}
 	if e.valueKind(fn.Recv) == skStr {
 		// A chapter 17 String member over a String receiver (T4). The
 		// classification gates it, so a receiver outside the domain falls
@@ -3983,6 +4001,108 @@ func (e *emitter) emitProcRunCall(args []ast.Expr) (callResult, *NotImplemented)
 		tag: ts, pay: pp, pay1: p1,
 		variants: sumVariantNames(shapes), shapes: shapes, key: "Result",
 	}}, nil
+}
+
+// listMember names the four List members the member face answers (B2b
+// design D5-2's List rows). Everything else — the iterator the walks and
+// the Dyn construction own, any name past the thirteen — is no face of
+// this arm and falls to the faces below it.
+func listMember(name string) bool {
+	switch name {
+	case "add", "removeAt", "get", "size":
+		return true
+	}
+	return false
+}
+
+// emitListMember emits one List member call (B2b design D5): the
+// receiver crosses as the carrier handle its expression names — rooted
+// already, by the construction discipline that holds every gc value from
+// its carve to its body's exit — and the element word rides the carrier's
+// own element pipeline. add reuses the carrier's push and drops the
+// return: the handle is stable, so the pointer the call answers is the
+// one the binding already holds, which is the whole alias-visibility
+// point of the v2 carrier. size reuses the carrier's len the same way.
+// get and removeAt ride the coll entries' out trio, the fs family's
+// mirror: the C side writes the fused Option {tag, pay0, pay1} with None
+// 0 / Some 1 — the order optionShapes carries — and get's surface
+// semantics (an out-of-range read is absence, never the walk's trap)
+// are why it does not ride __we_list_get.
+//
+// The bool says the form is this face at all — the name is one of the
+// four AND the receiver classifies as a List — so a failure past that
+// point is a boundary of the face rather than a fall-through.
+func (e *emitter) emitListMember(fn *ast.Member, call *ast.Call) (callResult, bool, *NotImplemented) {
+	if !listMember(fn.Name) {
+		return callResult{}, false, nil
+	}
+	if _, ok := e.listFaceOf(fn.Recv); !ok {
+		return callResult{}, false, nil
+	}
+	recv, face, ni := e.emitListOperand(fn.Recv)
+	if ni != nil {
+		return callResult{}, true, ni
+	}
+	switch fn.Name {
+	case "add":
+		if len(call.Args) != 1 {
+			return callResult{}, true, e.bnd()
+		}
+		w, ni := e.emitListElemValue(call.Args[0], face)
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		e.use("__we_list_push")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call ptr @__we_list_push(ptr %s, i64 %s)", v, recv, w))
+		return callResult{kind: ckVoid}, true, nil
+	case "size":
+		if len(call.Args) != 0 {
+			return callResult{}, true, e.bnd()
+		}
+		e.use("__we_list_len")
+		v := e.value()
+		e.inst(fmt.Sprintf("%%%s = call i64 @__we_list_len(ptr %s)", v, recv))
+		return callResult{kind: ckI64, i64: "%" + v, typeName: "Int64"}, true, nil
+	default:
+		if len(call.Args) != 1 {
+			return callResult{}, true, e.bnd()
+		}
+		idx, isF, ni := e.emitNumExpr(call.Args[0])
+		if ni != nil {
+			return callResult{}, true, ni
+		}
+		if isF {
+			return callResult{}, true, e.bnd()
+		}
+		// The payload face answers before the call: a Some word this
+		// build cannot read back (a String's pair is two words, and the
+		// payload is one) stops here rather than binding half an element.
+		p, ok := payloadFace(face)
+		if !ok {
+			return callResult{}, true, e.bnd()
+		}
+		sym := "__we_coll_list_get"
+		if fn.Name == "removeAt" {
+			sym = "__we_coll_list_remove_at"
+		}
+		e.use(sym)
+		out := e.slot("[3 x i64]")
+		e.inst(fmt.Sprintf("call void @%s(ptr %s, i64 %s, ptr %s)", sym, recv, idx, out))
+		tag := e.gepLoadI64(out, 0)
+		pay := e.gepLoadI64(out, 8)
+		pay1 := e.gepLoadI64(out, 16)
+		ts := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", tag, ts))
+		pp := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay, pp))
+		p1 := e.slot("i64")
+		e.inst(fmt.Sprintf("store i64 %s, ptr %s", pay1, p1))
+		return callResult{kind: ckSum, sum: sumSlot{
+			tag: ts, pay: pp, pay1: p1,
+			variants: []string{"None", "Some"}, shapes: optionShapes(p), key: "Option",
+		}}, true, nil
+	}
 }
 
 // emitCtorCall is the bare record-constructor face: positional arguments
@@ -11169,6 +11289,19 @@ func (e *emitter) callStrKind(call *ast.Call) strKind {
 	}
 	if e.valueKind(fn.Recv) == skStr {
 		return strMemberKind(fn.Name)
+	}
+	// A List member's result family (B2b design D5-2's List rows): size
+	// joins the i64 domain the way byteLength does. add answers no value
+	// (a hole that would render it stops at the domain, as any void form
+	// does), and get and removeAt answer sums — no single kind a String
+	// position renders — so the match stays their reader.
+	if listMember(fn.Name) {
+		if _, ok := e.listFaceOf(fn.Recv); ok {
+			if fn.Name == "size" {
+				return skI64
+			}
+			return skNone
+		}
 	}
 	// A dispatched call carries its slot's return family, read out of the
 	// same table the call itself goes through (design D6). A box has no

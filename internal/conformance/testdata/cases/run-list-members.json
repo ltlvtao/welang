@@ -1,0 +1,16 @@
+{
+  "name": "run-list-members",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let xs: List<Int64> = [10, 20, 30]\n    xs.add(40)\n    io.println(\"size:${xs.size()}\")\n    match xs.removeAt(1) {\n        Some(v) => { io.println(\"rm:${v}\") }\n        None => { io.println(\"rm:none\") }\n    }\n    match xs.get(0) {\n        Some(v) => { io.println(\"g0:${v}\") }\n        None => { io.println(\"g0:none\") }\n    }\n    match xs.get(9) {\n        Some(v) => { io.println(\"g9:${v}\") }\n        None => { io.println(\"g9:none\") }\n    }\n    match xs.removeAt(9) {\n        Some(v) => { io.println(\"r9:${v}\") }\n        None => { io.println(\"r9:none\") }\n    }\n    io.println(\"size:${xs.size()}\")\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "size:4\nrm:20\ng0:10\ng9:none\nr9:none\nsize:3\n",
+  "stderr": ""
+}
