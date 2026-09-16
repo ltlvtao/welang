@@ -35,7 +35,8 @@
 | M15 | `benchmarks` | 评测套件（First-Pass Compile Rate 等）：方法论文档、18 任务种子集（参考解自证）、in-process 批次跑器（五桶判定机）、校准与黑盒测试面 | done 2026-09-09 |
 | B1a | `codegen-mono` | 单态值塔（B1 的前半）：M9b 语句集拓宽、表达式值形、含插值的 String 全链、record/方法/元组/newtype 值面、闭包捕获与 fn 值、List 载体与其迭代、顶层绑定、sum 三槽 ABI、assertEqual 的 Eq 域、窄整型逐宽检查，以及边界词对账与值位控制形分类；conformance 701 → 810，follow-up #16 的支配缺陷已修 | done 2026-09-11 |
 | B1b | `codegen-full` | B1 余下部分按实现落地：泛型单态化端到端（检查器自持的实例化登记表贯通到逐实例化发射）、Dyn 盒与 vtable 派发、迭代器协议与用户 `Iterable` 源、组合子补全到十一枚、值塔五簇、`List<String>` 载体面、入口界线两侧用户 `Result` 上的 `?`、同步型返回位、普通 scope 值形；conformance 810 → 881、codegen 顶层单测 321 → 445，登记 follow-up #24 与 #25；未实现集未达字面归零——五个边界词存活、守卫着十一枚负例黄金，残停面披露于 `docs/benchmarks.md` | done 2026-09-15 |
-| B2 | `stdlib-real` | 编译器所需的标准库实库面：文件与目录 I/O、子进程 spawn（钉版 clang）、字符串构建、集合面背后的真数据结构 | pending |
+| B2a | `stdlib-fsproc` | B2 前半按实现落地：标准库从嵌入的真 We 源装载（go:embed 载体、真 parser 与同一检查器、std.concurrent 保持合成），std.fs 七枚整文件操作骑 fs C 族（NUL 于任何 syscall 前拒、listDir strcmp 序），std.process 捕获式 spawn（单 poll 循环、PATH 搜索、128 加信号号），std.string 首批真体，E0816 收口退役 std 成员边界词；conformance 881 → 893、codegen 顶层单测 445 → 461 | done 2026-09-16 |
+| B2b | `stdlib-collections` | B2 余下部分：集合面背后的真数据结构——Map/Set 载体、构造面、变异成员面、List.add 别名可见性、Builder | pending |
 | B3 | `bootstrap` | 自举：编译器从 Go 移植到 We，以三段式闭环验收——Go 宿主构建编译 We 编译器，其产物再编译编译器一次，两段产物逐字节一致；conformance 套件在 We 宿主编译器下全绿 | pending |
 
 ## 执行状态规则

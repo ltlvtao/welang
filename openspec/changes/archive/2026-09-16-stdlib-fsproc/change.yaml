@@ -1,0 +1,3 @@
+name: stdlib-fsproc
+status: archived
+layers: [compiler, stdlib, docs]
