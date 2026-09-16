@@ -202,8 +202,9 @@ var declareLines = []struct{ sym, line string }{
 	// T7 (design D6): the List carrier, appended under the same discipline
 	// — a program that builds no list declares none. The constructor takes
 	// the capacity and the element trace, push answers the list's identity
-	// (growth moves the block), and get's word is the element's own face:
-	// a scalar's value or a gc handle.
+	// — the same handle every time, growth swapping the data block in
+	// place behind it (B2b design D1) — and get's word is the element's
+	// own face: a scalar's value or a gc handle.
 	{"__we_list_new", "declare ptr @__we_list_new(i64, i64)"},
 	{"__we_list_push", "declare ptr @__we_list_push(ptr, i64)"},
 	{"__we_list_get", "declare i64 @__we_list_get(ptr, i64)"},
@@ -6528,7 +6529,8 @@ func (e *emitter) bindForPattern(pat ast.Pattern, op string, kind strKind, num s
 // each stored as the one word its face occupies — and the pushed
 // identity's register is what the value is. The pre-size is what makes
 // the walk of the pushes simple: with capacity equal to the count no push
-// can reach the growth branch, so the block never moves. The roots are
+// can reach the growth branch, so no push allocates and the storage
+// behind the handle never turns over. The roots are
 // pushed anyway for both ends of that chain — the creation and the final
 // identity — because the rooting rule is what makes the literal safe
 // under a collection triggered by any element expression that allocates,
@@ -7324,17 +7326,20 @@ func (e *emitter) emitCount(s walkSrc) (callResult, *NotImplemented) {
 //
 // The root is the one thing a collection has that a literal does not. A
 // literal carves its carrier at its exact element count, so no push ever
-// moves it; here the count is the walk's to discover, and __we_list_push
-// answers the list's *new* identity whenever it grows (list.c). The
-// shadow stack holds pointer values rather than addresses (gc.c: no
-// conservative stack scan), so the move is tracked by replacing the root
-// rather than by writing through it: after the push that may have moved
-// it, the old root is popped and the returned pointer pushed in its
-// place. The pair is always emitted together and no allocation sits
-// between them, so the depth the body's exit already accounts for is
-// unchanged, and the block a pass is walking is rooted across the whole
-// of that pass — which the protocol walk needs, `next` being a call into
-// code that may allocate.
+// grows it; here the count is the walk's to discover, and a growth push
+// allocates — the receiver must stay rooted across it, the carrier's own
+// contract (list.c). That carrier answers push with the receiver's own
+// identity: the handle is stable (B2b design D1), and growth swaps the
+// data block in place behind the pointer. The root this pass pushed at
+// the start therefore already covers the grown carrier, and the
+// pop-and-repush pair below replaces a root with the same pointer it
+// held, the store writing that pointer over its own value. The pair is
+// kept rather than rested on the handle's stability — it is the shape
+// every push chain here shares, it costs nothing, and no allocation sits
+// between its parts, so the depth the body's exit already accounts for is
+// unchanged — and the carrier a pass is walking stays rooted across the
+// whole of that pass, which the protocol walk needs, `next` being a call
+// into code that may allocate.
 //
 // A traced element takes one root more, per pass: the growth allocation
 // inside push can sweep the very handle this pass is storing, which no
@@ -7362,8 +7367,8 @@ func (e *emitter) emitCollect(s walkSrc, face listElem) (callResult, *NotImpleme
 		return callResult{}, ni
 	}
 	if face.traces() {
-		// The growth push is the first emitted path whose push may move
-		// the carrier (list.c doubles): the copy's allocation can fire a
+		// The growth push is the first emitted path whose push may grow
+		// the carrier (list.c doubles): the growth carve can fire a
 		// collection while this pass's element — a handle the walk just
 		// answered, still sitting in a register — is on no root. A
 		// literal's elements never face this, their carrier being carved

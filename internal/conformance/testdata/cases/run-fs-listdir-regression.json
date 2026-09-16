@@ -1,0 +1,16 @@
+{
+  "name": "run-fs-listdir-regression",
+  "args": [
+    "run",
+    "."
+  ],
+  "setup": {
+    "files": {
+      "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+      "src/main.we": "import std.io\nimport std.fs\n\npub fn main() effect io -> Result<(), fs.FsError> {\n    match fs.makeDir(\"reg\") {\n        Ok(_) => { io.println(\"mkdir-ok\") }\n        Err(_) => { io.println(\"mkdir-bad\") }\n    }\n    match fs.writeFile(\"reg/d.txt\", \"d\") {\n        Ok(_) => { io.println(\"d-ok\") }\n        Err(_) => { io.println(\"d-bad\") }\n    }\n    match fs.writeFile(\"reg/b.txt\", \"b\") {\n        Ok(_) => { io.println(\"b-ok\") }\n        Err(_) => { io.println(\"b-bad\") }\n    }\n    match fs.writeFile(\"reg/c.txt\", \"c\") {\n        Ok(_) => { io.println(\"c-ok\") }\n        Err(_) => { io.println(\"c-bad\") }\n    }\n    match fs.writeFile(\"reg/a.txt\", \"a\") {\n        Ok(_) => { io.println(\"a-ok\") }\n        Err(_) => { io.println(\"a-bad\") }\n    }\n    match fs.listDir(\"reg\") {\n        Ok(xs) => {\n            var n: Int64 = 0\n            for e in xs {\n                io.println(\"entry:${e}\")\n                n = n + 1\n            }\n            io.println(\"count:${n}\")\n        }\n        Err(_) => { io.println(\"list-bad\") }\n    }\n    return Ok(())\n}\n"
+    }
+  },
+  "exit": 0,
+  "stdout": "mkdir-ok\nd-ok\nb-ok\nc-ok\na-ok\nentry:a.txt\nentry:b.txt\nentry:c.txt\nentry:d.txt\ncount:4\n",
+  "stderr": ""
+}
