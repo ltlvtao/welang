@@ -98,3 +98,15 @@ record Lexer { src: String, n: Int64, off: Int64, line: Int64, col: Int64,
 ## 实现期补记
 
 （随任务落地追加。）
+
+## 实现期补记一（T1，2026-09-17）
+
+**两复选框全勾。红先记录 = 塔先落而 wec/ 缺席——`TestLexReconciliation` 红于 `copy wec: lstat ../../wec: no such file or directory`（构建失败形，任务书预期态）；骨架初版再红一次于 E0501（`mixed types — the final expression is (), the declared return is Result<(), AppError>`——match 尾表达式是 unit），按黄金形（`run-map-gc-crossing` 等：match 语句 + 尾 `return Ok(())`）重排后绿；终态 `reconciled 2 corpus entries`。**
+
+1. **首枚绿语料 as-built 订正（任务书写「`let x = 1` 形」被订正为空源形）**：占位序列化器只答空源（`tokens` 头 + `T 1 1 eof ` 两行——恰为格式锚的形状），`let x = 1` 需 int kind（T3）。首绿条目实际两条：`literal:empty` 与 `case:fmt-empty:src/empty.we`（conformance 的 fmt-empty 案例带一枚空 .we 源——围栏恰好放进）。`let x = 1` 以 `literal:let-one` **即刻入语料**、被 T1 围栏滤除，T3 int kind 落地时自动翻绿——不是从语料缺席。
+2. **阶段门槛 as-built 扩形（D5 只写「kind 集围栏」）**：错误条目首错停清流、无 kind 集可言——围栏落成双臂：kind 集（+`operators` 旗：运算符 kind = 自身文本非闭合集，以 `namedKinds` 判据整体放行）与**错误码集** `stage.errs`（T1 空集 = 全部错误条目暂缓；T2 起按码放行）。另加 `ran == 0` 响亮失败断言——围栏空转（集合配错）是任务失败非静默通过。
+3. **语料②（wec 自源）随 T1 即入**：D7 列语料七项，T1 提取器落四路——字面量（empty/let-one 两枚）+ stdlib 全源 + wec 自源 + conformance setup .we；③lex 样例④错误矩阵⑥⑦编码与非 ASCII 项随 T2–T4 的面落。as-built 计数 = **990 条**（字面 2 + stdlib 7 + wec 3 + conformance 978——933 案例中多源案例与 tests/ 目录像各计其 .we 文件）。
+4. **`we check wec/` 的证据形态**：塔的构建本身即全管线（干净 `build` 含检查与代码生成），另按任务书验证行以 CLI 字面复跑（`we check wec/` exit 0）——两侧皆零诊断。
+5. **骨架形**：`we.toml` = `name = "wec"` / `version = "0.1.0"` / `type = "executable"`（benchmarks 参照形逐字段）；`src/main.we` 驱动 = `fs.readFile("wec-input.we")` 的 `Ok(_)`/`Err(_)` 双臂（通配黄金面）+ 占位两 println + 尾 `return Ok(())`——Err 臂 `E 1 1 E0001 cannot read wec-input.we` 是防御行（语料不含读失败形，D4）；`src/lex.we`/`src/lexnum.we` 各一枚占位 pub fn（模块链与导入图在场，真体落地时删）。本地导入 `import lex`/`import lexnum` 裸形（`build-bnd-multi-module` 黄金形）。
+6. **塔结构细节**：拷贝以 `filepath.WalkDir` 全树（含 build/ 目录被拷入亦无害——目标目录全新）；比对按任务书字面 `bytes.Equal`；`io.println` 自加换行与序列化行尾 `\n` 逐字节对齐（空源输出 = `tokens\nT 1 1 eof \n` 10 字节）。
+7. **计数**：包数 16→17（`internal/wec`，15 ok + 2 no-test 先例）；conformance 933 不动；`go build`/`go vet`/`gofmt -l`（refr/ 外零文件）全绿；终树全量 `go test ./... -count=1` 17 包 0 FAIL 复跑在案。

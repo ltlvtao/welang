@@ -1,0 +1,8 @@
+// lexnum — the numeric grammar's home (B3b T3+): numericSpan's clauses,
+// the suffix set, the 1e5 split, and the codepoint width table land here.
+// The placeholder below only proves the module chain and is deleted when
+// the real functions arrive.
+
+pub fn numericPending() -> Bool {
+    return true
+}

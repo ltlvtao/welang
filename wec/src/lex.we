@@ -1,0 +1,8 @@
+// lex — the scanner core's home (B3b T2+): the Lexer record, the
+// checkEncoding faces, and the scanAll loop land here. The placeholder
+// below only proves the module chain and is deleted when the real record
+// arrives.
+
+pub fn scannerPending() -> Bool {
+    return true
+}

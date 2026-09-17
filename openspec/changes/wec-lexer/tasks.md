@@ -4,12 +4,14 @@
 
 ## T1 wec 骨架 + 对账塔红先
 
-- [ ] **对账塔先行**：`internal/wec/wec_test.go`——`wec/` 拷入 `t.TempDir`、`cli.Run` 构建、exec 工件、参考侧 `lex.Scan` 活算序列化、`bytes.Equal` 比对；语料提取器（stdlib 源直读 + conformance case JSON setup 提取，只读）+ 阶段门槛（参考侧 kind 集围栏）；Go 侧序列化器（design D4 规范）。塔落定时 wec/ 尚缺席——构建失败红态记档。
+- [x] **对账塔先行**：`internal/wec/wec_test.go`——`wec/` 拷入 `t.TempDir`、`cli.Run` 构建、exec 工件、参考侧 `lex.Scan` 活算序列化、`bytes.Equal` 比对；语料提取器（stdlib 源直读 + conformance case JSON setup 提取，只读）+ 阶段门槛（参考侧 kind 集围栏）；Go 侧序列化器（design D4 规范）。塔落定时 wec/ 尚缺席——构建失败红态记档。
   来源：proposal 目标 4；design D4、D5、D7
   验证：红态记档（wec 缺席 → `we build` 失败）；`go vet ./internal/wec/`；塔自身单测（提取器条目数 > 0、序列化器自一致）
-- [ ] **wec 骨架绿一枚**：`wec/we.toml`（name=wec、type=executable）+ `src/main.we` 最小驱动（读 `wec-input.we` → `tokens` 头 + `T … eof` 占位序列化）+ `src/lex.we`/`src/lexnum.we` 空壳模块（占位 fn，保证模块切分与导入链通）；语料首枚（`let x = 1` 形）塔绿。
+  落地（2026-09-17）：红态 = `copy wec: lstat ../../wec: no such file or directory`；门槛 as-built 扩错误码集第二臂 + `ran==0` 响亮失败（design 补记一-2）
+- [x] **wec 骨架绿一枚**：`wec/we.toml`（name=wec、type=executable）+ `src/main.we` 最小驱动（读 `wec-input.we` → `tokens` 头 + `T … eof` 占位序列化）+ `src/lex.we`/`src/lexnum.we` 空壳模块（占位 fn，保证模块切分与导入链通）；语料首枚（~~`let x = 1` 形~~→空源形——占位序列化器只答空源；`let x = 1` 已入语料、围栏滤除待 T3 翻绿，design 补记一-1）塔绿。
   来源：proposal 目标 1、3；design D4、D6
   验证：首枚语料 `bytes.Equal` 绿；`go test ./internal/wec/ -count=1` 该子集绿；`we check wec/` 干净
+  落地（2026-09-17）：`reconciled 2 corpus entries`（literal:empty + case:fmt-empty:src/empty.we）；三测全绿 + `we check wec/` exit 0
 
 
 ## T2 扫描核：ident/keyword/运算符/空白注释跳过
