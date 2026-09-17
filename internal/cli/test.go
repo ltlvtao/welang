@@ -243,8 +243,14 @@ func (e *env) runTestProject(dir string) int {
 		for _, m := range deps {
 			// The std modules ride the graph for the type stage; the
 			// program face filters them — their call faces are the
-			// emitter's own std table (the build face's rule).
-			if m.Key == "std" || strings.HasPrefix(m.Key, "std.") {
+			// emitter's own std table (the build face's rule). The one
+			// exception is the std module whose bodies are real (B2a
+			// design D5): std.string rides the program face in a build,
+			// and a test module's join and repeat resolve the same way,
+			// so it joins the tower's modules here too — its keyed
+			// conversions stay on the runtime entries either way (B3a
+			// T3, whose dispatch gate resolves through modKeys).
+			if m.Key == "std" || (strings.HasPrefix(m.Key, "std.") && m.Key != "std.string") {
 				continue
 			}
 			if depSeen[m.Key] {

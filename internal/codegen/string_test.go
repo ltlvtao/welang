@@ -1,8 +1,10 @@
 package codegen
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/ltlvtao/welang/internal/parser"
 	"github.com/ltlvtao/welang/internal/typecheck"
 )
 
@@ -222,4 +224,113 @@ func TestStringMixedDispatchKeepsBothRoutes(t *testing.T) {
 	wantIR(t, ir, "@slot.string.parseInt = global ptr @__we_string_parse_int", "parseInt rides the keyed slot")
 	wantIR(t, ir, "load ptr, ptr @slot.std.string.join", "join's call site is unchanged")
 	wantIR(t, ir, "load ptr, ptr @slot.string.parseInt", "parseInt's call site rides the keyed slot")
+}
+
+// emitStrTest checks and emits one test module over the string import —
+// the tower face `we test` builds, with std.string riding the program
+// face the way the test pipeline's module walk includes it (the build
+// face's one D5 exception, shared: a test module's join and repeat
+// resolve through the same defines). Refusing boundaries: these towers
+// build.
+func emitStrTest(t *testing.T, src string) string {
+	t.Helper()
+	f, d, pni := parser.Parse("m_test.we", []byte(src))
+	if d != nil || pni != nil {
+		t.Fatalf("parse: d=%v ni=%v", d, pni)
+	}
+	f.IsTestModule = true
+	sf, ok := typecheck.StdModule("std.string")
+	if !ok || sf == nil {
+		t.Fatal("std.string not registered")
+	}
+	td, tni, sh := typecheck.CheckTestRoot(f, "tests/m_test.we", "tests.m_test", []typecheck.Module{
+		{Key: "std.string", Path: "std/string.we", File: sf},
+	})
+	if td != nil || tni != nil {
+		t.Fatalf("check: %v %+v", td, tni)
+	}
+	ir, ni := EmitProgram(ModeTest, []ProgModule{
+		{Key: "std.string", ID: "std.string", File: sf, Shapes: sh},
+		{Key: "tests.m_test", ID: "demo", File: f, Shapes: sh},
+	})
+	if ni != nil {
+		t.Fatalf("boundary %q over the string mock face:\n%s", ni.What, src)
+	}
+	return ir
+}
+
+// TestStringParseMockRidesTheOutTrio: the three parses' mockable face is
+// the C entry behind the keyed slot, and the entry answers through the
+// trailing out trio — the same calling shape the fs family's entries
+// take — so the mock rides the two defines that shape demands (B2a's
+// precedent, B3a design D6): the body under the Option's sum ABI, the
+// void wrapper the slot installs. The install lands on the keyed slot
+// the call sites ride and the restore returns to the C entry that slot
+// defaults to.
+func TestStringParseMockRidesTheOutTrio(t *testing.T) {
+	ir := emitStrTest(t, `import std.string
+
+test "mocked parse" {
+    mock string.parseInt(s: String) -> Option<Int64> {
+        return Some(12)
+    }
+    match string.parseInt("junk") {
+        Some(n) => { assert(n == 12, "mocked") }
+        None => { assert(false, "mocked") }
+    }
+}
+`)
+	wantIR(t, ir, "@slot.string.parseInt = global ptr @__we_string_parse_int", "the keyed slot defaults to the C entry")
+	wantIR(t, ir, "store ptr @tests.m_test.mock.0, ptr @slot.string.parseInt", "install")
+	wantIR(t, ir, "store ptr @__we_string_parse_int, ptr @slot.string.parseInt", "restore returns to the C entry")
+	wantIR(t, ir, "define { i64, i64, i64 } @tests.m_test.mock.0.body(ptr %s0, i64 %s1)", "the body define keeps the Option's sum ABI")
+	wantIR(t, ir, "define void @tests.m_test.mock.0(ptr %s0, i64 %s1, ptr %__out)", "the wrapper takes the entry's own calling shape")
+	wantIR(t, ir, "call { i64, i64, i64 } @tests.m_test.mock.0.body(ptr %s0, i64 %s1)", "the wrapper forwards to the body")
+	wantIR(t, ir, "extractvalue { i64, i64, i64 } %m, 1", "the payload register comes out")
+	wantIR(t, ir, "getelementptr i8, ptr %__out, i64 8", "and lands at the out block's +8 word")
+	wantIR(t, ir, "load ptr, ptr @slot.string.parseInt", "the call site rides the keyed slot")
+}
+
+// TestStringBridgeMocksAnswerInRegisters: the four bridges' mockable
+// faces are the register forms their C entries take — no out trio, no
+// wrapper — so each mock is one define under its own ABI and the
+// install/restore pair over the keyed slot. runeCode pins the i64
+// answer, floatFromBits the double answer (the two shapes the family
+// spans).
+func TestStringBridgeMocksAnswerInRegisters(t *testing.T) {
+	ir := emitStrTest(t, `import std.string
+
+test "mocked runeCode" {
+    mock string.runeCode(c: Rune) -> Int64 {
+        return 65
+    }
+    assert(string.runeCode('B') == 65, "rune")
+}
+
+test "mocked floatFromBits" {
+    mock string.floatFromBits(n: Int64) -> Float64 {
+        return 2.5
+    }
+    assert(string.floatFromBits(0) == 2.5, "bits")
+}
+
+test "mocked runeFrom" {
+    mock string.runeFrom(n: Int64) -> Rune {
+        return 'B'
+    }
+    assert(string.runeFrom(65) == 'B', "from")
+}
+`)
+	wantIR(t, ir, "define i64 @tests.m_test.mock.0(i64 %c)", "the rune mock keeps the i64 register form — the Rune parameter classifies")
+	wantIR(t, ir, "store ptr @tests.m_test.mock.0, ptr @slot.string.runeCode", "runeCode install")
+	wantIR(t, ir, "store ptr @__we_string_rune_code, ptr @slot.string.runeCode", "runeCode restore returns to the C entry")
+	wantIR(t, ir, "define double @tests.m_test.mock.1(i64 %n)", "the float mock answers in the double register")
+	wantIR(t, ir, "store ptr @tests.m_test.mock.1, ptr @slot.string.floatFromBits", "floatFromBits install")
+	wantIR(t, ir, "store ptr @__we_string_float_from_bits, ptr @slot.string.floatFromBits", "floatFromBits restore returns to the C entry")
+	wantIR(t, ir, "define i64 @tests.m_test.mock.2(i64 %n)", "the Rune-returning mock classifies on the answer side too")
+	wantIR(t, ir, "store ptr @tests.m_test.mock.2, ptr @slot.string.runeFrom", "runeFrom install")
+	wantIR(t, ir, "store ptr @__we_string_rune_from, ptr @slot.string.runeFrom", "runeFrom restore returns to the C entry")
+	if strings.Contains(ir, ".mock.0.body") || strings.Contains(ir, ".mock.1.body") || strings.Contains(ir, ".mock.2.body") {
+		t.Fatalf("bridge mocks ride register defines, no out-trio wrapper:\n%s", ir)
+	}
 }

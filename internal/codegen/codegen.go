@@ -373,6 +373,23 @@ var stringParseEntries = map[string]struct {
 	"parseFloat": {"__we_string_parse_float", fnParamAbi{kind: abiDouble, typ: "Float64"}},
 }
 
+// stringBridgeEntries pairs the four bridges' C entries with their
+// register faces (B3a design D3): which side — the argument or the
+// answer — is the double reading, and the domain a binding renders the
+// answer in. The table is the single authority the call arm and the
+// mock slot arm share, so a call site and its mock can never disagree
+// about which entry a slot names.
+var stringBridgeEntries = map[string]struct {
+	sym        string
+	argF, retF bool
+	typ        string
+}{
+	"runeCode":      {"__we_string_rune_code", false, false, "Int64"},
+	"runeFrom":      {"__we_string_rune_from", false, false, "Rune"},
+	"floatBits":     {"__we_string_float_bits", true, false, "Int64"},
+	"floatFromBits": {"__we_string_float_from_bits", false, true, "Float64"},
+}
+
 // fsEntry is one fs-family entry's keyed face (B2a design D3/D7): the
 // runtime symbol its slot holds, whether a second String argument (the
 // data pair) rides beside the path, and the Ok payload's face — "" for
@@ -4096,42 +4113,32 @@ func (e *emitter) emitStringKeyedCall(name string, args []ast.Expr) (callResult,
 			variants: []string{"None", "Some"}, shapes: optionShapes(ent.pay), key: "Option",
 		}}, nil
 	}
-	var sym, tn string
-	floatArg, floatRet := false, false
-	switch name {
-	case "runeCode":
-		sym, tn = "__we_string_rune_code", "Int64"
-	case "runeFrom":
-		sym, tn = "__we_string_rune_from", "Rune"
-	case "floatBits":
-		sym, tn, floatArg = "__we_string_float_bits", "Int64", true
-	case "floatFromBits":
-		sym, tn, floatRet = "__we_string_float_from_bits", "Float64", true
-	default:
+	ent, ok := stringBridgeEntries[name]
+	if !ok {
 		return callResult{}, e.bnd()
 	}
 	op, isF, ni := e.emitNumExpr(args[0])
 	if ni != nil {
 		return callResult{}, ni
 	}
-	if isF != floatArg {
+	if isF != ent.argF {
 		return callResult{}, e.bnd()
 	}
-	slot := e.slotFor("string."+name, "@"+sym)
-	e.use(sym)
+	slot := e.slotFor("string."+name, "@"+ent.sym)
+	e.use(ent.sym)
 	fp := e.value()
 	e.inst(fmt.Sprintf("%%%s = load ptr, ptr %s", fp, slot))
 	v := e.value()
-	if floatRet {
+	if ent.retF {
 		e.inst(fmt.Sprintf("%%%s = call double %%%s(i64 %s)", v, fp, op))
-		return callResult{kind: ckI64, i64: "%" + v, isFloat: true, typeName: tn}, nil
+		return callResult{kind: ckI64, i64: "%" + v, isFloat: true, typeName: ent.typ}, nil
 	}
-	if floatArg {
+	if ent.argF {
 		e.inst(fmt.Sprintf("%%%s = call i64 %%%s(double %s)", v, fp, op))
 	} else {
 		e.inst(fmt.Sprintf("%%%s = call i64 %%%s(i64 %s)", v, fp, op))
 	}
-	return callResult{kind: ckI64, i64: "%" + v, typeName: tn}, nil
+	return callResult{kind: ckI64, i64: "%" + v, typeName: ent.typ}, nil
 }
 
 // emitFsEntryCall emits one fs-family entry call through its slot: the
@@ -14324,7 +14331,14 @@ func (e *emitter) classType(t ast.TypeRef) (fnAbiKind, string, bool) {
 		return abiStr, "", true
 	case "Float64":
 		return abiDouble, "", true
-	case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool":
+	// Rune joins the i64 inventory here (B3a T5): the conversion family
+	// put the first Rune-taking signatures in reach — a fiction's mock
+	// restates its parameter and return faces, so runeCode's Rune
+	// parameter and runeFrom's Rune return must classify. The value is
+	// the i64 word it always was on the call side (a rune literal emits
+	// as its code point); only the rendering ever differed, and that
+	// rides typeName, not the ABI.
+	case "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8", "Bool", "Rune":
 		return abiI64, "", true
 	}
 	key := e.namedKey(e.curKey, n)
@@ -15495,6 +15509,26 @@ func (e *emitter) bindDefineParams(params []ast.Param, abi fnAbi) []string {
 func (e *emitter) mockTarget(md *ast.MockDecl) (fnAbi, string, string, bool, *NotImplemented) {
 	if md.TargetQual != "" {
 		if k := e.resolveQual(md.TargetQual); k != "" {
+			// The keyed conversions never enter fnTable — the define
+			// walk skips the fictions (B3a design addendum 2) — so this
+			// family's mocks answer ahead of the qualified lookup: the
+			// slot is the keyed slot the call sites ride, the restore
+			// the C entry that slot defaults to, and the three parses
+			// carry the out trio — the calling shape their C entries
+			// (and so the mock's wrapper) take (design D6).
+			if k == "std.string" && stringKeyedFns[md.Target] {
+				sym, outTrio := "", false
+				if ent, ok := stringParseEntries[md.Target]; ok {
+					sym, outTrio = ent.sym, true
+				} else {
+					sym = stringBridgeEntries[md.Target].sym
+				}
+				abi, ok := e.fnAbiOf(&ast.FnDecl{Params: md.Params, Ret: md.Ret})
+				if !ok {
+					return fnAbi{}, "", "", false, bndFn()
+				}
+				return abi, "string." + md.Target, "@" + sym, outTrio, nil
+			}
 			fd, ok := e.fnTable[k+"."+md.Target]
 			if !ok {
 				return fnAbi{}, "", "", false, e.bnd()

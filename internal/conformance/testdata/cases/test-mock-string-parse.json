@@ -1,0 +1,16 @@
+{
+ "name": "test-mock-string-parse",
+ "args": [
+  "test",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "tests/m_test.we": "import std.string\n\ntest \"mocked parse\" {\n    mock string.parseInt(s: String) -> Option<Int64> {\n        return Some(12)\n    }\n    match string.parseInt(\"junk\") {\n        Some(n) => { assert(n == 12, \"mocked\") }\n        None => { assert(false, \"mocked\") }\n    }\n}\n\ntest \"restored\" {\n    match string.parseInt(\"34\") {\n        Some(n) => { assert(n == 34, \"restored\") }\n        None => { assert(false, \"restored\") }\n    }\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "pass  tests/m_test.we: mocked parse (0ms)\npass  tests/m_test.we: restored (0ms)\ntotal 2, passed 2, failed 0 (0ms)\n",
+ "stderr": ""
+}
