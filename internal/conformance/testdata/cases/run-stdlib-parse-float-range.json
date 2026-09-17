@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-parse-float-range",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = string.parseFloat(\"1.0e999\")\n    match a {\n        Some(w) => { io.println(\"up-bad ${w}\") }\n        None => { io.println(\"up-none\") }\n    }\n    let b = string.parseFloat(\"1.0e-999\")\n    match b {\n        Some(w) => { io.println(\"down-bad ${w}\") }\n        None => { io.println(\"down-none\") }\n    }\n    let c = string.parseFloat(\"2.5e-320\")\n    match c {\n        Some(w) => { io.println(\"sub ${w}\") }\n        None => { io.println(\"sub-none\") }\n    }\n    let d = string.parseFloat(\"1e999\")\n    match d {\n        Some(w) => { io.println(\"nodot-bad ${w}\") }\n        None => { io.println(\"nodot-none\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "up-none\ndown-none\nsub 2.5e-320\nnodot-none\n",
+ "stderr": ""
+}

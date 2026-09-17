@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-parse-uint-max",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = string.parseUInt(\"18446744073709551615\")\n    match a {\n        Some(v) => { io.println(\"got ${v}\") }\n        None => { io.println(\"got-none\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "got 18446744073709551615\n",
+ "stderr": ""
+}

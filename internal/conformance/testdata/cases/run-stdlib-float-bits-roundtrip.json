@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-float-bits-roundtrip",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    if string.floatFromBits(string.floatBits(2.5)) == 2.5 { io.println(\"rt-a-ok\") } else { io.println(\"rt-a-bad\") }\n    if string.floatFromBits(string.floatBits(0.25)) == 0.25 { io.println(\"rt-b-ok\") } else { io.println(\"rt-b-bad\") }\n    let s = string.parseFloat(\"2.5e-320\")\n    match s {\n        Some(w) => {\n            if string.floatFromBits(string.floatBits(w)) == w { io.println(\"rt-sub-ok\") } else { io.println(\"rt-sub-bad\") }\n        }\n        None => { io.println(\"sub-none\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "rt-a-ok\nrt-b-ok\nrt-sub-ok\n",
+ "stderr": ""
+}

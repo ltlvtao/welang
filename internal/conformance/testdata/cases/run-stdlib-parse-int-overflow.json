@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-parse-int-overflow",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = string.parseInt(\"9223372036854775808\")\n    match a {\n        Some(v) => { io.println(\"edge-bad ${v}\") }\n        None => { io.println(\"edge-none\") }\n    }\n    let b = string.parseInt(\"99999999999999999999\")\n    match b {\n        Some(v) => { io.println(\"far-bad ${v}\") }\n        None => { io.println(\"far-none\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "edge-none\nfar-none\n",
+ "stderr": ""
+}

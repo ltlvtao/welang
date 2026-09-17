@@ -331,8 +331,12 @@ static char *zcopy(const char *s, long long n) {
 
 // The three parses share one discipline over the library call: the core
 // form was validated first, so the call's own failure faces are the range
-// error and a short end. Every path — including the failing ones — writes
-// the out trio, so a None never leaves the caller reading a stale Some.
+// error and a short end. The end check is defense in depth rather than a
+// live gate — a run that passed the core validators is one the library
+// consumes in full, so it answers only if the accepted grammar ever widens
+// past them (B3a T4's mutation battery: deleting it flips nothing). Every
+// path — including the failing ones — writes the out trio, so a None never
+// leaves the caller reading a stale Some.
 
 void __we_string_parse_int(const char *s, long long n, long long out[3]) {
     if (!all_digits(s, n)) {

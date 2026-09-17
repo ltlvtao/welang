@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-parse-empty",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = string.parseInt(\"\")\n    match a {\n        Some(v) => { io.println(\"i-bad ${v}\") }\n        None => { io.println(\"i-none\") }\n    }\n    let b = string.parseUInt(\"\")\n    match b {\n        Some(v) => { io.println(\"u-bad ${v}\") }\n        None => { io.println(\"u-none\") }\n    }\n    let c = string.parseFloat(\"\")\n    match c {\n        Some(v) => { io.println(\"f-bad ${v}\") }\n        None => { io.println(\"f-none\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "i-none\nu-none\nf-none\n",
+ "stderr": ""
+}

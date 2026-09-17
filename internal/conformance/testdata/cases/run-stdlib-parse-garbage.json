@@ -1,0 +1,16 @@
+{
+ "name": "run-stdlib-parse-garbage",
+ "args": [
+  "run",
+  "."
+ ],
+ "setup": {
+  "files": {
+   "we.toml": "name = \"demo\"\nversion = \"0.1.0\"\ntype = \"executable\"\n",
+   "src/main.we": "import std.io\nimport std.string\n\npub type AppError = Failed(String)\n\npub fn main() effect io -> Result<(), AppError> {\n    let a = string.parseInt(\"12a\")\n    match a {\n        Some(v) => { io.println(\"junk-bad ${v}\") }\n        None => { io.println(\"junk-none\") }\n    }\n    let b = string.parseInt(\" 12\")\n    match b {\n        Some(v) => { io.println(\"space-bad ${v}\") }\n        None => { io.println(\"space-none\") }\n    }\n    let c = string.parseFloat(\"abc\")\n    match c {\n        Some(v) => { io.println(\"abc-bad ${v}\") }\n        None => { io.println(\"abc-none\") }\n    }\n    let d = string.parseFloat(\"1.5e\")\n    match d {\n        Some(v) => { io.println(\"exp-bad ${v}\") }\n        None => { io.println(\"exp-none\") }\n    }\n    return Ok(())\n}\n"
+  }
+ },
+ "exit": 0,
+ "stdout": "junk-none\nspace-none\nabc-none\nexp-none\n",
+ "stderr": ""
+}
