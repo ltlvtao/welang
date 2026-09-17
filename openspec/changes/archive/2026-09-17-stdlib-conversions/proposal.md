@@ -116,3 +116,20 @@ B2 轨整体收口（B2a+B2b 皆 done，HEAD `ce66102`，conformance 919、codeg
 | 8 | 负向断言 | 负面黄金实构违规样例断言 None（T4）；E0501 两形探针（T2）；突变电池四枚含负向捕获性判决（T4） |
 | 9 | 完成度闭环 | 三要素齐：检查器（零码改+探针证）、代码生成（七键控臂+混合分派）、运行时（str.c 七入口） |
 | 10 | 未决问题 | 无阻塞未决——`\u` 域与 deps 是登记项非设计选择（已订正为直接登记）；B3d/B3e 现场拆分属轨道裁决 1 授权的执行自由度 |
+
+## 完成审查（welang-code-review，2026-09-17，span `ce66102..8bd3415` 六提交）
+
+| # | 条目 | 结论 |
+| --- | --- | --- |
+| 1 | 规范符合性 | `docs/spec/`、`diagnostics.toml`、`internal/diag/` 对 span **零 diff**——「无规范增量」标记兑现；七面皆锚定族外 stdlib 表面（join/repeat、fs 七枚、collections 构造面同 Doctrine），ch16 纯性（无 effect 段）与 ch20 mock（单态模块 fn 合法目标、E1804 类目不适用）逐一对黄金核验 |
+| 2 | 验证诚实性 | 黄金账逐提交复数：919 → +5（T3）→ +8（T4）→ +1（T5）= **933 as-built**（`-count=1` 170s exit 0、testdata 除新枚外零 diff）；codegen 单测 474 → 480（T3）→ 482（T5）、runtime 46、typecheck 76 不动——每数字取自 `-count=1 -v` 顶层 PASS 计数；机器对锚（stdout 字节）与 IR 逐字节对拍（hello/join 双 build 形 + fs-mock 测试塔形 vs HEAD worktree `cmp` 零差）皆记档于各落地记 |
+| 3 | 测试先行 | 六落地记红态全在册：T1 20 枚 clang undeclared（2026-09-16 记档）、T2 E1304 探针、T3 六单测+五黄金调用点 70、T4 突变电池双层红即红态（含「绿到是设计使然」的诚实注）、T5 两单测+黄金 70、T6 文档面（句子级证据核验 + 「任意上下文」措辞被探针纠正的如实注） |
+| 4 | 诊断协议 | 零新诊断码、零 --json 字段改（span diff 的四枚 E 码命中皆 openspec 文档散文引用；diagnostics.toml 零 diff）；既有 E1304/E0501/E1804 由探针/黄金复验逐字 |
+| 5 | 单一权威 | 改动码文件（18 internal + 3 runtime + 1 stdlib）CJK 注释 **0**；长期事实归位三处：design 补记一/二/三（ERANGE 判据、键控名集前提推翻、测试塔例外+Rune 入名单）、str.c 三 parse 共同纪律注释（endptr 防御纵深——T4 M-a 判决归位）、benchmarks/roadmap 双语句（T6） |
+| 6 | 红线 | span 全部 22 改动文件在申报影响层 [compiler, stdlib, docs]（internal 18/runtime 3/stdlib 1/docs 4 + openspec 变更工件）；`refr/` 零命中；提交信息零署名 trailer；`WE_UPDATE_GOLDEN` 未用、`git stash` 未用 |
+| 7 | 最小可信验证 | 全阶梯绿：`go build ./...`、`go vet ./...`、`gofmt -l` 0 文件、`go test ./... -count=1` 16 包 0 FAIL、conformance 933 全绿、`docs_sync.py` 33 对、`git diff --check` 净、归档后 `validate.py --all --strict` 期望态 |
+
+**发现与处置（2 项，皆随审落定）**：
+
+- **F1（T5 落地记已载，此处归账）**：mock 面两枚先决缺口（测试塔 std 过滤无 std.string 例外；classType i64 名单无 Rune）皆先于本变更存在、无黄金锚定，D6 未命名；修正与行为拓宽（用户 fn Rune 签名随开、测试块内 join 可跑）已随 T5 落地并双锚（两枚 mock 单测 + 黄金 + 探针），长期事实归位 design 补记三。
+- **F2（措辞级，随审订正）**：T5 落地记初稿「七面于任意上下文可跑」措辞在 T6 句子核验时被纯助手探针第一形纠正（fn 尾返 sum 调用系 B2b 既有停、与键控无关），benchmarks 句已改精确形——落地记如实注在册，此处不重复改写。

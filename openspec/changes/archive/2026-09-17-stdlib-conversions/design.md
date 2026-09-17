@@ -100,3 +100,9 @@ double __we_string_float_from_bits(i64 n);                // 同上反向
 - **「programModules 侧的白名单」并不存在**——`programModules` 是模块级放行（`m.Key != "std.string"` 才 continue），无 fn 级过滤。
 
 修正机制（as-built）：键控名集 `stringKeyedFns`（七名表，declare 表的键半）**随 T2 落**——发射器 define 收集臂对 `m.Key == "std.string"` 且名字在键控集者跳过 fnTable 与 fns（join/repeat 照走程序面；programModules 本身零触碰）。发射臂（out 三字组 + 四直返）与分派重排仍归 T3。修正后：七面 `we check` exit 0、虚构体调用 `we build` 停在调用点 `instCallee` 查无（70，「main bodies…」词）——T3 黄金所需红态由调用点诚实给出。零漂移结论（D4 末段）不变，机制落点由「白名单」订正为「发射器侧键控名跳过」。
+
+**补记三（T5，2026-09-17）：mock 面的两枚先决缺口——测试塔的程序面例外与 Rune 入 ABI 名单。** D6 写「落位沿 B2a T6 的 outTrio 先例」，默认既有机器即够。实现暴露两处 D6 未命名的先决，各修一处：
+
+- **测试塔的 std 过滤没有 std.string 例外**——`build.go` `programModules` 对 std.string 整模块放行（B2a D5 例外），`test.go` 的同位过滤无条件滤掉一切 `std.*`。后果：测试程序面的 modKeys 不含 std.string ⇒ `resolveQual("string")` 恒空 ⇒ D4 的键控分派门与 D6 的 mockTarget resolveQual 臂在测试模块体内**皆不活**（探针：测试块内 `string.join` 亦停 70——先于本变更的潜伏缺口，无黄金锚定过）。修正：`test.go` 采同一例外，std.string 乘测试塔程序面；单文件 `we test <file>` 的 string 面仍停（single-file builds 系已登记 spec gap #6，先例不重开）。
+- **`classType` 的 i64 名单无 Rune**——Rune 此前从未到达签名面（检查器接受 `fn code(c: Rune) -> Int64`、发射面拒绝 → 潜伏 exit 70，同无黄金锚定），而 D6 的 mock 复述**必须**逐字重述虚构体签名：runeCode 的 Rune 参数、runeFrom 的 Rune 返回首次把 Rune 拼进可分类位。修正：Rune 入 abiI64 名单——值就是调用侧一直是的那个 i64 字（rune 字面量发射为码点），差异只在渲染，而渲染走 `typeName` 不走 ABI。**用户 fn 的 Rune 参数/返回随臂同开**（探针 `fn code(c: Rune) -> Int64 { return 65 }` 从 70 到打印 `v 65`）——行为拓宽如实披露，锚 = T5 两枚 mock 单测的 runeCode（参数侧）/runeFrom（返回侧）。
+- 机制落点（as-built）：mockTarget 的键控支线在 **resolveQual 臂内、fnTable 查找之前**——std.string 是 modKeys 成员（程序面）故 resolveQual 已答、fnTable 必 miss（补记二的跳过），不像 fs 走 resolveStd 臂；四桥的 sym 出 `stringBridgeEntries` 单一权威表（调用点与 mock 槽臂同表）。
