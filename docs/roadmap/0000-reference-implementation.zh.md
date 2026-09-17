@@ -8,6 +8,7 @@
 - **规范先行**：每个切片实现已批准章节；无规范依据的编译器行为不存在（研发流程不变量）。
 - **一里程碑一变更**：每个里程碑是一个小而可垂直验证的 openspec 变更；其状态行由归档它的变更翻写。
 - **自举闭环**（用户裁决，2026-09-08）：bootstrap 轨（B1–B3）跟随参考里程碑之后，也可与未落的 M 行交错——B1 是关键路径，由 M10b 的多函数发射拓宽生长而来；B2 是 B1 的调试基建（fs 与 process 面先行）；LLVM 访问沿用 .ll 文本 + 子进程 clang 的既有架构，路径上没有 LLVM C API 绑定。决策载体为 ADR-0002。
+- **B3 五裁决**（用户裁决，2026-09-16，逐字「1. 六段。2. 挂string，以Option答。3. 同意。4. 非目标。5. 逐字节对账」）：bootstrap 轨剩余段切六段——B3a stdlib 原语、B3b wec 项目与词法器移植、B3c parser、B3d checker、B3e codegen、B3f cli/test/fmt/vet/doc 面 + 三段闭环 + conformance 第二面——B3d/B3e 实测过大时按 B1/B2「按实现落地」先例现场拆分；转换原语挂 `std.string` 函数面、失败以 `Option` 作答（非成员面、非 panic）；wec 编译器居仓库顶层（`wec/`，`we.toml` type=executable + `src/` 多模块），Go 构建链不动、Go 侧测试编译并驱它；`lsp` 与 `deps` 非目标——We 宿主二进制的 `lsp` 诚实 exit 70，依赖解析申报非目标并登记 follow-up（`[deps]` 表解析保留、有依赖时诚实停）；B3e 的差分杠为逐字节对账——We 发射的 .ll 与 Go 发射的 .ll 逐字节相同（非验收必需，但把「919 绿」（裁决时点语料数）从赌注变推论）。
 
 ## 里程碑
 
