@@ -1,8 +1,196 @@
-// lexnum — the numeric grammar's home (B3b T3+): numericSpan's clauses,
-// the suffix set, the 1e5 split, and the codepoint width table land here.
-// The placeholder below only proves the module chain and is deleted when
-// the real functions arrive.
+// lexnum — the port's pure helpers (B3b): the codepoint width table, the
+// numeric renderers the message discipline needs (decimal and the two hex
+// cases), the serialization escaping, the Go-%q quote face for E0001's
+// character references, and the byte-value probe. NumericSpan itself is
+// T3's and lands beside these.
+//
+// The byte-value probe exists because We has no byte-exposure face: a
+// single byte b >= 0x80 cannot be read as a number, only compared as a
+// one-byte string. Four well-formed probe literals cover the 243 nameable
+// byte values at known positions (leads C2-DF and trails 80-BF in the
+// two-byte range, leads E0-EF, leads F0-F4; ASCII decodes directly), and
+// membership plus offset arithmetic recovers the value. C0, C1, and F5-FF
+// — the thirteen values no valid rune ever contains — are unnameable; the
+// probe answers -1 and hex2 renders "??" so a miss fails loudly rather
+// than silently (the reconciliation fence keeps such sources out; see
+// follow-up #30). After checkEncoding passes, every byte of the source is
+// nameable, so esc and the E0001 byte message never miss in practice.
 
-pub fn numericPending() -> Bool {
-    return true
+import std.string
+
+// widthOf is the codepoint's predicted UTF-8 width. After checkEncoding
+// the source is well-formed, so predicted width is actual width.
+pub fn widthOf(c: Int64) -> Int64 {
+    if c < 0x80 {
+        return 1
+    }
+    if c < 0x800 {
+        return 2
+    }
+    if c < 0x10000 {
+        return 3
+    }
+    return 4
+}
+
+fn digitChar(d: Int64) -> String {
+    let table = "0123456789"
+    return table.byteSlice(d, d + 1)
+}
+
+// int64ToString renders one non-negative Int64 in decimal (offsets, lines,
+// columns in the messages and serialization; the stdlib has no toString
+// face for this yet). Negatives render with a sign for safety, though no
+// caller produces one.
+pub fn int64ToString(v: Int64) -> String {
+    if v == 0 {
+        return "0"
+    }
+    var rest = v
+    var neg = false
+    if v < 0 {
+        neg = true
+        rest = 0 - v
+    }
+    var out = ""
+    while rest > 0 {
+        out = digitChar(rest % 10) + out
+        rest = rest / 10
+    }
+    if neg {
+        return "-" + out
+    }
+    return out
+}
+
+// hex2 renders one byte value as two uppercase hex digits (the E0001
+// byte message's 0x%02X). A probe miss (-1) renders "??" so the corner
+// stays visible in any output it ever reaches.
+pub fn hex2(v: Int64) -> String {
+    if v < 0 {
+        return "??"
+    }
+    let table = "0123456789ABCDEF"
+    return table.byteSlice(v / 16, v / 16 + 1) + table.byteSlice(v % 16, v % 16 + 1)
+}
+
+// hex2Lower is the lowercase form Go's strconv.Quote uses for \xNN
+// control escapes inside quote.
+fn hex2Lower(v: Int64) -> String {
+    let table = "0123456789abcdef"
+    return table.byteSlice(v / 16, v / 16 + 1) + table.byteSlice(v % 16, v % 16 + 1)
+}
+
+// esc is the serialization spec's escaping (design D4): backslash doubles,
+// printable ASCII 0x21-0x7E passes verbatim, and every other byte — space,
+// the controls, 0x7F, non-ASCII — renders as a backslash plus two
+// uppercase hex digits. Mechanically reversible; the tower's Go side
+// implements the same table.
+pub fn esc(s: String) -> String {
+    var out = ""
+    var off: Int64 = 0
+    let n = s.byteLength()
+    while off < n {
+        let b = probeByteValue(s.byteSlice(off, off + 1))
+        if b == 0x5C {
+            out = out + "\\\\"
+        } else if b >= 0x21 && b <= 0x7E {
+            out = out + s.byteSlice(off, off + 1)
+        } else {
+            out = out + "\\" + hex2(b)
+        }
+        off = off + 1
+    }
+    return out
+}
+
+// quote renders one rune's text the way Go's %q does in the E0001
+// messages: the standard escapes, printable ASCII verbatim, and —
+// matching Go for printable runes — non-ASCII verbatim. Non-printable
+// non-ASCII (\uXXXX in Go) and the control range (\xNN, kept identical)
+// are corners the corpus never reaches in these messages; a divergence
+// there fails the reconciliation loudly rather than passing silently.
+pub fn quote(text: String) -> String {
+    let c = string.runeCode(text.charAt(0))
+    var body = ""
+    if c == 0x22 {
+        body = "\\\""
+    } else if c == 0x5C {
+        body = "\\\\"
+    } else if c == 0x0A {
+        body = "\\n"
+    } else if c == 0x09 {
+        body = "\\t"
+    } else if c == 0x0D {
+        body = "\\r"
+    } else if c >= 0x20 && c <= 0x7E {
+        body = text
+    } else if c >= 0x80 {
+        body = text
+    } else {
+        body = "\\x" + hex2Lower(c)
+    }
+    return "\"" + body + "\""
+}
+
+// probeByteValue names the byte value of a one-byte string. ASCII decodes
+// directly; the four probe literals place every other nameable value at a
+// computable offset (see the file header). A miss answers -1.
+pub fn probeByteValue(s: String) -> Int64 {
+    let c = string.runeCode(s.charAt(0))
+    if c < 0x80 {
+        return c
+    }
+    // Two-byte leads C2-DF: codepoints 0x80+64j sit at even offsets, and
+    // the lead of 0x80+64j is 0xC2+j.
+    let leads2 = "\u{80}\u{C0}\u{100}\u{140}\u{180}\u{1C0}\u{200}\u{240}\u{280}\u{2C0}\u{300}\u{340}\u{380}\u{3C0}\u{400}\u{440}\u{480}\u{4C0}\u{500}\u{540}\u{580}\u{5C0}\u{600}\u{640}\u{680}\u{6C0}\u{700}\u{740}\u{780}\u{7C0}"
+    // Continuations 80-BF: codepoints 0xC0+m encode as C3 plus trail
+    // 0x80+m, so the trail of cp m sits at odd offset 2m+1.
+    let trails = "\u{C0}\u{C1}\u{C2}\u{C3}\u{C4}\u{C5}\u{C6}\u{C7}\u{C8}\u{C9}\u{CA}\u{CB}\u{CC}\u{CD}\u{CE}\u{CF}\u{D0}\u{D1}\u{D2}\u{D3}\u{D4}\u{D5}\u{D6}\u{D7}\u{D8}\u{D9}\u{DA}\u{DB}\u{DC}\u{DD}\u{DE}\u{DF}\u{E0}\u{E1}\u{E2}\u{E3}\u{E4}\u{E5}\u{E6}\u{E7}\u{E8}\u{E9}\u{EA}\u{EB}\u{EC}\u{ED}\u{EE}\u{EF}\u{F0}\u{F1}\u{F2}\u{F3}\u{F4}\u{F5}\u{F6}\u{F7}\u{F8}\u{F9}\u{FA}\u{FB}\u{FC}\u{FD}\u{FE}\u{FF}"
+    // Three-byte leads E0-EF: 0x800, 0x1000, 0x2000...0xF000 at stride 3.
+    let leads3 = "\u{800}\u{1000}\u{2000}\u{3000}\u{4000}\u{5000}\u{6000}\u{7000}\u{8000}\u{9000}\u{A000}\u{B000}\u{C000}\u{D000}\u{E000}\u{F000}"
+    // Four-byte leads F0-F4: 0x10000, 0x40000, 0x80000, 0xC0000, 0x100000
+    // at stride 4.
+    let leads4 = "\u{10000}\u{40000}\u{80000}\u{C0000}\u{100000}"
+    var k: Int64 = 0
+    let n1 = leads2.byteLength()
+    while k < n1 {
+        if k % 2 == 0 {
+            if leads2.byteSlice(k, k + 1) == s {
+                return 0xC2 + k / 2
+            }
+        }
+        k = k + 1
+    }
+    k = 0
+    let n2 = trails.byteLength()
+    while k < n2 {
+        if k % 2 == 1 {
+            if trails.byteSlice(k, k + 1) == s {
+                return 0x80 + (k - 1) / 2
+            }
+        }
+        k = k + 1
+    }
+    k = 0
+    let n3 = leads3.byteLength()
+    while k < n3 {
+        if k % 3 == 0 {
+            if leads3.byteSlice(k, k + 1) == s {
+                return 0xE0 + k / 3
+            }
+        }
+        k = k + 1
+    }
+    k = 0
+    let n4 = leads4.byteLength()
+    while k < n4 {
+        if k % 4 == 0 {
+            if leads4.byteSlice(k, k + 1) == s {
+                return 0xF0 + k / 4
+            }
+        }
+        k = k + 1
+    }
+    return 0 - 1
 }

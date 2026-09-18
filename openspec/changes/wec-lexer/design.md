@@ -110,3 +110,18 @@ record Lexer { src: String, n: Int64, off: Int64, line: Int64, col: Int64,
 5. **骨架形**：`we.toml` = `name = "wec"` / `version = "0.1.0"` / `type = "executable"`（benchmarks 参照形逐字段）；`src/main.we` 驱动 = `fs.readFile("wec-input.we")` 的 `Ok(_)`/`Err(_)` 双臂（通配黄金面）+ 占位两 println + 尾 `return Ok(())`——Err 臂 `E 1 1 E0001 cannot read wec-input.we` 是防御行（语料不含读失败形，D4）；`src/lex.we`/`src/lexnum.we` 各一枚占位 pub fn（模块链与导入图在场，真体落地时删）。本地导入 `import lex`/`import lexnum` 裸形（`build-bnd-multi-module` 黄金形）。
 6. **塔结构细节**：拷贝以 `filepath.WalkDir` 全树（含 build/ 目录被拷入亦无害——目标目录全新）；比对按任务书字面 `bytes.Equal`；`io.println` 自加换行与序列化行尾 `\n` 逐字节对齐（空源输出 = `tokens\nT 1 1 eof \n` 10 字节）。
 7. **计数**：包数 16→17（`internal/wec`，15 ok + 2 no-test 先例）；conformance 933 不动；`go build`/`go vet`/`gofmt -l`（refr/ 外零文件）全绿；终树全量 `go test ./... -count=1` 17 包 0 FAIL 复跑在案。
+
+## 实现期补记二（T2，2026-09-18）
+
+**两复选框全勾。红先记录在案：占位骨架时点 `reconciled 261 corpus entries` + 259 枚「output diverges」（唯二绿 = 两条空源）。真源落地后 `reconciled 252 corpus entries` 全绿——261→252 分解 = −7 attr 面 E0001（第 7 条）−2 wec 自源（重写后携带数值/字符串字面，属 T3/T4 面，T5 全量门槛摘除时回归；占位 lex/lexnum 原为纯 keyword/ident 形故红态时被放行）。**
+
+**编写期先落一轮语言面探针（约二十枚微程序，/tmp 不入册）——停面地图推翻 D1/D6 的三处载体设计，订正如下：**
+
+1. **停面地图（探针实证，全部绕行、零扩语言面）**：① record 构造的 List 型字段停（fn 体/main 体、字面/变量/调用实参全形）；② var 绑定 List 局部停（`let` 绑定含空表字面反而绿）；③ `Option<String>` 载荷 match 停（B1b docs「String 载荷」停面同族——`Option` 亦无 `default` 成员 E0816）；④ 跨模块 record 的字段访问停（参数位/同模块全绿）；⑤ main 体 `for` 停（M9b 语句集无 for）；⑥ `else if` 链缺尾 `else` 报 E0202（脱糖 `else { if … }` 块尾为无值 if——scanWord 拆两个独立 if）。绿面另证：全标量 record（19 字段实证）构造与 impl 读写、方法返回 record/tuple、方法调方法、跨模块纯函数（fn 体/方法体皆可）、41 项等值 `||` 链、嵌套 while、`while true`+break、void 方法内裸 `return`、Bool 字段裸条件、String 字段拼接累积。
+2. **D1 订正——去 List 化**：`toks: List<Token>` 与 `docs: List<DocUnit>` 均不可构造（停面①）。token 流改**边扫边拼**：scanAll 每产一词即 `emit` 拼一行 `T …` 进 `outText: String` 字段；docs 侧通道改 `pendBody/docsText: String` 累积（flushDoc 拼 `D s e\n` + 已 esc 的 `L` 行）+ `docsCount: Int64` 计数替代 `len(docs)>0`。`Token` record 保留为扫描方法 → emit 的返回载体（6 标量字段，可构造）。可观测契约不变：闩置时 `outText` 整体弃置（对位 Go 清流）。
+3. **D6 订正——序列化器住 lex.we**：跨模块 record 字段访问停（停面④）使 main 不能读 Token/Lexer——`render(l: Lexer) -> String` 落 `lex.we` 同模块（参数位读字段 = G2 绿面），`pub fn run(src: String) -> String` 出整份序列化；main 退回骨架形（`io.print(lex.run(src))`，`import lexnum` 随之从 main 退役）。lexnum 现驻纯工具：`widthOf`/`int64ToString`/`hex2`（−1→`"??"` 响亮）/`hex2Lower`/`esc`/`quote`/`probeByteValue`（D6 原文「序列化器 + 工具住 main.we」订正）。
+4. **D6 订正——三张表皆等值链**：`List<String>` 关键字表被停面①③排除——41 词关键字、11 词 twoCharOps（maximal munch 先试）、24 码 oneCharOps 全落单表达式 `||` 等值链（零机制风险，词频下成本可忽略）。
+5. **checkEncoding as-built**：三面次序照 Go（UTF-8 → BOM → CR，strip 收尾）。有效 UTF-8 判定 = **FFFD 三字节探针单趟走查**（`charAt(ri)` 得 FFFD 时，`byteSlice(off, off+3).runeCount() == 1` ⟺ 良构 EF BF BD 宽 3，否则 off 即首病字节）——任务书「Σ 预测宽 == byteLength」形被此单趟包含（每病形 FFFD 宽 1 语义两侧一致，勘查事实 2），不再单独落。BOM 面 offset = stripped 内字节偏移 + adjust；CR 面 **quirk 保真**：消息 offset 用 stripped 索引、`posAt` 走原串（Go 原样，`cr-after-bom` 语料钉）。字节值进消息 = `probeByteValue` 查定（243 可名值四探针串，ASCII 直读；不中 → `hex2(-1)` = `"??"` 响亮失败——围栏保证不可达）。
+6. **quote() 有界偏差细化（D3）**：语料可达两形保真——ASCII 缺席字符的 `%q` 形（标准逃逸 + 可打印原样 + 控制字符 `\xNN` 小写十六进制，Go strconv.Quote 同形）与非 ASCII 字母原样（Go `%q` 对可打印 rune 亦原样）。`unicode.IsLetter` 不可表达 → ≥0x80 全走字母形消息（语料可达形恰为同形；非字母非 ASCII 第三形不可达，diverge 即响亮）。
+7. **围栏第三特判（as-built）**：attr 面的形违规报 **E0001**（`"#"`-not-followed 与 unit-shape 两形，消息皆含 "attribute unit"）——码集判据放不出去，围栏加消息判据（参考侧活算，与 UTF-8 不可名判据同款）；T4 落地时随 attr 面拓宽移除，7 枚条目回归。`"\xff"` 13 值角剔除披露与 `reconciled` 计数日志不变。
+8. **计数**：`reconciled 252`（stdlib 7 + conformance 242 + 字面量编码/docs/E0004 形 + lextest 子集）；corpus 1039 不变（字面 15）；17 包全绿（`go test ./... -count=1` 0 FAIL）；conformance 933 不动（零 Go 生产码改动——wec_test.go 测试码 + wec/ We 源）；`we check wec/` exit 0。

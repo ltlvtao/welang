@@ -16,12 +16,14 @@
 
 ## T2 扫描核：ident/keyword/运算符/空白注释跳过
 
-- [ ] **checkEncoding 三面 + rune 走查地基**：`widthOf`、有效 UTF-8 判定（Σ 预测宽 == byteLength）、首病字节定位 + 字节值探针查定（243 值；不中即任务失败）、BOM 剥离/中置报错、裸 CR 报错——三面次序照 Go；`posAt` 前缀切片走查。
+- [x] **checkEncoding 三面 + rune 走查地基**：`widthOf`、有效 UTF-8 判定（~~Σ 预测宽 == byteLength~~→FFFD 三字节探针单趟走查——Σ 形被包含，design 补记二-5）、首病字节定位 + 字节值探针查定（243 值；不中即任务失败）、BOM 剥离/中置报错、裸 CR 报错——三面次序照 Go；`posAt` 前缀切片走查。
   来源：proposal 今日事实 4/5、目标 2；design D2
   验证：塔语料⑥（名可达五形 + BOM 中置 + 裸 CR）+ 语料③的编码子项先红后绿；13 值角剔除披露落测试注释；`"\xff"` 剔除记档
-- [ ] **ident/keyword/运算符/跳过逻辑**：`scanAll` 主循环（空白/行注释/块注释跳过——块注释不嵌套、E0004 未闭）、ident 扫描（`_` 与字母数字 ASCII 域）、关键字表（String 列表字面 + 线性扫）、运算符逐字符分发（kind = 自身文本）、eof 词；行列维护（rune 列）；错误闩 + fail。
+  落地（2026-09-18）：三面次序照 Go；BOM offset = stripped 内偏移 + adjust、裸 CR quirk 保真（消息 offset 用 stripped 索引、posAt 走原串）；语料⑥五形 + BOM 对 + 裸 CR 两形 + crlf 全绿；`"\xff"` 剔除披露在塔日志（design 补记二）
+- [x] **ident/keyword/运算符/跳过逻辑**：`scanAll` 主循环（空白/行注释/块注释跳过——块注释不嵌套、E0004 未闭）、ident 扫描（`_` 与字母数字 ASCII 域）、关键字表（~~String 列表字面 + 线性扫~~→41 词 `||` 等值链——List 载体被停面排除，design 补记二-4）、运算符逐字符分发（kind = 自身文本）、eof 词；行列维护（rune 列）；错误闩 + fail。
   来源：proposal 目标 2；design D1、D2、D6
   验证：塔语料子集（参考侧 kind ⊆ {ident, keyword, 运算符, eof} 的条目——含 stdlib 源/wec 自源/conformance 源的大部）先红后绿；E0004 未闭块注释语料绿
+  落地（2026-09-18）：先红（占位态 261 放行 / 259 红记档）后绿 `reconciled 252 corpus entries`（−7 attr 面 E0001 围栏特判待 T4、−2 wec 自源携数值/字符串字面待 T3/T5 回归）；E0004 + docs 两形（run/broken）绿；17 包全绿、`we check wec/` exit 0
 
 
 ## T3 数值与 rune 字面量

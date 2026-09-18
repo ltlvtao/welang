@@ -1,8 +1,481 @@
-// lex — the scanner core's home (B3b T2+): the Lexer record, the
-// checkEncoding faces, and the scanAll loop land here. The placeholder
-// below only proves the module chain and is deleted when the real record
-// arrives.
+// lex — the scanner core of the We-hosted port (B3b T2): checkEncoding's
+// three faces, the main token loop with whitespace and comment skipping,
+// identifiers and keywords, the operator inventory, and the /// docs side
+// channel. The port mirrors internal/lex/lex.go statement for statement;
+// the reconciliation tower requires the serialized output to be
+// byte-identical to the Go lexer's.
+//
+// Two language-face adaptations shape the record (both disclosed in the
+// change's design notes): We has no panic/recover, so Go's first-error
+// stop is an error latch (failed + the four err fields) that every
+// failure-capable caller checks; and this build cannot construct records
+// carrying List fields, so the token stream never materializes as a list
+// — each token's serialization line is appended to outText as it is
+// scanned, and the docs side channel accumulates as pre-rendered strings.
+// The observable contract is unchanged: a failed scan contributes only
+// the E line, a successful one the tokens and docs sections.
 
-pub fn scannerPending() -> Bool {
-    return true
+import std.string
+
+import lexnum
+
+// Token is one lexical unit as it travels from a scan method to the
+// emitting loop. AttrName/AttrArgs are T4's attr face and stay empty
+// until then.
+pub record Token {
+    kind: String,
+    text: String,
+    line: Int64,
+    col: Int64,
+    attrName: String,
+    attrArgs: String,
+}
+
+// Lexer is the scan state. col is the 1-based rune column of the next
+// unconsumed rune. off/ri track the same position as byte offset and
+// rune index (kept in lockstep; widthOf maps between them once
+// checkEncoding has guaranteed well-formedness). docOpen/docLast plus
+// pendStart/pendEnd/pendBody hold the /// side channel's pending unit
+// until a run break or end of input flushes it into docsText.
+pub record Lexer {
+    src: String,
+    n: Int64,
+    rn: Int64,
+    off: Int64,
+    ri: Int64,
+    line: Int64,
+    col: Int64,
+    failed: Bool,
+    errLine: Int64,
+    errCol: Int64,
+    errCode: String,
+    errMsg: String,
+    outText: String,
+    docsText: String,
+    docsCount: Int64,
+    docOpen: Bool,
+    docLast: Int64,
+    pendStart: Int64,
+    pendEnd: Int64,
+    pendBody: String,
+}
+
+// run scans one source and returns its full serialization (design D4):
+// the tokens and docs sections on success, the single E line on the
+// first lexical error. The driver passes this straight to stdout.
+pub fn run(src: String) -> String {
+    let l = Lexer {
+        src: src, n: src.byteLength(), rn: src.runeCount(),
+        off: 0, ri: 0, line: 1, col: 1,
+        failed: false, errLine: 0, errCol: 0, errCode: "", errMsg: "",
+        outText: "", docsText: "", docsCount: 0,
+        docOpen: false, docLast: 0, pendStart: 0, pendEnd: 0, pendBody: "",
+    }
+    l.checkEncoding()
+    if l.failed == false {
+        l.scanAll()
+    }
+    return render(l)
+}
+
+// render folds the lexer's end state into the serialization's two
+// columns: the E line replaces everything when the latch is set
+// (chapter 1's first-error-stop — no token stream survives).
+fn render(l: Lexer) -> String {
+    if l.failed {
+        return "E " + lexnum.int64ToString(l.errLine) + " " + lexnum.int64ToString(l.errCol) + " " + l.errCode + " " + lexnum.esc(l.errMsg) + "\n"
+    }
+    var out = "tokens\n" + l.outText
+    if l.docsCount > 0 {
+        out = out + "docs\n" + l.docsText
+    }
+    return out
+}
+
+// isKeyword is chapter 1's fully-reserved closed set (41 words). A single
+// equality chain: the corpus stop-faces rule out a List<String> table in
+// this build, and the linear chain is the zero-mechanism form.
+fn isKeyword(t: String) -> Bool {
+    return t == "fn" || t == "let" || t == "var" || t == "pub" || t == "import" || t == "as" || t == "mut" ||
+        t == "if" || t == "else" || t == "return" || t == "match" || t == "for" || t == "in" ||
+        t == "while" || t == "loop" || t == "break" || t == "continue" || t == "defer" ||
+        t == "true" || t == "false" || t == "foreign" ||
+        t == "record" || t == "byval" || t == "byres" || t == "newtype" || t == "with" ||
+        t == "type" ||
+        t == "interface" || t == "impl" || t == "where" || t == "derives" ||
+        t == "scope" || t == "resource" ||
+        t == "effect" ||
+        t == "task" || t == "select" || t == "case" || t == "timeout" || t == "collectAll" ||
+        t == "test" || t == "mock"
+}
+
+// isIdentStartCode / isIdentCharCode are the ASCII identifier domain:
+// letters and underscore, then digits.
+fn isIdentStartCode(c: Int64) -> Bool {
+    return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || c == 95
+}
+
+fn isIdentCharCode(c: Int64) -> Bool {
+    return isIdentStartCode(c) || (c >= 48 && c <= 57)
+}
+
+// isOneCharOpCode is the one-byte operator and punctuation inventory:
+// "+-*/%<>!&|^~=.,;:?(){}[]" by code point.
+fn isOneCharOpCode(c: Int64) -> Bool {
+    return c == 43 || c == 45 || c == 42 || c == 47 || c == 37 || c == 60 || c == 62 || c == 33 ||
+        c == 38 || c == 124 || c == 94 || c == 126 || c == 61 || c == 46 || c == 44 || c == 59 ||
+        c == 58 || c == 63 || c == 40 || c == 41 || c == 123 || c == 125 || c == 91 || c == 93
+}
+
+impl Lexer {
+    // fail latches the first diagnostic; later calls are no-ops, which is
+    // the port's equivalent of Go's panic already having unwound.
+    pub fn fail(mut self, line: Int64, col: Int64, code: String, message: String) {
+        if self.failed == false {
+            self.failed = true
+            self.errLine = line
+            self.errCol = col
+            self.errCode = code
+            self.errMsg = message
+        }
+    }
+
+    // codeHere is the current rune's code point; call only before end.
+    pub fn codeHere(mut self) -> Int64 {
+        return string.runeCode(self.src.charAt(self.ri))
+    }
+
+    // codeNext is the following rune's code point, 0 at end of input.
+    pub fn codeNext(mut self) -> Int64 {
+        if self.ri + 1 < self.rn {
+            return string.runeCode(self.src.charAt(self.ri + 1))
+        }
+        return 0
+    }
+
+    // advance consumes one rune, maintaining line and the rune column.
+    pub fn advance(mut self) {
+        let c = self.codeHere()
+        self.off = self.off + lexnum.widthOf(c)
+        self.ri = self.ri + 1
+        if c == 10 {
+            self.line = self.line + 1
+            self.col = 1
+        } else {
+            self.col = self.col + 1
+        }
+    }
+
+    // posAt computes the 1-based line and rune column of the rune at byte
+    // offset off (error paths only — it walks from the start).
+    pub fn posAt(mut self, off: Int64) -> (Int64, Int64) {
+        var ln: Int64 = 1
+        var cl: Int64 = 1
+        let pre = self.src.byteSlice(0, off)
+        let m = pre.runeCount()
+        var k: Int64 = 0
+        while k < m {
+            if string.runeCode(pre.charAt(k)) == 10 {
+                ln = ln + 1
+                cl = 1
+            } else {
+                cl = cl + 1
+            }
+            k = k + 1
+        }
+        return (ln, cl)
+    }
+
+    // fffdWellFormed reports whether the FFFFD the decoder yielded at off
+    // is a literal U+FFFD (exactly EF BF BD, decoding as one rune in
+    // three bytes) rather than the marker of an ill-formed sequence.
+    pub fn fffdWellFormed(mut self, off: Int64) -> Bool {
+        if off + 3 > self.n {
+            return false
+        }
+        return self.src.byteSlice(off, off + 3).runeCount() == 1
+    }
+
+    // checkEncoding enforces chapter 1's Source files requirement before
+    // any token scanning, in the reference's order: whole-file UTF-8
+    // validity, then the byte-order-mark rule, then the bare-CR rule. On
+    // success the leading BOM, if any, is stripped. The CR walk indexes
+    // the stripped string while positions come from the original — the
+    // reference's own quirk, preserved byte for byte.
+    pub fn checkEncoding(mut self) {
+        var off: Int64 = 0
+        var ri: Int64 = 0
+        while off < self.n {
+            let c = string.runeCode(self.src.charAt(ri))
+            if c == 0xFFFD {
+                if self.fffdWellFormed(off) == false {
+                    let badByte = lexnum.probeByteValue(self.src.byteSlice(off, off + 1))
+                    let (ln, cl) = self.posAt(off)
+                    self.fail(ln, cl, "E0001", "invalid character — byte 0x" + lexnum.hex2(badByte) + " at offset " + lexnum.int64ToString(off) + " is not valid UTF-8")
+                    return
+                }
+            }
+            off = off + lexnum.widthOf(c)
+            ri = ri + 1
+        }
+        var base: Int64 = 0
+        if self.rn > 0 {
+            if self.src.charAt(0) == '\u{FEFF}' {
+                base = 3
+            }
+        }
+        var stripped = self.src
+        if base == 3 {
+            stripped = self.src.byteSlice(3, self.n)
+        }
+        var k: Int64 = 0
+        var bo: Int64 = 0
+        let m = stripped.runeCount()
+        while k < m {
+            if stripped.charAt(k) == '\u{FEFF}' {
+                let bomOff = bo + base
+                let (ln, cl) = self.posAt(bomOff)
+                self.fail(ln, cl, "E0001", "invalid character — byte-order mark at offset " + lexnum.int64ToString(bomOff) + "; a single leading U+FEFF is ignored, any other appearance is an error")
+                return
+            }
+            bo = bo + lexnum.widthOf(string.runeCode(stripped.charAt(k)))
+            k = k + 1
+        }
+        var i: Int64 = 0
+        let sn = stripped.byteLength()
+        while i < sn {
+            if stripped.byteSlice(i, i + 1) == "\r" {
+                var bare = true
+                if i + 1 < sn {
+                    if stripped.byteSlice(i + 1, i + 2) == "\n" {
+                        bare = false
+                    }
+                }
+                if bare {
+                    let (ln, cl) = self.posAt(i)
+                    self.fail(ln, cl, "E0001", "invalid character — bare carriage return at offset " + lexnum.int64ToString(i) + "; line breaks are LF and CRLF counts as one break")
+                    return
+                }
+            }
+            i = i + 1
+        }
+        if base == 3 {
+            self.src = self.src.byteSlice(3, self.n)
+            self.n = self.n - 3
+            self.rn = self.rn - 1
+        }
+    }
+
+    // scanAll is the main token loop: skip whitespace and comments, then
+    // scan one token, until end of input. The literal faces ('"', '\'',
+    // '#', digits) latch a WEC-PENDING marker — T3/T4's faces; the
+    // reconciliation fence guarantees no admitted source reaches them
+    // before those tasks land.
+    pub fn scanAll(mut self) {
+        while true {
+            while self.off < self.n {
+                let c = self.codeHere()
+                if c == 32 || c == 9 || c == 10 || c == 13 {
+                    self.advance()
+                } else if c == 47 && self.codeNext() == 47 {
+                    self.skipLineComment()
+                } else if c == 47 && self.codeNext() == 42 {
+                    self.docOpen = false
+                    self.flushDoc()
+                    self.skipBlockComment()
+                    if self.failed {
+                        return
+                    }
+                } else {
+                    break
+                }
+            }
+            if self.off >= self.n {
+                self.flushDoc()
+                let ln = self.line
+                let cl = self.col
+                self.emit(Token { kind: "eof", text: "", line: ln, col: cl, attrName: "", attrArgs: "" })
+                return
+            }
+            let c = self.codeHere()
+            if c == 34 {
+                self.pendingFail("string literal")
+            } else if c == 39 {
+                self.pendingFail("rune literal")
+            } else if c == 35 {
+                self.pendingFail("attribute")
+            } else if c >= 48 && c <= 57 {
+                self.pendingFail("number")
+            } else if isIdentStartCode(c) {
+                let t = self.scanWord()
+                self.emit(t)
+            } else {
+                let t = self.scanOperator()
+                if self.failed == false {
+                    self.emit(t)
+                }
+            }
+            if self.failed {
+                return
+            }
+        }
+    }
+
+    // emit appends one token's serialization line (design D4's T form;
+    // the attr fields join in T4).
+    pub fn emit(mut self, t: Token) {
+        self.outText = self.outText + "T " + lexnum.int64ToString(t.line) + " " + lexnum.int64ToString(t.col) + " " + t.kind + " " + lexnum.esc(t.text) + "\n"
+    }
+
+    // pendingFail latches the not-yet-ported marker for a literal face.
+    pub fn pendingFail(mut self, what: String) {
+        let ln = self.line
+        let cl = self.col
+        self.fail(ln, cl, "WEC-PENDING", "face not ported yet: " + what)
+    }
+
+    // flushDoc emits the pending /// unit, if any, as a D line plus its
+    // already-escaped L lines, and closes the run.
+    pub fn flushDoc(mut self) {
+        if self.docOpen {
+            self.docsText = self.docsText + "D " + lexnum.int64ToString(self.pendStart) + " " + lexnum.int64ToString(self.pendEnd) + "\n" + self.pendBody
+            self.docsCount = self.docsCount + 1
+            self.docOpen = false
+        }
+    }
+
+    // skipLineComment consumes one // or /// comment to the end of the
+    // line. A /// comment feeds the documentation side channel:
+    // consecutive /// lines extend one unit; an ordinary // comment
+    // breaks the run.
+    pub fn skipLineComment(mut self) {
+        let start = self.off
+        let docLine = self.line
+        while self.off < self.n {
+            if self.codeHere() == 10 {
+                break
+            }
+            self.advance()
+        }
+        var text = self.src.byteSlice(start, self.off)
+        var tn = text.byteLength()
+        while tn > 0 {
+            if text.byteSlice(tn - 1, tn) == "\r" {
+                tn = tn - 1
+            } else {
+                break
+            }
+        }
+        text = text.byteSlice(0, tn)
+        if tn >= 3 {
+            if text.byteSlice(0, 3) == "///" {
+                var inner = text.byteSlice(3, tn)
+                let inLen = inner.byteLength()
+                if inLen > 0 {
+                    if inner.byteSlice(0, 1) == " " {
+                        inner = inner.byteSlice(1, inLen)
+                    }
+                }
+                if self.docOpen && self.docLast == docLine - 1 {
+                    self.pendBody = self.pendBody + "L " + lexnum.esc(inner) + "\n"
+                    self.pendEnd = docLine
+                } else {
+                    self.flushDoc()
+                    self.pendStart = docLine
+                    self.pendEnd = docLine
+                    self.pendBody = "L " + lexnum.esc(inner) + "\n"
+                    self.docOpen = true
+                }
+                self.docLast = docLine
+                return
+            }
+        }
+        self.flushDoc()
+        self.docOpen = false
+    }
+
+    // skipBlockComment consumes one /* */ comment. Block comments do not
+    // nest: the first */ closes the comment, an inner /* is ordinary
+    // text, and end of input before the close is E0004.
+    pub fn skipBlockComment(mut self) {
+        let sl = self.line
+        let sc = self.col
+        self.advance()
+        self.advance()
+        while true {
+            if self.off >= self.n {
+                self.fail(sl, sc, "E0004", "unterminated block comment — /* is not closed by */ before end of file")
+                return
+            }
+            if self.codeHere() == 42 {
+                if self.codeNext() == 47 {
+                    self.advance()
+                    self.advance()
+                    return
+                }
+            }
+            self.advance()
+        }
+    }
+
+    // scanWord consumes an identifier-shaped run and classifies it:
+    // keyword (the closed reserved set), the bare underscore (chapter 1
+    // lists `_` as punctuation), or identifier.
+    pub fn scanWord(mut self) -> Token {
+        let ln = self.line
+        let cl = self.col
+        let start = self.off
+        while self.off < self.n {
+            if isIdentCharCode(self.codeHere()) {
+                self.advance()
+            } else {
+                break
+            }
+        }
+        let text = self.src.byteSlice(start, self.off)
+        var kind = "ident"
+        if isKeyword(text) {
+            kind = "keyword"
+        }
+        if text == "_" {
+            kind = "_"
+        }
+        return Token { kind: kind, text: text, line: ln, col: cl, attrName: "", attrArgs: "" }
+    }
+
+    // scanOperator consumes one operator or punctuation token — maximal
+    // munch tries the two-byte forms first — or reports E0001 for a
+    // character matching nothing in the inventory. The reference splits
+    // non-ASCII misses by unicode.IsLetter, which We has no table for;
+    // every non-ASCII miss takes the identifier-homoglyph shape (the
+    // corpus's other shape is the plain ASCII miss, kept exact).
+    pub fn scanOperator(mut self) -> Token {
+        let ln = self.line
+        let cl = self.col
+        var end2 = self.off + 2
+        if end2 > self.n {
+            end2 = self.n
+        }
+        let pair = self.src.byteSlice(self.off, end2)
+        if pair == "==" || pair == "!=" || pair == "<=" || pair == ">=" || pair == "&&" || pair == "||" || pair == "<<" || pair == ">>" || pair == "->" || pair == "=>" || pair == ".." {
+            self.off = self.off + 2
+            self.ri = self.ri + 2
+            self.col = self.col + 2
+            return Token { kind: pair, text: pair, line: ln, col: cl, attrName: "", attrArgs: "" }
+        }
+        let c = self.codeHere()
+        if isOneCharOpCode(c) {
+            let t = self.src.byteSlice(self.off, self.off + 1)
+            self.advance()
+            return Token { kind: t, text: t, line: ln, col: cl, attrName: "", attrArgs: "" }
+        }
+        let w = lexnum.widthOf(c)
+        let t = self.src.byteSlice(self.off, self.off + w)
+        if c >= 128 {
+            self.fail(ln, cl, "E0001", "invalid character — " + lexnum.quote(t) + " in an identifier: identifiers are ASCII-only (homoglyph confusability is a security surface)")
+        } else {
+            self.fail(ln, cl, "E0001", "invalid character — " + lexnum.quote(t) + " matches no token in the lexical inventory")
+        }
+        return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+    }
 }

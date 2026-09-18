@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ltlvtao/welang/internal/cli"
 	"github.com/ltlvtao/welang/internal/diag"
@@ -105,9 +108,49 @@ type stage struct {
 	errs      map[string]bool
 }
 
-func (s stage) admits(toks []lex.Token, d *diag.Diagnostic) bool {
+// unnameable reports whether byte value b is one of the thirteen values a
+// We string literal cannot construct (C0, C1, F5-FF — design D2-3's
+// observational-invariance corner): the reference side's E0001 message
+// carries the byte's value, and the wec side has no way to name it. Such
+// entries are fence-excluded with a logged disclosure, never silently.
+func unnameable(b byte) bool {
+	return b == 0xC0 || b == 0xC1 || b >= 0xF5
+}
+
+// firstBadByte walks src to its first ill-formed byte (the reference
+// lexer's own walk) and reports whether that byte's value is nameable in
+// We. Entries whose first bad byte is not nameable stay out until the
+// byte-exposure face lands (follow-up #30).
+func firstBadByteNameable(src string) bool {
+	for off := 0; off < len(src); {
+		r, size := utf8.DecodeRuneInString(src[off:])
+		if r == utf8.RuneError && size == 1 {
+			return !unnameable(src[off])
+		}
+		off += size
+	}
+	return true
+}
+
+func (s stage) admits(e entry, toks []lex.Token, d *diag.Diagnostic) bool {
 	if d != nil {
-		return s.errs[d.Code()]
+		if !s.errs[d.Code()] {
+			return false
+		}
+		// The thirteen unnameable byte values ride only the invalid-UTF-8
+		// shape of E0001 (proposal's non-goal corner).
+		if d.Code() == "E0001" && strings.Contains(d.Message(), "is not valid UTF-8") {
+			return firstBadByteNameable(e.src)
+		}
+		// The attribute face reports its form violations as E0001 too (the
+		// "#"-not-followed and unit-shape messages); that face is T4's, so
+		// until then the code set alone cannot keep its entries out — the
+		// messages name the attribute unit, and the discriminator is
+		// computed from the reference's own output.
+		if d.Code() == "E0001" && strings.Contains(d.Message(), "attribute unit") {
+			return false
+		}
+		return true
 	}
 	for _, tk := range toks {
 		if s.kinds[tk.Kind] {
@@ -121,14 +164,16 @@ func (s stage) admits(toks []lex.Token, d *diag.Diagnostic) bool {
 	return true
 }
 
-// fence is the current task's stage. T1 admits only the eof kind and no
-// error codes — exactly the empty source, the one input the placeholder
-// driver answers byte-exactly. Later tasks widen it as their faces land
-// (T2 the core kinds with operators and the E0001/E0004 codes, T3 the
-// numeric kinds with E0003/E0006, T4 the literal kinds with the remaining
-// codes, T5 the full corpus with the fence removed).
+// fence is the current task's stage. T2 admits the scanner core's kinds —
+// ident, keyword, and the operator kinds wholesale — plus the two error
+// codes its faces produce (E0001 across its encoding and inventory
+// shapes, E0004 for the unterminated block comment). Later tasks widen it
+// (T3 the numeric kinds with E0003/E0006, T4 the literal kinds with the
+// remaining codes, T5 the full corpus with the fence removed).
 var fence = stage{
-	kinds: map[string]bool{"eof": true},
+	kinds:     map[string]bool{"ident": true, "keyword": true, "eof": true},
+	operators: true,
+	errs:      map[string]bool{"E0001": true, "E0004": true},
 }
 
 // entry is one corpus source under its corpus-qualified name.
@@ -140,16 +185,38 @@ type entry struct {
 // loadCorpus gathers the reconciliation corpus (design D7): the stdlib's
 // own sources, the wec project's own sources (the bootstrap's earliest
 // self-consistency signal), every conformance case's setup sources
-// (read-only), and the in-tower literals. The lex-corpus transcriptions
-// and the E0001-E0009 error matrix grow with their tasks (T2+); T1
-// carries the empty source — the placeholder driver's exact answer — and
-// the `let x = 1` probe that goes green when the int kind lands (T3).
+// (read-only), the Go lex package's own test literals, and the in-tower
+// literals. The E0001-E0009 error matrix grows with its tasks (T4); T2
+// adds the encoding faces' shapes (the five nameable invalid-UTF-8 forms,
+// the BOM pair, the bare CRs, the unterminated block comment).
 func loadCorpus(t *testing.T) []entry {
 	t.Helper()
 	var cs []entry
 	cs = append(cs,
 		entry{"literal:empty", ""},
 		entry{"literal:let-one", "let x = 1\n"},
+		// T2's encoding and comment faces. The five invalid-UTF-8 forms
+		// are the nameable shapes: a stray lead, a truncated tail, a
+		// surrogate, a past-range sequence, an overlong form. The BOM
+		// pair covers the leading strip and the interior error; the
+		// bare-CR entries cover both the plain and the after-BOM-strip
+		// walk (the reference's CR loop indexes the stripped string while
+		// positions come from the original — the port carries that
+		// quirk). The 0xFF shape lives only in the lex-test corpus and is
+		// fence-excluded as one of the thirteen unnameable values.
+		entry{"literal:utf8-stray-lead", "\xc3("},
+		entry{"literal:utf8-truncated", "\xe2\x82"},
+		entry{"literal:utf8-surrogate", "\xed\xa0\x80"},
+		entry{"literal:utf8-past-range", "\xf4\x90\x80\x80"},
+		entry{"literal:utf8-overlong", "\xe0\x80\x80"},
+		entry{"literal:bom-leading", "\uFEFFlet x\r\n"},
+		entry{"literal:bom-interior", "a\uFEFFb"},
+		entry{"literal:cr-bare", "let x = 1\rlet y = 2"},
+		entry{"literal:cr-after-bom", "\uFEFFlet x\ry"},
+		entry{"literal:crlf", "let x\r\nlet y\r\n"},
+		entry{"literal:block-comment-open", "/* never closed"},
+		entry{"literal:docs-run", "/// one\n/// two\nlet x\n"},
+		entry{"literal:docs-broken", "/// one\n// plain\n/// two\nlet x\n"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
@@ -173,6 +240,7 @@ func loadCorpus(t *testing.T) []entry {
 		}
 		cs = append(cs, entry{"wec:" + filepath.Base(f), string(data)})
 	}
+	cs = append(cs, lexTestLiterals(t)...)
 	cases, err := filepath.Glob(filepath.Join("..", "conformance", "testdata", "cases", "*.json"))
 	if err != nil {
 		t.Fatalf("glob cases: %v", err)
@@ -201,6 +269,33 @@ func loadCorpus(t *testing.T) []entry {
 				cs = append(cs, entry{"case:" + base + ":" + p, c.Setup.Files[p]})
 			}
 		}
+	}
+	return cs
+}
+
+// lexSampleRe matches the sample sources the lex package's own tests hand
+// to lexMust or lexFail — backquoted or double-quoted Go string literals.
+var lexSampleRe = regexp.MustCompile(`(?:lexMust|lexFail)\(t, (` + "`[^`]*`" + `|"(?:[^"\\\n]|\\.)*")`)
+
+// lexTestLiterals extracts those samples verbatim (corpus item ③ of
+// design D7): strconv decodes the Go literal, so \r, \uFEFF, and \xff
+// reach the corpus as the exact bytes the reference lexer sees. The
+// samples span every face; the stage fence admits each only when its
+// task has landed, and the unnameable-byte corner (the "\xff" sample) is
+// excluded by the fence with a logged disclosure.
+func lexTestLiterals(t *testing.T) []entry {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "lex", "lex_test.go"))
+	if err != nil {
+		t.Fatalf("read lex_test.go: %v", err)
+	}
+	var cs []entry
+	for _, m := range lexSampleRe.FindAllStringSubmatch(string(data), -1) {
+		src, err := strconv.Unquote(m[1])
+		if err != nil {
+			t.Fatalf("unquote %s: %v", m[1], err)
+		}
+		cs = append(cs, entry{"lextest:" + m[1], src})
 	}
 	return cs
 }
@@ -288,7 +383,10 @@ func TestLexReconciliation(t *testing.T) {
 	ran := 0
 	for _, e := range loadCorpus(t) {
 		toks, _, d := lex.Scan("wec-input.we", []byte(e.src))
-		if !fence.admits(toks, d) {
+		if d != nil && d.Code() == "E0001" && strings.Contains(d.Message(), "is not valid UTF-8") && !firstBadByteNameable(e.src) {
+			t.Logf("corpus: %s excluded — its first bad byte is one of the thirteen unnameable values (follow-up #30)", e.name)
+		}
+		if !fence.admits(e, toks, d) {
 			continue
 		}
 		ran++
@@ -322,19 +420,21 @@ func TestSerializationContractPinsTheFormat(t *testing.T) {
 // reconciliation above would be reconciling a fraction of what it names.
 func TestCorpusIsNotEmpty(t *testing.T) {
 	cs := loadCorpus(t)
-	var stdlib, own, conformance int
+	var stdlib, own, lextest, conformance int
 	for _, e := range cs {
 		switch {
 		case strings.HasPrefix(e.name, "stdlib:"):
 			stdlib++
 		case strings.HasPrefix(e.name, "wec:"):
 			own++
+		case strings.HasPrefix(e.name, "lextest:"):
+			lextest++
 		case strings.HasPrefix(e.name, "case:"):
 			conformance++
 		}
 	}
-	if stdlib == 0 || own == 0 || conformance == 0 {
-		t.Fatalf("corpus incomplete: stdlib=%d wec=%d conformance=%d of %d", stdlib, own, conformance, len(cs))
+	if stdlib == 0 || own == 0 || lextest == 0 || conformance == 0 {
+		t.Fatalf("corpus incomplete: stdlib=%d wec=%d lextest=%d conformance=%d of %d", stdlib, own, lextest, conformance, len(cs))
 	}
-	t.Logf("corpus: %d entries (stdlib=%d, wec=%d, conformance=%d)", len(cs), stdlib, own, conformance)
+	t.Logf("corpus: %d entries (stdlib=%d, wec=%d, lextest=%d, conformance=%d)", len(cs), stdlib, own, lextest, conformance)
 }
