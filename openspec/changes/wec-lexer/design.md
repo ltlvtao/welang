@@ -125,3 +125,15 @@ record Lexer { src: String, n: Int64, off: Int64, line: Int64, col: Int64,
 6. **quote() 有界偏差细化（D3）**：语料可达两形保真——ASCII 缺席字符的 `%q` 形（标准逃逸 + 可打印原样 + 控制字符 `\xNN` 小写十六进制，Go strconv.Quote 同形）与非 ASCII 字母原样（Go `%q` 对可打印 rune 亦原样）。`unicode.IsLetter` 不可表达 → ≥0x80 全走字母形消息（语料可达形恰为同形；非字母非 ASCII 第三形不可达，diverge 即响亮）。
 7. **围栏第三特判（as-built）**：attr 面的形违规报 **E0001**（`"#"`-not-followed 与 unit-shape 两形，消息皆含 "attribute unit"）——码集判据放不出去，围栏加消息判据（参考侧活算，与 UTF-8 不可名判据同款）；T4 落地时随 attr 面拓宽移除，7 枚条目回归。`"\xff"` 13 值角剔除披露与 `reconciled` 计数日志不变。
 8. **计数**：`reconciled 252`（stdlib 7 + conformance 242 + 字面量编码/docs/E0004 形 + lextest 子集）；corpus 1039 不变（字面 15）；17 包全绿（`go test ./... -count=1` 0 FAIL）；conformance 933 不动（零 Go 生产码改动——wec_test.go 测试码 + wec/ We 源）；`we check wec/` exit 0。
+
+## 实现期补记三（T3，2026-09-18）
+
+**两复选框全勾。红先记录在案：围栏拓宽（kinds +int/float/rune、errs +E0006/E0003）+ 语料 34 枚新字面量后 `reconciled 533 corpus entries` + 281 枚「output diverges」（全为 WEC-PENDING number/rune 形；252 旧绿零回归）。真源落地后 `reconciled 531 corpus entries` 全绿——533→531 = 两条 T4 骑码围栏收紧（第 1 条）而非实现修正。**
+
+1. **围栏 as-built 第四/五特判**：T4 面可骑 T3 的码进场——①lextest `'\n x'` 的参考侧首错是 **E0003**（逃逸后多字符触发形状款）而非 E0005，成功路径的 rune 文本判据管不到错误条目 ⇒ 错误臂加「E0003 且源含反斜杠」排除；②lextest `#[cfg(1__0)]` 的参考侧首错是 **E0006**（attr 实参内的坏数字先于 attr 校验死亡）⇒ 错误臂加「源含 `#[`」排除（保守：死于 `#[` 之前的合法 E0006 条目会被一并暂缓，语料中无此形）。两判据与既有三判据同款——参考侧/源活算、随 T5 围栏整体退役。
+2. **语料 as-built**：数值面 28 枚（七条款每条款一正一负 + based 三形正例 + 前导零 `0`/`00` 边 + 后缀闭集四负 + `1e5` 切形 + `1..5`/`0x1..2` 的 `..` 不入 span 边界）；rune 面 6 枚（`'a'`/`'中'` 正 + 空引/多字符/EOF 未闭/换行未闭四负）。corpus 1039→**1073**。T1 预言兑现：`literal:let-one` 随 int kind 放行自动翻绿。
+3. **语言面两枚新教训（补记二停面地图的延伸）**：①E0202 复发于 lexnum 两处「bad」链——else-if 链缺尾 else 即报，补尾 `else { bad = false }` 成固定写法；②`charAt` 回 **Rune** 非 String（E0501 argument/parameter）——quoteText 改 off/ri 双走查以 `byteSlice(off, off+w)` 取单 rune 体，quote 拆 `quoteBody` 供两者复用。
+4. **scanNumber as-built**：numericSpan + 三验证器逐条款移植（checkDigitRun/validateBased/validateFloat，八后缀序表 `intSuffixAt`）；span 全 ASCII ⇒ `probeByteValue` 的 `byteAt` 直读；尾缀三分类（骑行/闭集违规/切形 `consume = i`）；跳进维护 off/ri/col 三者（ri += consume——Go 无此量，端口锁步）。`%q` 多 rune 面落 `quoteText`（span 全可打印 ASCII ⇒ 原样；逐 rune 走 quoteBody，diverge 即响亮）。
+5. **rune 面 as-built**：consumeRuneLit 每处 fail 后**早退**（Go fail = panic，后续语句不执行——端口保真）；逃逸半面 = `pendingFail("rune escape")`，`'\u{41}'` 等留 T4（任务书原案）。
+6. **wec 自源回归时点订正**：T2 记「−2 wec 自源待 T3/T5 回归」——T3 后仍栏外：lex/lexnum/main 三源均含**字符串**字面（kind 面 T4 才开），数值字面已非障碍。订正为「待 T4/T5」。
+7. **计数**：`reconciled 531`（红态 533 − 2 围栏收紧）；corpus 1073（stdlib 7/wec 3/lextest 36/conformance 978 + 字面 49）；17 包全绿（conformance 933 不动，零 Go 生产码改动）；`we check wec/` exit 0。

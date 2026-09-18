@@ -28,12 +28,14 @@
 
 ## T3 数值与 rune 字面量
 
-- [ ] **numericSpan 移植**：E0006 七条款（前导零、`_` 位间、点侧数字、指数形）、后缀集（i8–u64/f32/f64）、`1e5` 切形（无点指数的 int/float 分界）；int/float kind 判定。
+- [x] **numericSpan 移植**：E0006 七条款（前导零、`_` 位间、点侧数字、指数形）、后缀集（i8–u64/f32/f64）、`1e5` 切形（无点指数的 int/float 分界）；int/float kind 判定。
   来源：proposal 目标 2；design D2（lexnum.we 模块）
   验证：E0006 全码矩阵语料（每条款一正一负）先红后绿；conformance 源子集（数值密集）翻绿
-- [ ] **rune 字面量**：`'x'` 单字符/单逃逸形、E0003 两形（未闭/多字符）、逃逸入口共享 T4 的 consumeEscape（本任务先直通字符形）。
+  落地（2026-09-18）：先红（533 放行/281 发散——WEC-PENDING number 形）后绿 `reconciled 531`；七条款 + based/float 验证器逐条款、八后缀序表、`1e5` 切形与 `..` 不入 span 两边界语料钉；数值密集 conformance 源随围栏翻绿、`literal:let-one` 兑现 T1 预言；%q 多 rune 面 quoteText（design 补记三）
+- [x] **rune 字面量**：`'x'` 单字符/单逃逸形、E0003 两形（未闭/多字符）、逃逸入口共享 T4 的 consumeEscape（本任务先直通字符形）。
   来源：proposal 目标 2
   验证：rune 正负矩阵语料绿；`'\u{41}'` 形留 T4（逃逸校验落成后补绿）
+  落地（2026-09-18）：单字符形（含非 ASCII `'中'`）+ E0003 两形（EOF/换行未闭、空引/多字符形状）语料绿；逃逸半面 = pendingFail("rune escape")，围栏三判据保守排除（成功路径文本含反斜杠、E0003 源含反斜杠、源含 `#[`——T4 骑码两形，design 补记三-1）；consumeRuneLit 每处 fail 早退保 panic 语义
 
 
 ## T4 字符串、逃逸、attr、插值洞

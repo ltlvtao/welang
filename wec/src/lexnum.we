@@ -1,8 +1,9 @@
 // lexnum — the port's pure helpers (B3b): the codepoint width table, the
 // numeric renderers the message discipline needs (decimal and the two hex
-// cases), the serialization escaping, the Go-%q quote face for E0001's
-// character references, and the byte-value probe. NumericSpan itself is
-// T3's and lands beside these.
+// cases), the serialization escaping, the Go-%q quote faces for the
+// character references, the byte-value probe, and the numeric-literal
+// span and validators (E0006's clauses, ported clause for clause from
+// internal/lex).
 //
 // The byte-value probe exists because We has no byte-exposure face: a
 // single byte b >= 0x80 cannot be read as a number, only compared as a
@@ -111,24 +112,50 @@ pub fn esc(s: String) -> String {
 // are corners the corpus never reaches in these messages; a divergence
 // there fails the reconciliation loudly rather than passing silently.
 pub fn quote(text: String) -> String {
+    return "\"" + quoteBody(text) + "\""
+}
+
+// quoteBody is quote's per-rune body (no surrounding quotes).
+fn quoteBody(text: String) -> String {
     let c = string.runeCode(text.charAt(0))
-    var body = ""
     if c == 0x22 {
-        body = "\\\""
-    } else if c == 0x5C {
-        body = "\\\\"
-    } else if c == 0x0A {
-        body = "\\n"
-    } else if c == 0x09 {
-        body = "\\t"
-    } else if c == 0x0D {
-        body = "\\r"
-    } else if c >= 0x20 && c <= 0x7E {
-        body = text
-    } else if c >= 0x80 {
-        body = text
-    } else {
-        body = "\\x" + hex2Lower(c)
+        return "\\\""
+    }
+    if c == 0x5C {
+        return "\\\\"
+    }
+    if c == 0x0A {
+        return "\\n"
+    }
+    if c == 0x09 {
+        return "\\t"
+    }
+    if c == 0x0D {
+        return "\\r"
+    }
+    if c >= 0x20 && c <= 0x7E {
+        return text
+    }
+    if c >= 0x80 {
+        return text
+    }
+    return "\\x" + hex2Lower(c)
+}
+
+// quoteText is the %q face for a multi-rune span (E0006's message quotes
+// the whole numeric span). The spans are printable ASCII by construction;
+// any other byte takes the same per-rune face as quote, so a divergence
+// still fails the reconciliation loudly.
+pub fn quoteText(s: String) -> String {
+    var body = ""
+    var off: Int64 = 0
+    var ri: Int64 = 0
+    let n = s.byteLength()
+    while off < n {
+        let w = widthOf(string.runeCode(s.charAt(ri)))
+        body = body + quoteBody(s.byteSlice(off, off + w))
+        off = off + w
+        ri = ri + 1
     }
     return "\"" + body + "\""
 }
@@ -193,4 +220,362 @@ pub fn probeByteValue(s: String) -> Int64 {
         k = k + 1
     }
     return 0 - 1
+}
+
+// --- the numeric face (B3b T3) ---
+//
+// Everything below works on numeric spans — runs of [0-9a-zA-Z_.+-] the
+// scanner already carved out — so every byte is ASCII and byteAt is exact.
+
+// byteAt names one byte's value. On a numeric span (always ASCII) this is
+// direct; a non-ASCII byte answers -1 and fails loudly downstream.
+pub fn byteAt(s: String, i: Int64) -> Int64 {
+    return probeByteValue(s.byteSlice(i, i + 1))
+}
+
+pub fn isDigitB(b: Int64) -> Bool {
+    return b >= 48 && b <= 57
+}
+
+pub fn isLetterB(b: Int64) -> Bool {
+    return (b >= 97 && b <= 122) || (b >= 65 && b <= 90)
+}
+
+pub fn isHexDigitB(b: Int64) -> Bool {
+    return isDigitB(b) || (b >= 97 && b <= 102) || (b >= 65 && b <= 70)
+}
+
+// hasDot reports whether the span carries a dot (the float branch's
+// discriminator).
+pub fn hasDot(s: String) -> Bool {
+    let n = s.byteLength()
+    var k: Int64 = 0
+    while k < n {
+        if byteAt(s, k) == 46 {
+            return true
+        }
+        k = k + 1
+    }
+    return false
+}
+
+// numericSpan returns the end offset of the numeric-shaped run starting
+// at i: [0-9a-zA-Z_] freely; '.' consumed unless the next byte opens a
+// `..` token (a numeric literal's maximal munch never absorbs a dot that
+// begins `..`); '+'/'-' consumed only immediately after an exponent
+// marker of a dotted decimal form. s[i] must be a digit.
+pub fn numericSpan(s: String, i: Int64) -> Int64 {
+    let n = s.byteLength()
+    var dot = false
+    var k = i
+    while k < n {
+        let c = byteAt(s, k)
+        if isDigitB(c) || isLetterB(c) || c == 95 {
+            k = k + 1
+        } else if c == 46 {
+            var opensRange = false
+            if k + 1 < n {
+                if byteAt(s, k + 1) == 46 {
+                    opensRange = true
+                }
+            }
+            if opensRange {
+                return k
+            }
+            dot = true
+            k = k + 1
+        } else if c == 43 || c == 45 {
+            var okSign = false
+            if dot && k > 0 {
+                let pc = byteAt(s, k - 1)
+                if pc == 101 || pc == 69 {
+                    okSign = true
+                }
+            }
+            if okSign {
+                k = k + 1
+            } else {
+                return k
+            }
+        } else {
+            return k
+        }
+    }
+    return k
+}
+
+// digitRunEnd returns the end of the leading [0-9_]* run of s at i.
+pub fn digitRunEnd(s: String, i: Int64) -> Int64 {
+    let n = s.byteLength()
+    var k = i
+    while k < n {
+        let c = byteAt(s, k)
+        if isDigitB(c) || c == 95 {
+            k = k + 1
+        } else {
+            break
+        }
+    }
+    return k
+}
+
+// stripUnderscores removes every separator (checkDigitRun's bare form).
+fn stripUnderscores(s: String) -> String {
+    var out = ""
+    let n = s.byteLength()
+    var k: Int64 = 0
+    while k < n {
+        let c = byteAt(s, k)
+        if c != 95 {
+            out = out + s.byteSlice(k, k + 1)
+        }
+        k = k + 1
+    }
+    return out
+}
+
+// checkDigitRun validates one [0-9_]* run: underscores strictly between
+// two digits, and — when leadZero is set (integer and float integer
+// parts) — no leading decimal zero on the underscore-stripped digits.
+// An empty answer means the run passes.
+pub fn checkDigitRun(run: String, leadZero: Bool) -> String {
+    if leadZero {
+        let bare = stripUnderscores(run)
+        if bare.byteLength() > 1 {
+            if byteAt(bare, 0) == 48 {
+                return "a decimal literal has no leading zero (0 alone is allowed)"
+            }
+        }
+    }
+    let rn = run.byteLength()
+    var j: Int64 = 0
+    while j < rn {
+        if byteAt(run, j) == 95 {
+            var bad = false
+            if j == 0 {
+                bad = true
+            } else if j == rn - 1 {
+                bad = true
+            } else if isDigitB(byteAt(run, j - 1)) == false {
+                bad = true
+            } else if isDigitB(byteAt(run, j + 1)) == false {
+                bad = true
+            } else {
+                bad = false
+            }
+            if bad {
+                return "_ separates digit groups only between two digits"
+            }
+        }
+        j = j + 1
+    }
+    return ""
+}
+
+// intSuffixAt is the integer suffix table in the reference's order.
+fn intSuffixAt(k: Int64) -> String {
+    if k == 0 {
+        return "i8"
+    }
+    if k == 1 {
+        return "u8"
+    }
+    if k == 2 {
+        return "i16"
+    }
+    if k == 3 {
+        return "u16"
+    }
+    if k == 4 {
+        return "i32"
+    }
+    if k == 5 {
+        return "u32"
+    }
+    if k == 6 {
+        return "i64"
+    }
+    return "u64"
+}
+
+pub fn knownIntSuffix(tail: String) -> Bool {
+    var k: Int64 = 0
+    while k < 8 {
+        if tail == intSuffixAt(k) {
+            return true
+        }
+        k = k + 1
+    }
+    return false
+}
+
+pub fn knownFloatSuffix(tail: String) -> Bool {
+    return tail == "f32" || tail == "f64"
+}
+
+pub fn allLetters(s: String) -> Bool {
+    let n = s.byteLength()
+    if n == 0 {
+        return false
+    }
+    var k: Int64 = 0
+    while k < n {
+        if isLetterB(byteAt(s, k)) == false {
+            return false
+        }
+        k = k + 1
+    }
+    return true
+}
+
+// digitOfBaseB reports whether the byte is a digit of the based literal's
+// base (base is the prefix letter: x, o, or b).
+fn digitOfBaseB(c: Int64, base: Int64) -> Bool {
+    if base == 120 {
+        return isHexDigitB(c)
+    }
+    if base == 111 {
+        return c >= 48 && c <= 55
+    }
+    return c == 48 || c == 49
+}
+
+// validateBased checks 0x/0o/0b forms: integer forms only — digits of the
+// base with separators, an optional integer suffix, nothing else. An
+// empty answer means the form passes.
+pub fn validateBased(s: String) -> String {
+    let base = byteAt(s, 1)
+    let rest = s.byteSlice(2, s.byteLength())
+    if hasDot(rest) {
+        return "based literals (0x/0o/0b) are integer forms: no dot, no exponent"
+    }
+    var body = rest
+    let rn = rest.byteLength()
+    var k: Int64 = 0
+    while k < 8 {
+        let suf = intSuffixAt(k)
+        let sl = suf.byteLength()
+        if rn > sl {
+            if rest.byteSlice(rn - sl, rn) == suf {
+                if digitOfBaseB(byteAt(rest, rn - sl - 1), base) {
+                    body = rest.byteSlice(0, rn - sl)
+                    break
+                }
+            }
+        }
+        k = k + 1
+    }
+    if body == "" {
+        return "the base prefix wants at least one digit of its base"
+    }
+    let bn = body.byteLength()
+    var j: Int64 = 0
+    while j < bn {
+        let c = byteAt(body, j)
+        if digitOfBaseB(c, base) == false {
+            if c == 95 {
+                var bad = false
+                if j == 0 {
+                    bad = true
+                } else if j == bn - 1 {
+                    bad = true
+                } else if digitOfBaseB(byteAt(body, j - 1), base) == false {
+                    bad = true
+                } else if digitOfBaseB(byteAt(body, j + 1), base) == false {
+                    bad = true
+                } else {
+                    bad = false
+                }
+                if bad {
+                    return "_ separates digit groups only between two digits"
+                }
+            } else {
+                return "only digits of the literal's base may follow its prefix"
+            }
+        }
+        j = j + 1
+    }
+    return ""
+}
+
+// validateFloat checks dotted decimal forms: digits '.' digits, an
+// optional exponent (e/E, optional sign, at least one digit), an optional
+// float suffix, and nothing else. An empty answer means the form passes.
+pub fn validateFloat(s: String) -> String {
+    var body = s
+    let n0 = s.byteLength()
+    var stripped = false
+    if n0 > 3 {
+        if s.byteSlice(n0 - 3, n0) == "f32" {
+            if isDigitB(byteAt(s, n0 - 4)) {
+                body = s.byteSlice(0, n0 - 3)
+                stripped = true
+            }
+        }
+    }
+    if stripped == false {
+        if n0 > 3 {
+            if s.byteSlice(n0 - 3, n0) == "f64" {
+                if isDigitB(byteAt(s, n0 - 4)) {
+                    body = s.byteSlice(0, n0 - 3)
+                }
+            }
+        }
+    }
+    var j = digitRunEnd(body, 0)
+    let headDetail = checkDigitRun(body.byteSlice(0, j), true)
+    if headDetail != "" {
+        return headDetail
+    }
+    let bn = body.byteLength()
+    if j >= bn {
+        return "a float wants a digit on each side of the dot"
+    }
+    if byteAt(body, j) != 46 {
+        return "a float wants a digit on each side of the dot"
+    }
+    if j == 0 {
+        return "a float wants a digit on each side of the dot"
+    }
+    j = j + 1
+    if j >= bn {
+        return "a float wants a digit on each side of the dot"
+    }
+    if isDigitB(byteAt(body, j)) == false {
+        return "a float wants a digit on each side of the dot"
+    }
+    var k = digitRunEnd(body, j)
+    let fracDetail = checkDigitRun(body.byteSlice(j, k), false)
+    if fracDetail != "" {
+        return fracDetail
+    }
+    j = k
+    if j < bn {
+        let ec = byteAt(body, j)
+        if ec == 101 || ec == 69 {
+            j = j + 1
+            if j < bn {
+                let sc = byteAt(body, j)
+                if sc == 43 || sc == 45 {
+                    j = j + 1
+                }
+            }
+            if j >= bn {
+                return "an exponent wants at least one digit"
+            }
+            if isDigitB(byteAt(body, j)) == false {
+                return "an exponent wants at least one digit"
+            }
+            k = digitRunEnd(body, j)
+            let expDetail = checkDigitRun(body.byteSlice(j, k), false)
+            if expDetail != "" {
+                return expDetail
+            }
+            j = k
+        }
+    }
+    if j < bn {
+        return "the suffix set is closed (i8 i16 i32 i64 u8 u16 u32 u64, floats f32 f64)"
+    }
+    return ""
 }

@@ -267,10 +267,10 @@ impl Lexer {
     }
 
     // scanAll is the main token loop: skip whitespace and comments, then
-    // scan one token, until end of input. The literal faces ('"', '\'',
-    // '#', digits) latch a WEC-PENDING marker — T3/T4's faces; the
-    // reconciliation fence guarantees no admitted source reaches them
-    // before those tasks land.
+    // scan one token, until end of input. The literal faces still to come
+    // ('"' strings, '#' attributes, and the escape half of rune literals)
+    // latch a WEC-PENDING marker — T4's faces; the reconciliation fence
+    // guarantees no admitted source reaches them before those tasks land.
     pub fn scanAll(mut self) {
         while true {
             while self.off < self.n {
@@ -301,11 +301,17 @@ impl Lexer {
             if c == 34 {
                 self.pendingFail("string literal")
             } else if c == 39 {
-                self.pendingFail("rune literal")
+                let t = self.scanRune()
+                if self.failed == false {
+                    self.emit(t)
+                }
             } else if c == 35 {
                 self.pendingFail("attribute")
             } else if c >= 48 && c <= 57 {
-                self.pendingFail("number")
+                let t = self.scanNumber()
+                if self.failed == false {
+                    self.emit(t)
+                }
             } else if isIdentStartCode(c) {
                 let t = self.scanWord()
                 self.emit(t)
@@ -441,6 +447,135 @@ impl Lexer {
             kind = "_"
         }
         return Token { kind: kind, text: text, line: ln, col: cl, attrName: "", attrArgs: "" }
+    }
+
+    // scanRune consumes one rune literal token: exactly one character or
+    // one escape between single quotes on a single line. The escape form
+    // is T4's consumeEscape face and latches the pending marker here; the
+    // fence keeps escape-bearing rune sources out until then.
+    pub fn scanRune(mut self) -> Token {
+        let ln = self.line
+        let cl = self.col
+        let start = self.off
+        self.consumeRuneLit()
+        return Token { kind: "rune", text: self.src.byteSlice(start, self.off), line: ln, col: cl, attrName: "", attrArgs: "" }
+    }
+
+    // consumeRuneLit consumes one rune literal starting at its opening
+    // quote. The registry folds the content rule into E0003: a rune
+    // literal holds exactly one character or one escape, and it must
+    // close on the same line. Go's fail panics, so the port returns
+    // outright at each failure site.
+    pub fn consumeRuneLit(mut self) {
+        let quoteLine = self.line
+        let quoteCol = self.col
+        self.advance() // opening '
+        if self.off >= self.n {
+            self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — not closed before the end of the line")
+            return
+        }
+        let c = self.codeHere()
+        if c == 10 || c == 13 {
+            self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — not closed before the end of the line")
+            return
+        }
+        if c == 92 {
+            // T4's consumeEscape face; the fence keeps it out of the
+            // corpus until then.
+            self.pendingFail("rune escape")
+            return
+        }
+        if c == 39 {
+            self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — a rune holds exactly one character or one escape") // '' holds nothing
+            return
+        }
+        self.advance() // exactly one character
+        if self.off >= self.n {
+            self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — not closed before the end of the line")
+            return
+        }
+        let c2 = self.codeHere()
+        if c2 == 10 || c2 == 13 {
+            self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — not closed before the end of the line")
+            return
+        }
+        if c2 != 39 {
+            self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — a rune holds exactly one character or one escape")
+            return
+        }
+        self.advance() // closing '
+    }
+
+    // scanNumber consumes one numeric literal: a greedy numeric-shaped
+    // span, then a validation against chapter 1's forms. A violation
+    // reports E0006 at the span start with the clause that failed. One
+    // form cuts the token short: an undotted decimal followed by an
+    // identifier-shaped tail (as in `1e5` — no dot means no float
+    // attempt) emits the integer and the tail re-lexes as a separate
+    // identifier token.
+    pub fn scanNumber(mut self) -> Token {
+        let ln = self.line
+        let cl = self.col
+        let start = self.off
+        let end = lexnum.numericSpan(self.src, start)
+        let text = self.src.byteSlice(start, end)
+        let tn = text.byteLength()
+        var consume = tn
+        var kind = "int"
+
+        var isBased = false
+        if tn >= 2 {
+            if lexnum.byteAt(text, 0) == 48 {
+                let b1 = lexnum.byteAt(text, 1)
+                if b1 == 120 || b1 == 111 || b1 == 98 {
+                    isBased = true
+                }
+            }
+        }
+        if isBased {
+            let detail = lexnum.validateBased(text)
+            if detail != "" {
+                self.fail(ln, cl, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": " + detail)
+                return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+            }
+        } else if lexnum.hasDot(text) {
+            kind = "float"
+            let detail = lexnum.validateFloat(text)
+            if detail != "" {
+                self.fail(ln, cl, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": " + detail)
+                return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+            }
+        } else {
+            let i = lexnum.digitRunEnd(text, 0)
+            let digits = text.byteSlice(0, i)
+            let tail = text.byteSlice(i, tn)
+            let detail = lexnum.checkDigitRun(digits, true)
+            if detail != "" {
+                self.fail(ln, cl, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": " + detail)
+                return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+            }
+            var cut = false
+            if tail != "" {
+                if lexnum.knownIntSuffix(tail) == false {
+                    if lexnum.knownFloatSuffix(tail) || lexnum.allLetters(tail) {
+                        // `42f32` (a float suffix on an integer form) and
+                        // `42int` (a letter-shaped suffix attempt) both
+                        // violate the closed set
+                        self.fail(ln, cl, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": the suffix set is closed (i8 i16 i32 i64 u8 u16 u32 u64, floats f32 f64)")
+                        return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+                    }
+                    cut = true
+                }
+            }
+            if cut {
+                consume = i // the tail re-lexes as an identifier
+            }
+        }
+
+        self.off = start + consume
+        self.ri = self.ri + consume
+        self.col = self.col + consume // numeric spans are ASCII
+        return Token { kind: kind, text: text.byteSlice(0, consume), line: ln, col: cl, attrName: "", attrArgs: "" }
     }
 
     // scanOperator consumes one operator or punctuation token — maximal

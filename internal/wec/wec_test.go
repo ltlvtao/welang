@@ -146,14 +146,34 @@ func (s stage) admits(e entry, toks []lex.Token, d *diag.Diagnostic) bool {
 		// "#"-not-followed and unit-shape messages); that face is T4's, so
 		// until then the code set alone cannot keep its entries out — the
 		// messages name the attribute unit, and the discriminator is
-		// computed from the reference's own output.
+		// computed from the reference's own output. The attribute face can
+		// also die inside its arguments with the ARGUMENT's own code (an
+		// E0006 from a malformed number in `#[cfg(1__0)]`), so any source
+		// carrying `#[` stays out until then — conservative by design and
+		// removed with the rest of the fence at T5.
 		if d.Code() == "E0001" && strings.Contains(d.Message(), "attribute unit") {
+			return false
+		}
+		if strings.Contains(e.src, "#[") {
+			return false
+		}
+		// The escape half of the rune face rides E0003 the same way: a
+		// source carrying a backslash can reach T4's consumeEscape before
+		// failing the shape, so it stays out until then.
+		if d.Code() == "E0003" && strings.Contains(e.src, `\`) {
 			return false
 		}
 		return true
 	}
 	for _, tk := range toks {
 		if s.kinds[tk.Kind] {
+			// The rune face's escape half rides the same kind: a rune
+			// token whose text carries a backslash is T4's consumeEscape
+			// face, so until then it stays out — the discriminator reads
+			// the reference's own token text.
+			if tk.Kind == "rune" && strings.Contains(tk.Text, `\`) {
+				return false
+			}
 			continue
 		}
 		if s.operators && !namedKinds[tk.Kind] {
@@ -164,16 +184,17 @@ func (s stage) admits(e entry, toks []lex.Token, d *diag.Diagnostic) bool {
 	return true
 }
 
-// fence is the current task's stage. T2 admits the scanner core's kinds —
+// fence is the current task's stage. T2 admitted the scanner core's kinds —
 // ident, keyword, and the operator kinds wholesale — plus the two error
 // codes its faces produce (E0001 across its encoding and inventory
-// shapes, E0004 for the unterminated block comment). Later tasks widen it
-// (T3 the numeric kinds with E0003/E0006, T4 the literal kinds with the
-// remaining codes, T5 the full corpus with the fence removed).
+// shapes, E0004 for the unterminated block comment). T3 widens it with
+// the numeric kinds and E0006/E0003. Later tasks widen it further (T4 the
+// literal kinds with the remaining codes, T5 the full corpus with the
+// fence removed).
 var fence = stage{
-	kinds:     map[string]bool{"ident": true, "keyword": true, "eof": true},
+	kinds:     map[string]bool{"ident": true, "keyword": true, "eof": true, "int": true, "float": true, "rune": true},
 	operators: true,
-	errs:      map[string]bool{"E0001": true, "E0004": true},
+	errs:      map[string]bool{"E0001": true, "E0004": true, "E0006": true, "E0003": true},
 }
 
 // entry is one corpus source under its corpus-qualified name.
@@ -217,6 +238,50 @@ func loadCorpus(t *testing.T) []entry {
 		entry{"literal:block-comment-open", "/* never closed"},
 		entry{"literal:docs-run", "/// one\n/// two\nlet x\n"},
 		entry{"literal:docs-broken", "/// one\n// plain\n/// two\nlet x\n"},
+		// T3's numeric face: one positive and one negative per E0006
+		// clause (separator, base prefix, base digits, leading zero, dot
+		// sides, exponent, closed suffix, based-is-integer), plus the
+		// maximal-munch boundaries — the `..` range token never joins a
+		// span, and an undotted decimal with an identifier-shaped tail
+		// (`1e5`) cuts after the integer.
+		entry{"literal:num-sep-pos", "1_000_000"},
+		entry{"literal:num-sep-neg", "1__0"},
+		entry{"literal:num-sep-edge", "1_"},
+		entry{"literal:num-based-hex", "0xFF"},
+		entry{"literal:num-based-bin", "0b1010_1011"},
+		entry{"literal:num-based-oct", "0o777"},
+		entry{"literal:num-prefix-neg", "0x"},
+		entry{"literal:num-based-dig-neg", "0o8"},
+		entry{"literal:num-hex-letter-neg", "0xAG"},
+		entry{"literal:num-leadzero-neg", "01"},
+		entry{"literal:num-leadzero-sep", "0_1"},
+		entry{"literal:num-zero", "0"},
+		entry{"literal:num-float-pos", "1.5"},
+		entry{"literal:num-float-exp", "1.5e3"},
+		entry{"literal:num-float-exp-neg-sign", "1.5E-3"},
+		entry{"literal:num-float-exp-sep", "1.5e3_3"},
+		entry{"literal:num-dot-sides-neg", "1."},
+		entry{"literal:num-exp-neg", "1.5e"},
+		entry{"literal:num-exp-sign-neg", "1.5e+"},
+		entry{"literal:num-based-dot-neg", "0x1.5"},
+		entry{"literal:num-int-suffix", "42i8"},
+		entry{"literal:num-suffix-float-on-int", "42f32"},
+		entry{"literal:num-suffix-unknown", "42int"},
+		entry{"literal:num-suffix-on-float", "1.5i8"},
+		entry{"literal:num-suffix-after-exp", "1.5e3x"},
+		entry{"literal:num-cut-ident-tail", "1e5"},
+		entry{"literal:num-range-dotdot", "1..5"},
+		entry{"literal:num-based-range", "0x1..2"},
+		// T3's rune face: the plain character forms and E0003's two
+		// shapes (unterminated, and empty-or-multi-character). Escape
+		// forms ('\n', '\u{41}') are T4's consumeEscape face and stay
+		// fence-excluded by the token-text discriminator.
+		entry{"literal:rune-pos", "'a'"},
+		entry{"literal:rune-pos-nonascii", "'中'"},
+		entry{"literal:rune-empty-neg", "''"},
+		entry{"literal:rune-multi-neg", "'ab'"},
+		entry{"literal:rune-eof-neg", "'a"},
+		entry{"literal:rune-newline-neg", "'a\n'"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
