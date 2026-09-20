@@ -68,9 +68,11 @@
 
 ## T6 审查与归档
 
-- [ ] **完成审查**：welang-code-review 七条（span 对账、验证诚实性、红先在册、诊断协议、单一权威、红线、最小可信验证）；发现随审处置。
+- [x] **完成审查**：welang-code-review 七条（span 对账、验证诚实性、红先在册、诊断协议、单一权威、红线、最小可信验证）；发现随审处置。
   来源：AGENTS.md 流程
   验证：审查表入 proposal「完成审查」；七条全过
-- [ ] **roadmap + follow-up + 归档**：B3b 行翻写 done（as-built 收口）；follow-up 登记 #29（argv/stdin 面）与 #30（字节暴露面）；`change.yaml` archived；目录 `mv` 至 `archive/2026-…-wec-lexer/`；归档提交。
+  落地（2026-09-20）：span `1a7e81a..2c1dc7c` 六提交、9 文件清点与影响层一一对应；零码级发现、一处记录性注记（proposal 状态行 candidate 字样沿 B3a 归档先例不改写）；七条全过
+- [x] **roadmap + follow-up + 归档**：B3b 行翻写 done（as-built 收口）；follow-up 登记 #29（argv/stdin 面）与 #30（字节暴露面）；`change.yaml` archived；目录 `mv` 至 `archive/2026-…-wec-lexer/`；归档提交。
   来源：proposal 目标 7；B2a/B2b/B3a 归档先例
   验证：`validate.py --all --strict` 归档后期望态；归档复验（17 包 0 FAIL、conformance 933、docs_sync 33 对）
+  落地（2026-09-20）：#31（let-别名错编译）随 T4 发现一并登记（三-entry 双语）；归档至 `archive/2026-09-20-wec-lexer/`；复验数字见归档提交信息

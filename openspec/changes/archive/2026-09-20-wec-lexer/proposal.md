@@ -104,3 +104,19 @@ B3a 收口（归档提交 `1a7e81a`，conformance 933、codegen 单测 482、16 
 | 8 | 负向断言 | 负面语料是实构违规样例（全码矩阵逐枚）；13 字节值角的不可达以「查定不中即任务失败」的响亮失败断言（非静默）；突变电池 ≥6 枚含负向捕获性判决 |
 | 9 | 完成度闭环 | 非语言特性变更，闭环三要素对位为：移植体（wec We 源，D1/D2/D6）、验证塔（`internal/wec`，D5/D7）、驱动与序列化契约（D4）——三者皆有方案且互相咬合（塔的参考侧活算依赖契约、契约依赖固定路径决策） |
 | 10 | 未决问题 | 无阻塞未决——argv/stdin 与字节暴露两缺口已以固定路径契约 + 语料门槛 + 响亮失败处理并登记 #29/#30（登记项非设计选择，B2b #26 先例）；B3d/B3e 现场拆分属轨道裁决 1 授权的执行自由度 |
+
+## 完成审查（welang-code-review，2026-09-20，span `1a7e81a..2c1dc7c` 六提交）
+
+| # | 条目 | 结论 |
+| --- | --- | --- |
+| 1 | 规范符合性 | span 全部 9 个改动文件与申报影响层 [compiler, docs] 一一对应（`internal/wec` 纯测试塔 + `wec/` We 源语言消费者 + openspec 工件）；`docs/spec/`、`diagnostics.toml`、`internal/diag/`、stdlib、runtime 对 span 零 diff——「不改变语言行为」「无规范增量」标记兑现 |
+| 2 | 验证诚实性 | 语料账 1105（stdlib 7/wec 3/lextest 36/conformance 978/字面 81）→ `reconciled 1104`（唯一剔除 = lextest `"\xff"` 13 值角，日志披露非静默）；电池发散 2/870/1031/13/2/205 逐枚判决表入 design 补记五，每枚还原后复跑绿 ×6；conformance 933 不动（`-count=1` 全量零改写、testdata 0 行）；包 16→17；M3 首轮锚点缩进错被 apply 的 count==1 断言拦下并如实记档（该轮「红跑」实为未突变的绿跑——电池自我防呆在案，非事后美化） |
+| 3 | 测试先行 | 落地记红态全在册：T1 构建失败形（lstat wec 缺席）+ 骨架 E0501 形重排；T2 261 放行/259 发散；T3 533/281（WEC-PENDING number 形）；T4 1104 放行/573 发散（538 string/30 attr/5 rune escape 三族）；T5 电池六枚逐枚先红（施加 → 发散）后绿（还原 → 复跑）、围栏摘除以「行为保持 1104 不变」收口 |
+| 4 | 诊断协议 | 零新诊断码、零 --json 面改（internal/diag 对 span 零 diff）；wec 逐字复述 E0001–E0009 全部消息（含 em-dash 与引号字形，D3 verbatim 纪律）；序列化规范（T/D/L/E 行）是塔内对账契约非用户面；Go 编译器自身诊断零触（零 Go 生产码） |
+| 5 | 单一权威 | 改动码文件（wec/src 三文件 + internal/wec）注释全英文逐文件核；长期事实归位：设计与 as-built 事实住 design D1–D7 与补记一–五，13 值角住塔注释 + #30，let-别名缺陷住 #31 + wec 源内注释（指名编号），执行状态与三项 follow-up 住 roadmap 双语；无 ADR 增量（无架构裁决——D4 驱动契约是塔内契约，B3f 落 argv 时随 #29 退役） |
+| 6 | 红线 | `refr/` 零命中（span 文件清点）；六提交零署名 trailer（逐枚核）；`WE_UPDATE_GOLDEN` 未用、`git stash` 未用；根下 `wec-input.we`/`wec/build/` 冒烟残留保持未跟踪不入册；无范围外 diff |
+| 7 | 最小可信验证 | 归档前 `validate.py wec-lexer --strict` OK、`docs_sync.py` 33 对；T5 轮全阶梯绿（`go build`/`go vet`/`gofmt -l` 0 文件、`git diff --check` 净、17 包 `-count=1` 0 FAIL、conformance 933）；归档后 `validate.py --all --strict` 期望态 + 17 包全量复跑（本提交前复验） |
+
+**发现与处置（零码级发现，一处记录性注记）**：
+
+- **F1（记录性，不随审改写）**：proposal 头部状态行保持开册时的 candidate 字样——仓先例（B3a 归档件同形），状态权威是 `change.yaml`（本提交随归档翻 archived）。
