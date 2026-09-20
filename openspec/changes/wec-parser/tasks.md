@@ -4,12 +4,14 @@
 
 ## T1 塔先行 v2 + AST 序列化器 + parse 骨架
 
-- [ ] **塔 v2 红先**：`internal/wec` 对账扩为**单一全输出对账**（design D5）——参考侧 B3b serialize + `parser.Parse` 三返回分派（E 行/N 行/ast 段三形拼接）；`TestLexReconciliation` 退役由 `TestOutputReconciliation` 承接（塔日志记演进一行）；Go 侧 AST 序列化器（design D4：P 行族总则 + 全 50+ 节点型对照 `internal/ast` 落定，空源形 `P file 1 1` 为首锚）。红态 = wec 输出尚无解析段 → 全量语料发散记档。
+- [x] **塔 v2 红先**：`internal/wec` 对账扩为**单一全输出对账**（design D5）——参考侧 B3b serialize + `parser.Parse` 三返回分派（E 行/N 行/ast 段三形拼接）；`TestLexReconciliation` 退役由 `TestOutputReconciliation` 承接（塔日志记演进一行）；Go 侧 AST 序列化器（design D4：P 行族总则 + 全 50+ 节点型对照 `internal/ast` 落定，空源形 ~~`P file 1 1`~~→`P file 0 0 0` 为首锚——`ast.File` 无 Line/Col 字段，D4 无位者 0 律 + isTestModule 第三栏，design 补记一-1）。红态 = wec 输出尚无解析段 → 全量语料发散记档。
   来源：proposal 目标 3、4；design D4、D5
   验证：红态记档（发散条目数与首例）；序列化器自一致单测（空源/单语句两形）；`go vet ./internal/wec/`
-- [ ] **parse 骨架绿一枚**：`wec/src/parse.we` 立 Parser record（D1 字段表全量）+ Token record + T 行游标（next/peek/cur/brokeLine + unesc，D2）+ `run(toksText: String, docsText: String) -> String` 入口（parseFile 空源形：tokens/docs 原样透传 + `ast` 头 + `P file 1 1`）；`main.we` 接线（lex E 行则原样止，否则两段文本入 parse.run、输出追加）。首枚语料（空源）塔绿。
+  落地（2026-09-20）：序列化器 `internal/wec/astser_test.go`（~60 P 行形全表 + parseSection 三返回分派；钉两形 `TestParseSectionPinsTheFormat`，钉逮手推错一枚——Binding 的 NameLine 5→1）；红态 = **95 绿 / 1009 发散、首例 `literal:empty` 字节 18**（恰在 ast 段应起处；95 = 词法错条目 E 单行态不含解析段）；门槛棘轮 97 = 95 + 空源 2（D5「门槛=无门槛」句的 as-built 修正，补记一-2：发散记日志不算失败、失败面 = 门槛 + ran==0，T6 升全量）；发散报告改首差字节 + ±48 窗口；语料 as-built **1106**（parse.we 自入 +1；放行 1105、剔 1 = #30 lextest `"\xff"`）；`go vet` 净
+- [x] **parse 骨架绿一枚**：`wec/src/parse.we` 立 Parser record（D1 字段表全量）+ Token record + T 行游标（next/peek/cur/brokeLine + unesc，D2）+ `run(toksText: String, docsText: String) -> String` 入口（parseFile 空源形：tokens/docs 原样透传 + `ast` 头 + ~~`P file 1 1`~~→`P file 0 0 0`）；`main.we` 接线（lex E 行则原样止，否则两段文本入 parse.run、输出追加）。首枚语料（空源）塔绿。
   来源：proposal 目标 1；design D1、D2
   验证：空源语料 `bytes.Equal` 绿；`go test ./internal/wec/ -count=1` 该子集绿；`we check wec/` 干净
+  落地（2026-09-20）：Token 重建 = 模块级 `tokAt(toksText, pos)`（初值在构造字面量内给——**局部 record 字段赋值 `p.cur = x` 是解析层 E0105**，与停面 H 同律：字段形唯 impl `self.field`）；lexnum 增 `byteChar`（probeByteValue 之逆：34 值控制表 + 四探针表的泄漏位）；**语言面地图新停面 I：`var` 绑定构造 record = M9b 语句集停**（探针隔离钉死：同形 `let` 绿——lex.we `let l = Lexer{…}` + impl 变异即既有绿习语，照抄；补记一-3）；分段逻辑住 parse.we 的 `drive` 适配器（main 保持极小三行纪律）；空源冒烟字节 = 钉原样（`tokens\nT 1 1 eof \nast\nP file 0 0 0\n`）；`we check wec/` exit 0、塔 `reconciled 97 of 1105` 全量绿
 
 ## T2 T 游标消耗 + 文件结构与顶层项 I
 

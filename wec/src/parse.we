@@ -1,0 +1,275 @@
+// parse — the parser port (B3c): internal/parser/parser.go transcribed as
+// We source. This file is the T1 skeleton: the state carrier in full (the
+// design's field table), the T-line cursor that rebuilds tokens from the
+// lexical section, the escape's mechanical inverse, and the run entry
+// answering the empty source exactly. The parse faces themselves land with
+// their tasks (T2-T5); until then run answers the pending marker for
+// every non-empty input.
+//
+// The serialized text this module walks is pure ASCII on its face — esc
+// renders every byte outside 0x21-0x7E as backslash-hex — so byteAt is
+// exact throughout, and the token text the cursor unescapes is always
+// well-formed UTF-8 (the lexer guaranteed it before serializing), so the
+// rebuilt strings load cleanly.
+
+import lexnum
+
+// Token is one lexical unit rebuilt from a T line. It mirrors the six
+// fields the serializer writes (kind, text, position, and the attr face's
+// name and raw arguments) — a module-local twin of lex's Token, because
+// the Parser record carries it as a field and record-with-record stays
+// same-module (the language-face map's green face).
+record Token {
+    kind: String,
+    text: String,
+    line: Int64,
+    col: Int64,
+    attrName: String,
+    attrArgs: String,
+}
+
+// Parser is the port's state carrier — the design's full field table, in
+// the Go struct's order. The stacks are String-encoded (a line per entry,
+// linear scans; identifiers carry no spaces or newlines, so the encodings
+// stay unambiguous): fnsText holds `name;hasRet;deferBody` per fn context,
+// namesText holds `name line` per declared name, itemStartsText holds the
+// top-level item start lines space-separated. The error latch (failed plus
+// the four err fields) replaces Go's panic(stop{d}); the bnd latch replaces
+// panic(bstop{what}) — the two are independent, as in the reference.
+pub record Parser {
+    toksText: String,
+    docsText: String,
+    pos: Int64,
+    cur: Token,
+    last: Token,
+    depth: Int64,
+    loopDepth: Int64,
+    direct: Int64,
+    noBrace: Int64,
+    shortBody: Int64,
+    fnBrace: Int64,
+    valSite: String,
+    fnsText: String,
+    namesText: String,
+    itemStartsText: String,
+    testModule: Int64,
+    inTestBody: Int64,
+    astText: String,
+    failed: Int64,
+    errLine: Int64,
+    errCol: Int64,
+    errCode: String,
+    errMsg: String,
+    bnd: Int64,
+    bndWhat: String,
+}
+
+// zeroTok is the cursor's ground state (also what a position past the last
+// T line loads — the reference never reads there, its eof token being a
+// real token, so the shape only guards the walk).
+fn zeroTok() -> Token {
+    return Token { kind: "eof", text: "", line: 0, col: 0, attrName: "", attrArgs: "" }
+}
+
+// lineEndAt returns the offset of the newline ending the line that starts
+// at from (the string's length when no newline follows).
+fn lineEndAt(s: String, from: Int64) -> Int64 {
+    var i = from
+    let n = s.byteLength()
+    while i < n {
+        if lexnum.byteAt(s, i) == 10 {
+            return i
+        }
+        i = i + 1
+    }
+    return n
+}
+
+// fieldEnd returns the exclusive end of the field starting at from: the
+// next unescaped space, or the line's end at to. A space preceded by an
+// even run of backslashes is a boundary; an odd run escapes it.
+fn fieldEnd(s: String, from: Int64, to: Int64) -> Int64 {
+    var i = from
+    var slashes: Int64 = 0
+    while i < to {
+        let b = lexnum.byteAt(s, i)
+        if b == 0x20 && slashes % 2 == 0 {
+            return i
+        }
+        if b == 0x5C {
+            slashes = slashes + 1
+        } else {
+            slashes = 0
+        }
+        i = i + 1
+    }
+    return to
+}
+
+// unesc reverses the serialization escaping over s[from:to]: a doubled
+// backslash is one backslash, a backslash plus two hex digits is that
+// byte, anything else passes through. esc is mechanically reversible, and
+// the bytes it hid always reform into the well-formed UTF-8 they were.
+fn unesc(s: String, from: Int64, to: Int64) -> String {
+    var out = ""
+    var i = from
+    while i < to {
+        let b = lexnum.byteAt(s, i)
+        if b == 0x5C {
+            let b2 = lexnum.byteAt(s, i + 1)
+            if b2 == 0x5C {
+                out = out + "\\"
+                i = i + 2
+            } else {
+                let v = lexnum.hexVal(b2) * 16 + lexnum.hexVal(lexnum.byteAt(s, i + 2))
+                out = out + lexnum.byteChar(v)
+                i = i + 3
+            }
+        } else {
+            out = out + s.byteSlice(i, i + 1)
+            i = i + 1
+        }
+    }
+    return out
+}
+
+// parseDec reads an ASCII decimal run (the T line's position fields).
+fn parseDec(s: String, from: Int64, to: Int64) -> Int64 {
+    var v: Int64 = 0
+    var i = from
+    while i < to {
+        v = v * 10 + (lexnum.byteAt(s, i) - 48)
+        i = i + 1
+    }
+    return v
+}
+
+// tokAt rebuilds the token carried by the T line starting at pos; a
+// position past the section answers the eof-shaped ground state. The
+// line's fields split at unescaped spaces: T, line, col, kind, text,
+// and — on the attr kind — the name and raw arguments.
+fn tokAt(toksText: String, pos: Int64) -> Token {
+    if pos >= toksText.byteLength() {
+        return zeroTok()
+    }
+    let end = lineEndAt(toksText, pos)
+    var i = pos + 2
+    let e1 = fieldEnd(toksText, i, end)
+    let ln = parseDec(toksText, i, e1)
+    i = e1 + 1
+    let e2 = fieldEnd(toksText, i, end)
+    let cl = parseDec(toksText, i, e2)
+    i = e2 + 1
+    let e3 = fieldEnd(toksText, i, end)
+    let kind = unesc(toksText, i, e3)
+    i = e3 + 1
+    let e4 = fieldEnd(toksText, i, end)
+    let text = unesc(toksText, i, e4)
+    var attrName = ""
+    var attrArgs = ""
+    if kind == "attr" {
+        i = e4 + 1
+        let e5 = fieldEnd(toksText, i, end)
+        attrName = unesc(toksText, i, e5)
+        i = e5 + 1
+        let e6 = fieldEnd(toksText, i, end)
+        attrArgs = unesc(toksText, i, e6)
+    }
+    return Token { kind: kind, text: text, line: ln, col: cl, attrName: attrName, attrArgs: attrArgs }
+}
+
+impl Parser {
+    // next consumes the current token: it becomes last, and the cursor
+    // moves to the following T line. The reference's toks slice always
+    // ends with a real eof token, so the walk only ever loads there or
+    // before — the ground state past the end is a guard the parse faces
+    // never reach (they check atEnd first, as the reference does).
+    pub fn next(mut self) {
+        self.last = self.cur
+        self.pos = lineEndAt(self.toksText, self.pos) + 1
+        self.cur = tokAt(self.toksText, self.pos)
+    }
+
+    // peek is the token after the current one.
+    pub fn peek(mut self) -> Token {
+        return tokAt(self.toksText, lineEndAt(self.toksText, self.pos) + 1)
+    }
+
+    // atEnd reports whether the cursor sits at the eof token.
+    pub fn atEnd(mut self) -> Bool {
+        return self.cur.kind == "eof"
+    }
+
+    // brokeLine reports whether the current token starts a new line
+    // relative to the last consumed one — the depth-zero statement
+    // boundary fact, the reference's own comparison.
+    pub fn brokeLine(mut self) -> Bool {
+        return self.cur.line > self.last.line
+    }
+}
+
+// run is the parse section's entry (the design's module contract): the
+// driver hands it the lexical sections — the T lines and the D/L lines —
+// and appends what it returns. The empty source is the one shape the
+// skeleton answers exactly: the ast header and the file line, whose
+// absent positions render 0 0 and whose test-module fact is 0 (the
+// driver's fixed file name never ends _test.we). Every other input still
+// awaits its faces.
+pub fn run(toksText: String, docsText: String) -> String {
+    let p = Parser {
+        toksText: toksText, docsText: docsText, pos: 0,
+        cur: tokAt(toksText, 0), last: zeroTok(),
+        depth: 0, loopDepth: 0, direct: 0, noBrace: 0, shortBody: 0, fnBrace: 0,
+        valSite: "", fnsText: "", namesText: "", itemStartsText: "",
+        testModule: 0, inTestBody: 0, astText: "",
+        failed: 0, errLine: 0, errCol: 0, errCode: "", errMsg: "",
+        bnd: 0, bndWhat: "",
+    }
+    if p.cur.kind == "eof" {
+        return "ast\n" + "P file 0 0 0\n"
+    }
+    return "WEC-PENDING parse\n"
+}
+
+// drive adapts the driver's contract: a lexical error is the whole output
+// already, so it appends nothing; otherwise the lexical output splits at
+// its own line boundaries into the T-line and D/L-line sections (the
+// headers drop out, the lines keep theirs) and run takes them. Escaped
+// text never carries a raw newline, so the split is exact.
+pub fn drive(lexOut: String) -> String {
+    if lexOut.byteLength() >= 2 {
+        if lexOut.byteSlice(0, 2) == "E " {
+            return ""
+        }
+    }
+    var toks = ""
+    var docs = ""
+    var inDocs = false
+    var headerSkipped = false
+    let n = lexOut.byteLength()
+    var lineStart: Int64 = 0
+    var i: Int64 = 0
+    while i < n {
+        if lexnum.byteAt(lexOut, i) == 10 {
+            if i > lineStart {
+                let line = lexOut.byteSlice(lineStart, i)
+                if headerSkipped == false {
+                    headerSkipped = true
+                } else {
+                    if line == "docs" {
+                        inDocs = true
+                    } else {
+                        if inDocs {
+                            docs = docs + line + "\n"
+                        } else {
+                            toks = toks + line + "\n"
+                        }
+                    }
+                }
+            }
+            lineStart = i + 1
+        }
+        i = i + 1
+    }
+    return run(toks, docs)
+}

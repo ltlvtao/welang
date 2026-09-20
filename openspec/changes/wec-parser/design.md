@@ -148,4 +148,12 @@ P arm <line> <col>                       // MatchArm：子行 = 模式、守卫?
 
 ## 补记
 
-（实现期追加）
+### 补记一（T1 落地，2026-09-20）
+
+1. **空源锚订正**：D4 枚举表与「Escaped 行为锚」句的红先锚 ~~`P file 1 1`~~ → **`P file 0 0 0`**。`ast.File` 无 Line/Col 字段（`ast.go:14-23`）——位栏按总则「无位者 0」取 0 0，第三栏是 IsTestModule（Bool 作 0/1）。tasks.md T1 两处同句同订正。
+2. **D5「门槛 = 无门槛」句 as-built 收窄**：全量恒跑、无阶段围栏照写（B3b T5 终态直继）；但断言面 = **单调棘轮常量 `reconciledFloor`**——T1 落地值 97（95 词法错条目 E 单行态 + 2 空源），发散条目记日志（首差字节 + ±48 窗口）不算失败，`ran==0` 兜底提取器坏死。棘轮只升不降，T6 升至全量。「无门槛」原意（无准入围栏、全量从 T1 起跑）保持不变；无棘轮则中程绿面无回归保护，与 D5 自身「条目四态分布随面落成翻绿」的记账义务相抵。
+3. **语言面地图新停面 I（探针钉死）**：`var` 绑定构造 record 形（`var p = Parser { … }`）= M9b 语句集停——We 的 `var` 语句集不含 record 构造表达式。**同形 `let` 绿**：lex.we `let l = Lexer { … }` + impl 内变异即既有绿习语，parse.we 照抄（Parser 构造以 `let` 落绑定、impl 方法内 `self.field` 变异）。另钉同族形：**局部 record 字段赋值 `p.cur = x` 在解析层即 E0105**——字段赋值形唯 impl `self.field` 合法（停面 H 同律），故 Token 游标重建为模块级 `tokAt(toksText, pos)`、初值在构造字面量内一次给足。
+4. **P 行总则 as-built 细则**（序列化器头注即权威，`astser_test.go:21-30`）：可选指针子节点独占 `-` 行（空槽保持位形）；变长 `[]string` 字段（effect 标签、derive 目标、import 路径、插值段）**内联**为父行 esc 字段空格 join——esc 不出裸空格、标识符非纯数字，join 无歧义；节点切片仍按子行承载。File 位栏见订正 1。
+5. **语料 as-built 1106**：提取器逻辑零改动，`wec:parse.we` 随新源自入 +1；放行 1105（剔 1 = lextest `"\xff"`，#30 十三值角原样）。塔日志行随实数打印。
+6. **drive 适配器住 parse.we**：lex 输出的分段（E 行判定 + tokens/docs 两段切分）实现为 `parse.drive(lexOut)`——分段逻辑属解析侧职责，main.we 保持极小三行纪律（读源 → lex → 追加 drive）。
+7. **序列化器钉形逮手推错一枚**：`TestParseSectionPinsTheFormat` 钉空源与单语句两形；单语句形的手推期望在 Binding 的 NameLine 上推错（5→1，构造字面量位不在名行）——钉形测试在落钉当日即修正了权威实现的一份手推拷贝，此即 D4「Escaped 行为锚 = Go 实现权威」的理由。

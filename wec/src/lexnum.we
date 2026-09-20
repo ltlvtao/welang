@@ -222,6 +222,56 @@ pub fn probeByteValue(s: String) -> Int64 {
     return 0 - 1
 }
 
+// byteChar is probeByteValue's inverse: the one-byte string that carries
+// byte value b. The serialized text this serves (B3c's T-line unescape) is
+// pure ASCII on its face — esc renders every non-printable and non-ASCII
+// byte as backslash-hex — so the bytes it is asked for are exactly the
+// ones the probe tables can name: the controls and space (a 34-entry
+// table whose offsets line up with the values), 0x7F included, and the
+// multi-byte ranges through the same lead/trail leak the probes use. The
+// thirteen unnameable values never occur inside valid UTF-8, which a
+// token's text always is; a miss answers the empty string and any caller
+// that somehow reached it fails loudly downstream.
+pub fn byteChar(b: Int64) -> String {
+    if b >= 0 && b <= 0x20 {
+        let ctrls = "\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{9}\u{A}\u{B}\u{C}\u{D}\u{E}\u{F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}\u{20}\u{7F}"
+        return ctrls.byteSlice(b, b + 1)
+    }
+    if b == 0x7F {
+        let ctrls = "\u{0}\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{9}\u{A}\u{B}\u{C}\u{D}\u{E}\u{F}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1A}\u{1B}\u{1C}\u{1D}\u{1E}\u{1F}\u{20}\u{7F}"
+        return ctrls.byteSlice(33, 34)
+    }
+    if b >= 0x80 && b <= 0xBF {
+        // Codepoints U+00C0..U+00FF encode as C3 plus trail 0x80+m, so the
+        // trail of m sits at odd offset 2m+1.
+        let trails = "\u{C0}\u{C1}\u{C2}\u{C3}\u{C4}\u{C5}\u{C6}\u{C7}\u{C8}\u{C9}\u{CA}\u{CB}\u{CC}\u{CD}\u{CE}\u{CF}\u{D0}\u{D1}\u{D2}\u{D3}\u{D4}\u{D5}\u{D6}\u{D7}\u{D8}\u{D9}\u{DA}\u{DB}\u{DC}\u{DD}\u{DE}\u{DF}\u{E0}\u{E1}\u{E2}\u{E3}\u{E4}\u{E5}\u{E6}\u{E7}\u{E8}\u{E9}\u{EA}\u{EB}\u{EC}\u{ED}\u{EE}\u{EF}\u{F0}\u{F1}\u{F2}\u{F3}\u{F4}\u{F5}\u{F6}\u{F7}\u{F8}\u{F9}\u{FA}\u{FB}\u{FC}\u{FD}\u{FE}\u{FF}"
+        let k = 2 * (b - 0x80) + 1
+        return trails.byteSlice(k, k + 1)
+    }
+    if b >= 0xC2 && b <= 0xDF {
+        // Codepoints 0x80+64j encode as lead C2+j plus trail, so lead C2+j
+        // sits at even offset 2j.
+        let leads2 = "\u{80}\u{C0}\u{100}\u{140}\u{180}\u{1C0}\u{200}\u{240}\u{280}\u{2C0}\u{300}\u{340}\u{380}\u{3C0}\u{400}\u{440}\u{480}\u{4C0}\u{500}\u{540}\u{580}\u{5C0}\u{600}\u{640}\u{680}\u{6C0}\u{700}\u{740}\u{780}\u{7C0}"
+        let k = 2 * (b - 0xC2)
+        return leads2.byteSlice(k, k + 1)
+    }
+    if b >= 0xE0 && b <= 0xEF {
+        // Codepoints 0x800, 0x1000, 0x2000..0xF000 encode with leads
+        // E0..EF; lead E0+j sits at offset 3j.
+        let leads3 = "\u{800}\u{1000}\u{2000}\u{3000}\u{4000}\u{5000}\u{6000}\u{7000}\u{8000}\u{9000}\u{A000}\u{B000}\u{C000}\u{D000}\u{E000}\u{F000}"
+        let k = 3 * (b - 0xE0)
+        return leads3.byteSlice(k, k + 1)
+    }
+    if b >= 0xF0 && b <= 0xF4 {
+        // Codepoints 0x10000, 0x40000, 0x80000, 0xC0000, 0x100000 encode
+        // with leads F0..F4; lead F0+j sits at offset 4j.
+        let leads4 = "\u{10000}\u{40000}\u{80000}\u{C0000}\u{100000}"
+        let k = 4 * (b - 0xF0)
+        return leads4.byteSlice(k, k + 1)
+    }
+    return ""
+}
+
 // --- the numeric face (B3b T3) ---
 //
 // Everything below works on numeric spans — runs of [0-9a-zA-Z_.+-] the

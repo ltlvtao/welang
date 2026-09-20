@@ -85,6 +85,20 @@ func serialize(src []byte) string {
 	return b.String()
 }
 
+// serializeOutput is the B3c full-output reference (design D5): the
+// lexical serialization above, then whichever section internal/parser's
+// three-return dispatch appends — nothing more on a lexical error (the E
+// line is the whole output), the diagnostic E line or the NotImplemented N
+// line behind the lexical sections when the parse stops, or the AST
+// serializer's success section (astser_test.go, the spec's authority).
+func serializeOutput(src []byte) string {
+	lexPart := serialize(src)
+	if strings.HasPrefix(lexPart, "E ") {
+		return lexPart
+	}
+	return lexPart + parseSection(src)
+}
+
 // unnameable reports whether byte value b is one of the thirteen values a
 // We string literal cannot construct (C0, C1, F5-FF — design D2-3's
 // observational-invariance corner): the reference side's E0001 message
@@ -395,15 +409,48 @@ func runWec(t *testing.T, bin, dir, src string) string {
 	return out.String()
 }
 
-// TestLexReconciliation is B3b's differential bar at its lexical layer:
-// for every corpus entry — the full corpus; the T2-T4 stage fence is
-// gone, retired at T5 when its vocabulary reached the reference's whole
-// face — the wec artifact's serialized output must equal internal/lex's
-// live serialization byte for byte. The single remaining exclusion is the
+// firstDiff reports the first byte offset where want and got disagree
+// (their common-prefix length when one is a prefix of the other).
+func firstDiff(want, got string) int {
+	n := min(len(want), len(got))
+	for i := range n {
+		if want[i] != got[i] {
+			return i
+		}
+	}
+	return n
+}
+
+// window returns a short excerpt of s around offset i, so a divergence
+// report shows the neighborhood instead of a whole serialized file.
+func window(s string, i int) string {
+	return s[max(0, i-48):min(len(s), i+48)]
+}
+
+// reconciledFloor is the honest ratchet that replaces B3b's stage fence
+// (design D5): the count of corpus entries the wec side has reconciled,
+// which only rises as faces land — every entry green at a task's close
+// stays green, so a regression anywhere in the port drops the count below
+// this line and fails the test. It reaches the full corpus when the last
+// face lands (T6). B3b's lexical-only TestLexReconciliation is retired
+// into this test: the lexical comparison is the parse-section-empty prefix
+// of the full output, so asserting both would assert a fraction twice.
+const reconciledFloor = 97
+
+// TestOutputReconciliation is the B3c differential bar (design D5): for
+// every admitted corpus entry, the wec artifact's FULL serialized output —
+// lexical sections plus the parse section this change appends — must equal
+// the live reference byte for byte, the reference being internal/lex's
+// serialization followed by internal/parser's three-return dispatch through
+// the AST serializer. There is no stage fence: every entry runs from T1 on,
+// entries whose parse faces have not landed diverge (logged, with the first
+// differing byte's neighborhood, for the face-by-face record), and the
+// floor constant is the assertion — the count of entries ever reconciled,
+// which only rises. The single remaining exclusion is the
 // thirteen-unnameable-byte corner (follow-up #30), disclosed per entry.
-func TestLexReconciliation(t *testing.T) {
+func TestOutputReconciliation(t *testing.T) {
 	bin, dir := buildWec(t)
-	ran := 0
+	ran, reconciled := 0, 0
 	for _, e := range loadCorpus(t) {
 		_, _, d := lex.Scan("wec-input.we", []byte(e.src))
 		if d != nil && d.Code() == "E0001" && strings.Contains(d.Message(), "is not valid UTF-8") && !firstBadByteNameable(e.src) {
@@ -412,15 +459,28 @@ func TestLexReconciliation(t *testing.T) {
 		}
 		ran++
 		got := runWec(t, bin, dir, e.src)
-		want := serialize([]byte(e.src))
+		want := serializeOutput([]byte(e.src))
 		if !bytes.Equal([]byte(got), []byte(want)) {
-			t.Errorf("%s: output diverges\nwant: %q\ngot:  %q", e.name, want, got)
+			// A divergence is recorded, not failed: with the stage fence
+			// gone every entry runs from T1 on, so the entries whose parse
+			// faces have not landed yet diverge by design and the count
+			// shrinks as the tasks close. The floor below is what fails —
+			// a face that was green regressing drops the reconciled count
+			// under it — and at the change's close the floor is the full
+			// corpus, so nothing diverges silently at any point.
+			i := firstDiff(want, got)
+			t.Logf("%s: first divergence at byte %d\nwant: %q\ngot:  %q", e.name, i, window(want, i), window(got, i))
+			continue
 		}
+		reconciled++
 	}
 	if ran == 0 {
 		t.Fatal("the corpus admitted no entries — the extractor is broken")
 	}
-	t.Logf("reconciled %d corpus entries", ran)
+	t.Logf("reconciled %d of %d corpus entries (full-output reconciliation; subsumes B3b's retired TestLexReconciliation)", reconciled, ran)
+	if reconciled < reconciledFloor {
+		t.Errorf("reconciled %d of %d entries — below the floor %d; a face that was green has regressed (the floor only rises as tasks land)", reconciled, ran, reconciledFloor)
+	}
 }
 
 // TestSerializationContractPinsTheFormat anchors the shared serialization

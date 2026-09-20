@@ -1,21 +1,26 @@
-// wec — the bootstrap compiler's We-hosted seed (B3b). The driver carries
-// only the contract (design D4): read wec-input.we from the working
-// directory (the language has no argv face), pass it through the lexical
-// stage, and write the serialization to stdout, always exiting 0 —
-// diagnostics ride the output, not the process status. The scanner and
-// serializer live in lex; the pure helpers live in lexnum.
+// wec — the bootstrap compiler's We-hosted seed (B3b, extended by B3c).
+// The driver carries only the contract (design D4): read wec-input.we from
+// the working directory (the language has no argv face), run the lexical
+// stage, append the parse section to a clean scan, and write the whole
+// serialization to stdout, always exiting 0 — diagnostics ride the output,
+// not the process status. The scanner lives in lex, the parser port in
+// parse, the pure helpers in lexnum; drive keeps the split and dispatch
+// out of this file, so the body stays the minimal readFile/run/print/Ok
+// shape the main-body stop-faces require.
 
 import std.fs
 import std.io
 
 import lex
+import parse
 
 pub type AppError = Failed(String)
 
 pub fn main() effect io -> Result<(), AppError> {
     match fs.readFile("wec-input.we") {
         Ok(src) => {
-            io.print(lex.run(src))
+            let lexOut = lex.run(src)
+            io.print(lexOut + parse.drive(lexOut))
         }
         Err(_) => {
             io.print("E 1 1 E0001 cannot read wec-input.we\n")
