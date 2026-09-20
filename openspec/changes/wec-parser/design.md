@@ -149,7 +149,6 @@ P arm <line> <col>                       // MatchArm：子行 = 模式、守卫?
 ## 补记
 
 ### 补记一（T1 落地，2026-09-20）
-
 1. **空源锚订正**：D4 枚举表与「Escaped 行为锚」句的红先锚 ~~`P file 1 1`~~ → **`P file 0 0 0`**。`ast.File` 无 Line/Col 字段（`ast.go:14-23`）——位栏按总则「无位者 0」取 0 0，第三栏是 IsTestModule（Bool 作 0/1）。tasks.md T1 两处同句同订正。
 2. **D5「门槛 = 无门槛」句 as-built 收窄**：全量恒跑、无阶段围栏照写（B3b T5 终态直继）；但断言面 = **单调棘轮常量 `reconciledFloor`**——T1 落地值 97（95 词法错条目 E 单行态 + 2 空源），发散条目记日志（首差字节 + ±48 窗口）不算失败，`ran==0` 兜底提取器坏死。棘轮只升不降，T6 升至全量。「无门槛」原意（无准入围栏、全量从 T1 起跑）保持不变；无棘轮则中程绿面无回归保护，与 D5 自身「条目四态分布随面落成翻绿」的记账义务相抵。
 3. **语言面地图新停面 I（探针钉死）**：`var` 绑定构造 record 形（`var p = Parser { … }`）= M9b 语句集停——We 的 `var` 语句集不含 record 构造表达式。**同形 `let` 绿**：lex.we `let l = Lexer { … }` + impl 内变异即既有绿习语，parse.we 照抄（Parser 构造以 `let` 落绑定、impl 方法内 `self.field` 变异）。另钉同族形：**局部 record 字段赋值 `p.cur = x` 在解析层即 E0105**——字段赋值形唯 impl `self.field` 合法（停面 H 同律），故 Token 游标重建为模块级 `tokAt(toksText, pos)`、初值在构造字面量内一次给足。
@@ -157,3 +156,13 @@ P arm <line> <col>                       // MatchArm：子行 = 模式、守卫?
 5. **语料 as-built 1106**：提取器逻辑零改动，`wec:parse.we` 随新源自入 +1；放行 1105（剔 1 = lextest `"\xff"`，#30 十三值角原样）。塔日志行随实数打印。
 6. **drive 适配器住 parse.we**：lex 输出的分段（E 行判定 + tokens/docs 两段切分）实现为 `parse.drive(lexOut)`——分段逻辑属解析侧职责，main.we 保持极小三行纪律（读源 → lex → 追加 drive）。
 7. **序列化器钉形逮手推错一枚**：`TestParseSectionPinsTheFormat` 钉空源与单语句两形；单语句形的手推期望在 Binding 的 NameLine 上推错（5→1，构造字面量位不在名行）——钉形测试在落钉当日即修正了权威实现的一份手推拷贝，此即 D4「Escaped 行为锚 = Go 实现权威」的理由。
+
+### 补记二（T2 落地，2026-09-20）
+
+1. **假线索自我更正（在案）**：构建失败的归因先误记为 typecheck 的 bndArityGap——根因是 bisect 载具只判退出码、消息归因靠记忆。实停 = **codegen 的 M9b 语句集**（bndFnBody，`we check` 过、`we build` 返回 NotImplemented）。定位法 = 给 typecheck `bnd()` 与 codegen `e.bnd()` 临时加 `WEC_DBG_BND` 栈打印（debug.PrintStack），一跑即见发射路径；插桩验证后零残留撤销（`git diff` 两 Go 文件为空）。教训入档：bisect 判红必须连同失败消息一起记录。
+2. **停面 I 推广——var 绑 record 一切形停**：T1 探针钉的是 `var p = Parser { … }` 构造形；实为 `emitVarBinding` 只答 String/数值面（codegen 侧结构事实），**方法调用初始化、let 拷贝初始化的 record var 同停**（parseImport 的 `var last = self.moduleSeg()`、typeRefText 的 `var last = t`）。绕行 = 段 token 三字段拆各自标注 var（`var segText: String`/`var segLine: Int64`/`var segCol: Int64`），同一纪律两处。
+3. **新停面 J——调用结果的字段读停**：`emitMemberValue` 的成员链根须为绑定（`chainOf`），`self.peek().kind` 形停；let 绑记录的字段读绿（parseItem 的 `t.kind`/`t.text` 即既有绿形）。绕行 = 先 `let pk = self.peek()` 再读（parsePubItem 先例；parseBinding 照改）。
+4. **P fn 行 recv 空位**：astser 权威表 FnDecl 的 RECV 域在名与效果标签之间——普通 fn 的空 recv 拼写为名后**两空格**（一空格成名域界、一空格即空域）。首版漏此域，塔在 fn 语料上发散后对照 astser_test.go:185-207 补齐。
+5. **#31 let-别名复发被塔在运行期逮住**：parseImport 的 `let pathCol = segCol`（裸局部 var）绑**存储**非快照——while 循环改 segCol 后 pathCol 跟随，输出 P import 的路径锚变成末段（甚而别名列），而 Go 锚**首段**。B3b 纪律（let-from-裸-var 用 var 快照）重申并绕行：锚位改从字段读直取（`let pathCol: Int64 = first.col`——字段读不别名）。此枚是 #31 在「值经三层调用后错位」形上的首例：构建绿、检查绿，仅对账塔的字节比较能逮。
+6. **lexnum.quote 单 rune 面的误用**：B3b 的 `quote` 是 E0001 字节值消息的单 rune %q 面（首 rune 可打印时返回**整段**——故多 rune 可打印首字形碰巧全对）；解析器消息引整段词文本，首 rune 为 `"`/`\`（串、rune 逃逸词）时内容丢失。全量换 `quoteText`（B3b 已有的多 rune %q 面，31 处）；10 枚 literal 串/rune 逃逸语料由红转绿。
+7. **记账**：棘轮 97 → **206**（t2: 56/56 + 10 枚消息面 + 词法面存量）；发散余量 955 = case 945 + stdlib 6 + wec 4（literal 与 lextest 族全绿）；stdlib 翻绿 1 枚（io.we——import/fn 密集即 T2 面）；`we check`/`we build` 皆 exit 0。

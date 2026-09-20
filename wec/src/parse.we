@@ -1,16 +1,27 @@
 // parse — the parser port (B3c): internal/parser/parser.go transcribed as
-// We source. This file is the T1 skeleton: the state carrier in full (the
-// design's field table), the T-line cursor that rebuilds tokens from the
-// lexical section, the escape's mechanical inverse, and the run entry
-// answering the empty source exactly. The parse faces themselves land with
-// their tasks (T2-T5); until then run answers the pending marker for
-// every non-empty input.
+// We source. T2 lands the file structure: the item dispatch with its
+// pub/byval/byres prefix order, imports and effect declarations, the fn
+// basic shape with its annotated parameter list and effect segment, and
+// top-level lets with literal and identifier initializers — plus the
+// naming matrix, the module name-space collisions, and the top-level
+// error codes. The faces still pending (composite declarations, type
+// references beyond the named forms, statements, the full expression
+// grammar, documentation attachment) latch the pending marker, so the
+// tower records those entries as divergent rather than mis-parsing them.
 //
 // The serialized text this module walks is pure ASCII on its face — esc
 // renders every byte outside 0x21-0x7E as backslash-hex — so byteAt is
 // exact throughout, and the token text the cursor unescapes is always
 // well-formed UTF-8 (the lexer guaranteed it before serializing), so the
 // rebuilt strings load cleanly.
+//
+// Two language-face adaptations shape the port (the B3b pair, disclosed
+// in that change's design notes): We has no panic/recover, so Go's
+// first-error stop is an error latch every failure-capable caller checks,
+// and the bnd latch answers the NotImplemented face the same way — here
+// it also carries the pending markers for the faces later tasks own. The
+// AST never materializes as a tree: each item's P lines are composed as
+// strings in parse order, which is the pre-order the serializer writes.
 
 import lexnum
 
@@ -178,7 +189,159 @@ fn tokAt(toksText: String, pos: Int64) -> Token {
     return Token { kind: kind, text: text, line: ln, col: cl, attrName: attrName, attrArgs: attrArgs }
 }
 
+// --- charsets (chapter 1 naming, checked at the declarations that bind) ---
+
+// isCamel is the identifier charset with a lowercase first byte — the
+// variable, function, and method convention (E0012).
+fn isCamel(s: String) -> Bool {
+    let n = s.byteLength()
+    if n == 0 {
+        return false
+    }
+    let c0 = lexnum.byteAt(s, 0)
+    if c0 < 97 || c0 > 122 {
+        return false
+    }
+    var i: Int64 = 1
+    while i < n {
+        let c = lexnum.byteAt(s, i)
+        if (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) {
+            i = i + 1
+        } else {
+            return false
+        }
+    }
+    return true
+}
+
+// isModuleSeg is the module-path charset: lowercase, then lowercase and
+// digits (E0013).
+fn isModuleSeg(s: String) -> Bool {
+    let n = s.byteLength()
+    if n == 0 {
+        return false
+    }
+    let c0 = lexnum.byteAt(s, 0)
+    if c0 < 97 || c0 > 122 {
+        return false
+    }
+    var i: Int64 = 1
+    while i < n {
+        let c = lexnum.byteAt(s, i)
+        if (c >= 97 && c <= 122) || (c >= 48 && c <= 57) {
+            i = i + 1
+        } else {
+            return false
+        }
+    }
+    return true
+}
+
+// isPascal is the type-name convention: a first byte in A-Z — the whole
+// rule, exactly as the reference writes it (E0011 rides the type
+// declarations T3 owns).
+fn isPascal(s: String) -> Bool {
+    if s.byteLength() == 0 {
+        return false
+    }
+    let c0 = lexnum.byteAt(s, 0)
+    return c0 >= 65 && c0 <= 90
+}
+
+// isKw is the keyword test: kind keyword plus the word itself.
+fn isKw(t: Token, word: String) -> Bool {
+    return t.kind == "keyword" && t.text == word
+}
+
+// b01 renders a bool as the 0/1 field spelling.
+fn b01(v: Bool) -> String {
+    if v {
+        return "1"
+    }
+    return "0"
+}
+
+// i64 renders a decimal scalar field.
+fn i64(v: Int64) -> String {
+    return lexnum.int64ToString(v)
+}
+
+// namesLineOf looks one name up in the encoded module name space and
+// answers its declaration line, 0 when absent (lines are 1-based).
+fn namesLineOf(names: String, name: String) -> Int64 {
+    let n = names.byteLength()
+    var i: Int64 = 0
+    while i < n {
+        var sp = i
+        while sp < n && lexnum.byteAt(names, sp) != 32 {
+            sp = sp + 1
+        }
+        var nl = sp
+        while nl < n && lexnum.byteAt(names, nl) != 10 {
+            nl = nl + 1
+        }
+        if names.byteSlice(i, sp) == name {
+            return parseDec(names, sp + 1, nl)
+        }
+        i = nl + 1
+    }
+    return 0
+}
+
+// hasHole reports whether a string literal's raw text carries an
+// interpolation opener — the hole face is T5's, so such literals latch
+// pending instead of mis-parsing.
+fn hasHole(text: String) -> Bool {
+    let n = text.byteLength()
+    var i: Int64 = 0
+    while i + 1 < n {
+        if lexnum.byteAt(text, i) == 0x24 && lexnum.byteAt(text, i + 1) == 0x7B {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// typeRefMsg is the one type-reference remediation message; the token
+// text rides it quoted.
+fn typeRefMsg(text: String) -> String {
+    return "unexpected token — " + lexnum.quoteText(text) + " fits no type reference production: type references are Name, module.Name, Name<T…>, (T1, …, Tn), (), Dyn<I>, and fn(…) -> T"
+}
+
 impl Parser {
+    // fail latches the first diagnostic; later calls are no-ops, which is
+    // the port's equivalent of Go's panic already having unwound.
+    pub fn fail(mut self, line: Int64, col: Int64, code: String, message: String) {
+        if self.failed == 0 {
+            self.failed = 1
+            self.errLine = line
+            self.errCol = col
+            self.errCode = code
+            self.errMsg = message
+        }
+    }
+
+    // failTok anchors the diagnostic at a token's own position.
+    pub fn failTok(mut self, t: Token, code: String, message: String) {
+        self.fail(t.line, t.col, code, message)
+    }
+
+    // bndLatch answers the NotImplemented face (the reference's one bnd
+    // boundary, mut parameters) and, until their tasks land, the pending
+    // faces — both are "this build does not implement the form yet".
+    pub fn bndLatch(mut self, what: String) {
+        if self.failed == 0 && self.bnd == 0 {
+            self.bnd = 1
+            self.bndWhat = what
+        }
+    }
+
+    // stopped is the latch check every failure-capable caller makes.
+    pub fn stopped(mut self) -> Bool {
+        return self.failed != 0 || self.bnd != 0
+    }
+
     // next consumes the current token: it becomes last, and the cursor
     // moves to the following T line. The reference's toks slice always
     // ends with a real eof token, so the walk only ever loads there or
@@ -206,15 +369,905 @@ impl Parser {
     pub fn brokeLine(mut self) -> Bool {
         return self.cur.line > self.last.line
     }
+
+    // checkCamel enforces E0012 at a binding token.
+    pub fn checkCamel(mut self, t: Token) {
+        if isCamel(t.text) == false {
+            self.failTok(t, "E0012",
+                "variable, function, and method names must be camelCase — " + lexnum.quoteText(t.text) + " is not camelCase")
+        }
+    }
+
+    // dupCheck rejects a name the module name space already holds; the
+    // collision (E0404) outranks the naming convention at the same token,
+    // so the callers that run both check this one first.
+    pub fn dupCheck(mut self, t: Token) {
+        let prev = namesLineOf(self.namesText, t.text)
+        if prev != 0 {
+            self.failTok(t, "E0404",
+                "duplicate name in one module — " + lexnum.quoteText(t.text) + " is already declared at line " + i64(prev) + "; one module has one name space")
+        }
+    }
+
+    // declare enters a name into the module name space (dupCheck first —
+    // the later of two colliding declarations is rejected).
+    pub fn declare(mut self, name: String, line: Int64, col: Int64) {
+        let t = Token { kind: "ident", text: name, line: line, col: col, attrName: "", attrArgs: "" }
+        self.dupCheck(t)
+        if self.stopped() == false {
+            self.namesText = self.namesText + name + " " + i64(line) + "\n"
+        }
+    }
+
+    // registerRaw enters a name with no collision check — the fn
+    // declaration's own trailing registration, whose duplicate was
+    // already rejected at the name token.
+    pub fn registerRaw(mut self, name: String, line: Int64) {
+        self.namesText = self.namesText + name + " " + i64(line) + "\n"
+    }
+
+    // checkStart enforces the closed statement-start class at an item or
+    // statement position: a token outside it is E0102 naming the end of
+    // the previous statement.
+    pub fn checkStart(mut self, top: Bool) {
+        let t = self.cur
+        if t.kind == "attr" {
+            if top {
+                self.failTok(t, "E0105",
+                    "unexpected token — " + lexnum.quoteText(t.text) + " fits no top-level item production: no attribute target is ratified yet")
+            } else {
+                self.failTok(t, "E0105",
+                    "unexpected token — " + lexnum.quoteText(t.text) + " fits no statement production: no attribute target is ratified yet")
+            }
+            return
+        }
+        if t.kind == "ident" || t.kind == "int" || t.kind == "float" || t.kind == "string" || t.kind == "rune" || t.kind == "keyword" ||
+            t.kind == "(" || t.kind == "{" || t.kind == "!" || t.kind == "-" || t.kind == "~" {
+            return
+        }
+        if self.last.line == 0 {
+            self.failTok(t, "E0102",
+                "statement begins with a continuation token — " + lexnum.quoteText(t.text) + " cannot begin a statement; no statement precedes it")
+            return
+        }
+        self.failTok(t, "E0102",
+            "statement begins with a continuation token — " + lexnum.quoteText(t.text) + " cannot begin a statement; the previous statement ends at line " + i64(self.last.line))
+    }
+
+    // parseFile parses the module: top-level items separated by line
+    // breaks. The documentation attachment pass is T6's face; a source
+    // carrying /// units latches pending rather than attaching wrong.
+    pub fn parseFile(mut self) {
+        self.astText = "P file 0 0 " + i64(self.testModule) + "\n"
+        while self.atEnd() == false {
+            if self.stopped() {
+                return
+            }
+            self.checkStart(true)
+            if self.stopped() {
+                return
+            }
+            self.parseItem()
+            if self.stopped() {
+                return
+            }
+            if self.atEnd() {
+                break
+            }
+            if self.brokeLine() == false {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " after a top-level item: items are separated by line breaks")
+                return
+            }
+        }
+        if self.stopped() == false && self.docsText != "" {
+            self.bndLatch("WEC-PENDING docs")
+        }
+    }
+
+    // parseItem dispatches one top-level item by its keyword; a non-item
+    // statement that passed the start class is E0105 naming the item
+    // productions. The composite declarations latch pending — their task
+    // is T3. itemStarts records the item's start line for T6's
+    // documentation attachment pass, exactly where the reference records
+    // it.
+    pub fn parseItem(mut self) {
+        let t = self.cur
+        self.itemStartsText = self.itemStartsText + i64(t.line) + " "
+        if t.kind == "keyword" {
+            if t.text == "import" {
+                self.parseImport()
+                return
+            }
+            if t.text == "pub" {
+                self.parsePubItem(t)
+                return
+            }
+            if t.text == "fn" {
+                self.parseFnDecl(false, t.line, t.col)
+                return
+            }
+            if t.text == "let" {
+                self.parseTopLet(false, t.line, t.col)
+                return
+            }
+            if t.text == "var" {
+                self.failTok(t, "E0403",
+                    "var at the top level — module-level mutable state does not exist; declare the top-level binding with let (var is legal inside blocks)")
+                return
+            }
+            if t.text == "return" {
+                self.failTok(t, "E0401",
+                    "return outside a function body — no function context encloses this return; module-level logic belongs in a fn")
+                return
+            }
+            if t.text == "byres" {
+                self.next()
+                if isKw(self.cur, "record") {
+                    self.bndLatch("WEC-PENDING decl")
+                    return
+                }
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — byres prefixes a record declaration")
+                    return
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " after byres: byres prefixes record")
+                return
+            }
+            if t.text == "byval" {
+                let pk = self.peek()
+                if isKw(pk, "type") {
+                    self.next()
+                    self.bndLatch("WEC-PENDING decl")
+                    return
+                }
+                if isKw(pk, "pub") {
+                    self.failTok(pk, "E0105",
+                        "unexpected token — \"pub\" after byval: the prefix order is pub, then byval, then the declaration")
+                    return
+                }
+                if isKw(pk, "record") {
+                    self.next()
+                    self.bndLatch("WEC-PENDING decl")
+                    return
+                }
+                if pk.kind == "eof" {
+                    self.failTok(pk, "E0105", "unexpected end of file — byval prefixes type or record")
+                    return
+                }
+                self.failTok(pk, "E0105",
+                    "unexpected token — " + lexnum.quoteText(pk.text) + " after byval: byval prefixes type or record; the prefix order is pub, then byval")
+                return
+            }
+            if t.text == "effect" {
+                self.parseEffectDecl(false, t.line, t.col)
+                return
+            }
+            if t.text == "record" || t.text == "newtype" || t.text == "type" || t.text == "interface" || t.text == "impl" || t.text == "foreign" || t.text == "test" {
+                self.bndLatch("WEC-PENDING decl")
+                return
+            }
+            if t.text == "mock" {
+                self.failTok(t, "E1802",
+                    "mock declaration outside a test block — a mock exists only as a direct item of a test block body; move it into the test block whose calls it should intercept")
+                return
+            }
+        }
+        self.failTok(t, "E0105",
+            "unexpected token — " + lexnum.quoteText(t.text) + " fits no top-level item production: top-level items are import, fn, and let declarations (optionally pub); statements exist only inside blocks")
+    }
+
+    // parsePubItem dispatches behind a consumed pub prefix: the prefix
+    // order is pub, then byval/byres, then the declaration; the wrong
+    // order and the trailing forms carry their own E0105 messages.
+    pub fn parsePubItem(mut self, t: Token) {
+        self.next()
+        if isKw(self.cur, "fn") {
+            self.parseFnDecl(true, t.line, t.col)
+            return
+        }
+        if isKw(self.cur, "let") {
+            self.parseTopLet(true, t.line, t.col)
+            return
+        }
+        if isKw(self.cur, "type") {
+            self.bndLatch("WEC-PENDING decl")
+            return
+        }
+        if isKw(self.cur, "byval") {
+            let bv = self.cur
+            self.next()
+            if isKw(self.cur, "type") || isKw(self.cur, "record") {
+                self.bndLatch("WEC-PENDING decl")
+                return
+            }
+            self.failTok(bv, "E0105",
+                "unexpected token — byval prefixes type or record here; the prefix order is pub, then byval, then the declaration")
+            return
+        }
+        if isKw(self.cur, "record") || isKw(self.cur, "newtype") || isKw(self.cur, "interface") {
+            self.bndLatch("WEC-PENDING decl")
+            return
+        }
+        if isKw(self.cur, "effect") {
+            self.parseEffectDecl(true, t.line, t.col)
+            return
+        }
+        if isKw(self.cur, "byres") {
+            self.next()
+            if isKw(self.cur, "record") {
+                self.bndLatch("WEC-PENDING decl")
+                return
+            }
+            if self.atEnd() {
+                self.fail(t.line, t.col, "E0105", "unexpected end of file — pub byres prefixes a record declaration")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " after byres: byres prefixes record")
+            return
+        }
+        if self.atEnd() {
+            self.fail(t.line, t.col, "E0105", "unexpected end of file — pub prefixes a fn, let, type, chapter 8 declaration, or interface")
+            return
+        }
+        self.failTok(self.cur, "E0105",
+            "unexpected token — " + lexnum.quoteText(self.cur.text) + " after pub: pub prefixes fn, let, type, the chapter 8 declarations, and interface (an impl block carries no pub)")
+    }
+
+    // parseImport parses `import path [as alias]`; each path segment and
+    // the alias obey the module charset (E0013), and the introduced name
+    // joins the module name space. The Go original carries the segment
+    // token in one var; a var here may hold only a scalar or a String
+    // face, so the walk keeps the last segment's three fields in their
+    // own vars instead — same facts, wider storage.
+    pub fn parseImport(mut self) {
+        let kw = self.cur
+        self.next()
+        let first = self.moduleSeg()
+        if self.stopped() {
+            return
+        }
+        var segText: String = first.text
+        var segLine: Int64 = first.line
+        var segCol: Int64 = first.col
+        var pathText = " " + lexnum.esc(segText)
+        // The path's anchor is the FIRST segment's position — bound here,
+        // from a field read (a let off a bare local var would alias its
+        // storage, not snapshot it — the #31 face; field reads are safe).
+        let pathLine: Int64 = first.line
+        let pathCol: Int64 = first.col
+        while self.cur.kind == "." {
+            self.next()
+            let seg = self.moduleSeg()
+            if self.stopped() {
+                return
+            }
+            segText = seg.text
+            segLine = seg.line
+            segCol = seg.col
+            pathText = pathText + " " + lexnum.esc(segText)
+        }
+        var alias = ""
+        if isKw(self.cur, "as") {
+            self.next()
+            let al = self.moduleSeg()
+            if self.stopped() {
+                return
+            }
+            segText = al.text
+            segLine = al.line
+            segCol = al.col
+            alias = segText
+        }
+        self.declare(segText, segLine, segCol)
+        if self.stopped() {
+            return
+        }
+        self.astText = self.astText + "P import " + i64(kw.line) + " " + i64(kw.col) + " " + lexnum.esc(alias) + " " + i64(pathLine) + " " + i64(pathCol) + pathText + "\n"
+    }
+
+    // moduleSeg expects one lowercase dotted-path segment. A keyword
+    // token whose text passes the charset also serves: chapter 1's
+    // reserved closure governs name positions, and a module path segment
+    // is another lexical class — std.test must spell. The charset gate
+    // (E0013) judges the text the same either way.
+    pub fn moduleSeg(mut self) -> Token {
+        let t = self.cur
+        if t.kind != "ident" && t.kind != "keyword" {
+            if t.kind == "eof" {
+                self.failTok(t, "E0105", "unexpected end of file — an import wants a lowercase dotted path (and its alias after as)")
+                return zeroTok()
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " in an import: imports are import path [as name]")
+            return zeroTok()
+        }
+        if isModuleSeg(t.text) == false {
+            self.failTok(t, "E0013",
+                "module names must be lowercase — " + lexnum.quoteText(t.text) + " is not a lowercase dotted path segment")
+            return zeroTok()
+        }
+        self.next()
+        return t
+    }
+
+    // parseEffectDecl parses chapter 16's `effect name`: the name joins
+    // the module's single name space (E0404), refuses the built-in tags
+    // io/net/time (E1403), and obeys camelCase (E0012) — a collision
+    // outranks the built-in conflict, which outranks the convention.
+    pub fn parseEffectDecl(mut self, isPub: Bool, line: Int64, col: Int64) {
+        self.next()
+        let nt = self.cur
+        if nt.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(nt, "E0105", "unexpected end of file — an effect declaration is effect name")
+                return
+            }
+            self.failTok(nt, "E0105",
+                "unexpected token — " + lexnum.quoteText(nt.text) + " where an effect declaration names its name")
+            return
+        }
+        self.dupCheck(nt)
+        if self.stopped() {
+            return
+        }
+        if nt.text == "io" || nt.text == "net" || nt.text == "time" {
+            self.failTok(nt, "E1403",
+                "effect name conflicts with a built-in effect — " + lexnum.quoteText(nt.text) + " is one of the built-in tags (io, net, time), language-level names no module item may take; choose a camelCase name that is not one of the built-in tags")
+            return
+        }
+        if isCamel(nt.text) == false {
+            self.failTok(nt, "E0012",
+                "effect names must be camelCase — " + lexnum.quoteText(nt.text) + " is not camelCase")
+            return
+        }
+        self.namesText = self.namesText + nt.text + " " + i64(nt.line) + "\n"
+        self.next()
+        self.astText = self.astText + "P effect " + i64(line) + " " + i64(col) + " " + b01(isPub) + " " + lexnum.esc(nt.text) + " " + i64(nt.line) + " " + i64(nt.col) + "\n"
+    }
+
+    // parseEffectSegment parses the fn declaration's effect segment: the
+    // effect keyword (the caller verified it) followed by one or more
+    // effect tags, bare or qualified. The tags ride the P fn line as
+    // space-joined fields, so this answers the joined spelling.
+    pub fn parseEffectSegment(mut self) -> (String, Int64, Int64) {
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — an effect segment names at least one effect")
+                return ("", 0, 0)
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where an effect segment names at least one effect")
+            return ("", 0, 0)
+        }
+        let line = t.line
+        let col = t.col
+        let tags = self.effectTagList()
+        return (tags, line, col)
+    }
+
+    // effectTagList parses the tags of an effect segment: one or more,
+    // each the bare name or the qualified module.name, the dot
+    // continuation holding only within one line.
+    pub fn effectTagList(mut self) -> String {
+        var tags = ""
+        while self.cur.kind == "ident" {
+            let t = self.cur
+            self.next()
+            var name = t.text
+            if self.cur.kind == "." && self.cur.line == t.line {
+                let dot = self.cur
+                self.next()
+                let nt = self.cur
+                if nt.kind != "ident" || nt.line != dot.line {
+                    if self.atEnd() {
+                        self.failTok(nt, "E0105", "unexpected end of file — a qualified effect tag is module.name")
+                        return ""
+                    }
+                    self.failTok(nt, "E0105",
+                        "unexpected token — " + lexnum.quoteText(nt.text) + " where a qualified effect tag names its effect: a tag is name or module.name")
+                    return ""
+                }
+                name = name + "." + nt.text
+                self.next()
+            }
+            if tags == "" {
+                tags = name
+            } else {
+                tags = tags + " " + name
+            }
+        }
+        return tags
+    }
+
+    // parseFnDecl parses `[pub] fn name<T…>(params) [effect tags] [-> type]
+    // [where …] block`. The generic clause and the where clause are T3's
+    // faces; a fn carrying either latches pending. The body block is the
+    // one block face T2 owns — empty; anything inside it is T4's.
+    pub fn parseFnDecl(mut self, isPub: Bool, line: Int64, col: Int64) {
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where a fn name goes: a fn declaration is fn name(params) [-> type] { body }")
+            return
+        }
+        self.dupCheck(t)
+        if self.stopped() {
+            return
+        }
+        self.checkCamel(t)
+        if self.stopped() {
+            return
+        }
+        let name = t.text
+        let nameLine = t.line
+        let nameCol = t.col
+        self.next()
+        if self.cur.kind == "<" {
+            self.bndLatch("WEC-PENDING tparam")
+            return
+        }
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a fn wants its parameter list")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a fn's parameter list opens")
+            return
+        }
+        let paramsText = self.annotatedParams()
+        if self.stopped() {
+            return
+        }
+        var effectTags = ""
+        var effectLine: Int64 = 0
+        var effectCol: Int64 = 0
+        if isKw(self.cur, "effect") {
+            let (tags, el, ec) = self.parseEffectSegment()
+            effectTags = tags
+            effectLine = el
+            effectCol = ec
+            if self.stopped() {
+                return
+            }
+        }
+        var retText = "-\n"
+        var hasRet: Int64 = 0
+        if self.cur.kind == "->" {
+            self.next()
+            retText = self.typeRefText()
+            hasRet = 1
+            if self.stopped() {
+                return
+            }
+        }
+        if isKw(self.cur, "where") && self.brokeLine() == false {
+            self.bndLatch("WEC-PENDING where")
+            return
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a fn wants its body block")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a fn body block opens")
+            return
+        }
+        let bodyText = self.fnBlock(name, hasRet)
+        if self.stopped() {
+            return
+        }
+        // The header carries the receiver field between the name and the
+        // effect tags (empty on a plain fn — the adjacent-space spelling:
+        // one space ends the name field, the second is the empty field).
+        var head = "P fn " + i64(line) + " " + i64(col) + " " + b01(isPub) + " " + lexnum.esc(name) + "  "
+        if effectTags != "" {
+            head = head + effectTags + " "
+        }
+        head = head + i64(effectLine) + " " + i64(effectCol) + " 0 " + i64(nameLine) + " " + i64(nameCol) + "\n"
+        self.astText = self.astText + head + paramsText + retText + bodyText
+        self.registerRaw(name, nameLine)
+    }
+
+    // annotatedParams parses the annotated parameter entries of an open
+    // parameter list — everything after its leading ( through the closing
+    // ) — rendering each parameter's P lines as it goes. The one bnd
+    // boundary of the whole reference lives here: a mut parameter.
+    pub fn annotatedParams(mut self) -> String {
+        self.next()
+        var out = ""
+        while true {
+            if self.cur.kind == ")" {
+                self.next()
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a parameter list closes with )")
+                return ""
+            }
+            let nt = self.cur
+            if isKw(nt, "mut") {
+                self.bndLatch("mut parameters")
+                return ""
+            }
+            if nt.kind != "ident" {
+                self.failTok(nt, "E0105",
+                    "unexpected token — " + lexnum.quoteText(nt.text) + " in a parameter list: parameters are name: type pairs")
+                return ""
+            }
+            self.next()
+            if self.cur.kind != ":" {
+                self.failTok(nt, "E0105",
+                    "unexpected token — parameter " + lexnum.quoteText(nt.text) + " carries no annotation: parameters are name: type; parameter types are never inferred")
+                return ""
+            }
+            self.checkCamel(nt)
+            if self.stopped() {
+                return ""
+            }
+            self.next()
+            let ty = self.typeRefText()
+            if self.stopped() {
+                return ""
+            }
+            out = out + "P param 0 0 " + lexnum.esc(nt.text) + " " + i64(nt.line) + " " + i64(nt.col) + "\n" + ty
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == ")" {
+                self.next()
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a parameter list closes with )")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a parameter list: parameters are name: type pairs")
+            return ""
+        }
+        return out
+    }
+
+    // fnBlock parses a function body's top-level block: the fn context
+    // goes on the stack, the loop depth resets, and the block context is
+    // restored on exit as the reference's save/restore pair does. The one
+    // body shape T2 answers is the empty block — a statement inside
+    // latches T4's pending marker, and an unclosed body ends at the
+    // reference's own block-closer error.
+    pub fn fnBlock(mut self, name: String, hasRet: Int64) -> String {
+        let open = self.cur
+        self.next()
+        self.fnsText = self.fnsText + name + ";" + i64(hasRet) + ";0\n"
+        let savedLoop = self.loopDepth
+        let savedDirect = self.direct
+        self.loopDepth = 0
+        self.direct = 1
+        let out = "P block " + i64(open.line) + " " + i64(open.col) + "\n"
+        if self.cur.kind == "}" {
+            self.next()
+            self.loopDepth = savedLoop
+            self.direct = savedDirect
+            self.popFn()
+            return out
+        }
+        if self.atEnd() {
+            self.failTok(self.cur, "E0105", "unexpected end of file — a block wants its closing }")
+            return ""
+        }
+        self.bndLatch("WEC-PENDING stmt")
+        return ""
+    }
+
+    // popFn drops the innermost fn context (the encoded stack's tail).
+    pub fn popFn(mut self) {
+        let n = self.fnsText.byteLength()
+        var i = n - 2
+        while i >= 0 {
+            if lexnum.byteAt(self.fnsText, i) == 10 {
+                break
+            }
+            i = i - 1
+        }
+        self.fnsText = self.fnsText.byteSlice(0, i + 1)
+    }
+
+    // typeRefText parses one type reference into an annotation slot and
+    // renders its P lines. T2 owns the named forms — Name, module.Name,
+    // and their generic applications; the paren, tuple, unit, and fn
+    // type forms are T3's and latch pending. The Go original carries the
+    // last lowercase segment as one token var; a var here holds only a
+    // scalar or a String face, so the segment's three fields travel in
+    // their own vars (same discipline as parseImport).
+    pub fn typeRefText(mut self) -> String {
+        let t = self.cur
+        if isKw(t, "fn") || t.kind == "(" {
+            self.bndLatch("WEC-PENDING typeref")
+            return ""
+        }
+        if t.kind == "ident" {
+            self.next()
+            if isPascal(t.text) {
+                if self.cur.kind == "." {
+                    self.failTok(self.cur, "E0105", typeRefMsg(self.cur.text))
+                    return ""
+                }
+                let (al, ac) = self.anglePos()
+                let argsText = self.genericArgsText()
+                if self.stopped() {
+                    return ""
+                }
+                return "P named " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc("") + " " + lexnum.esc(t.text) + " " + i64(al) + " " + i64(ac) + "\n" + argsText
+            }
+            var quals = t.text
+            var lastText: String = t.text
+            var lastLine: Int64 = t.line
+            var lastCol: Int64 = t.col
+            while self.cur.kind == "." {
+                self.next()
+                let nt = self.cur
+                if nt.kind != "ident" {
+                    self.failTok(nt, "E0105", typeRefMsg(nt.text))
+                    return ""
+                }
+                self.next()
+                if isPascal(nt.text) {
+                    if self.cur.kind == "." {
+                        self.failTok(self.cur, "E0105", typeRefMsg(self.cur.text))
+                        return ""
+                    }
+                    let (al, ac) = self.anglePos()
+                    let argsText = self.genericArgsText()
+                    if self.stopped() {
+                        return ""
+                    }
+                    return "P named " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(quals) + " " + lexnum.esc(nt.text) + " " + i64(al) + " " + i64(ac) + "\n" + argsText
+                }
+                quals = quals + "." + nt.text
+                lastText = nt.text
+                lastLine = nt.line
+                lastCol = nt.col
+            }
+            self.fail(lastLine, lastCol, "E0105", typeRefMsg(lastText))
+            return ""
+        }
+        if t.kind == "eof" {
+            self.failTok(t, "E0105", "unexpected end of file — an annotation slot wants a type reference")
+            return ""
+        }
+        self.failTok(t, "E0105", typeRefMsg(t.text))
+        return ""
+    }
+
+    // anglePos reports the position of a generic clause's `<` when one is
+    // next, else the zero position — the application's anchor.
+    pub fn anglePos(mut self) -> (Int64, Int64) {
+        if self.cur.kind == "<" {
+            return (self.cur.line, self.cur.col)
+        }
+        return (0, 0)
+    }
+
+    // genericArgsText consumes a `<T1, …, Tk>` application when present,
+    // rendering the argument type references' P lines.
+    pub fn genericArgsText(mut self) -> String {
+        if self.cur.kind != "<" {
+            return ""
+        }
+        self.next()
+        var out = ""
+        while true {
+            if self.closeAngle() {
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a generic argument list closes with >")
+                return ""
+            }
+            out = out + self.typeRefText()
+            if self.stopped() {
+                return ""
+            }
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.closeAngle() {
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a generic argument list closes with >")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a generic argument list: the list closes with >")
+            return ""
+        }
+        return out
+    }
+
+    // closeAngle consumes the closing `>` of a generic application and
+    // reports whether it did. Only the bare `>` closes: maximal munch
+    // makes `>>` and `>=` the shift and ge operators, so a two-byte
+    // `>`-led token at a closer position means the nested closers were
+    // not separated.
+    pub fn closeAngle(mut self) -> Bool {
+        if self.cur.kind == ">" {
+            self.next()
+            return true
+        }
+        if self.cur.kind == ">>" || self.cur.kind == ">=" {
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " merges the nested closers: nested closers are separated — write Name<Name<Int64> >; " + lexnum.quoteText(self.cur.text) + " is the shift operator (chapter 1)")
+            return false
+        }
+        return false
+    }
+
+    // parseBinding parses `let|var name [: type] = expr` (the keyword
+    // included), answering the P lines plus the name position for the
+    // caller's declare. The irrefutable tuple pattern is T4's face; a
+    // paren head latches pending.
+    pub fn parseBinding(mut self) -> (String, String, Int64, Int64) {
+        let kw = self.cur
+        self.next()
+        let t = self.cur
+        let pk = self.peek()
+        if t.kind == "ident" && isPascal(t.text) && pk.kind == "(" {
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " fits no binding name production: refutable patterns are match-only; the let name position takes an identifier or an irrefutable tuple pattern")
+            return ("", "", 0, 0)
+        }
+        var name = ""
+        var nameLine: Int64 = 0
+        var nameCol: Int64 = 0
+        if t.kind == "ident" {
+            self.checkCamel(t)
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+            name = t.text
+            nameLine = t.line
+            nameCol = t.col
+            self.next()
+        } else {
+            if t.kind == "_" {
+                name = "_"
+                nameLine = t.line
+                nameCol = t.col
+                self.next()
+            } else {
+                if t.kind == "(" {
+                    self.bndLatch("WEC-PENDING pattern")
+                    return ("", "", 0, 0)
+                }
+                if t.kind == "eof" {
+                    self.failTok(t, "E0105", "unexpected end of file — a binding wants let|var name [: type] = expr")
+                    return ("", "", 0, 0)
+                }
+                self.failTok(t, "E0105",
+                    "unexpected token — " + lexnum.quoteText(t.text) + " fits no binding name production: the let name position takes an identifier or an irrefutable tuple pattern")
+                return ("", "", 0, 0)
+            }
+        }
+        var typText = "-\n"
+        if self.cur.kind == ":" {
+            self.next()
+            typText = self.typeRefText()
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+        }
+        if self.cur.kind != "=" {
+            if self.cur.kind == "eof" {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a binding wants = and its initializer")
+                return ("", "", 0, 0)
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a binding head: bindings are let|var name [: type] = expr")
+            return ("", "", 0, 0)
+        }
+        self.next()
+        let saved = self.valSite
+        self.valSite = "a let initializer"
+        let initText = self.exprText()
+        self.valSite = saved
+        if self.stopped() {
+            return ("", "", 0, 0)
+        }
+        let body = "P binding " + i64(kw.line) + " " + i64(kw.col) + " " + lexnum.esc(kw.text) + " " + lexnum.esc(name) + " " + i64(nameLine) + " " + i64(nameCol) + "\n" + "-\n" + typText + initText
+        return (body, name, nameLine, nameCol)
+    }
+
+    // parseTopLet parses `[pub] let name [: type] = expr`: the binding
+    // first, then the name's entry in the module name space (the
+    // underscore binding declares nothing).
+    pub fn parseTopLet(mut self, isPub: Bool, line: Int64, col: Int64) {
+        let (body, name, nameLine, nameCol) = self.parseBinding()
+        if self.stopped() {
+            return
+        }
+        if name != "_" {
+            self.declare(name, nameLine, nameCol)
+            if self.stopped() {
+                return
+            }
+        }
+        self.astText = self.astText + "P toplet " + i64(line) + " " + i64(col) + " " + b01(isPub) + "\n" + body
+    }
+
+    // exprText parses one initializer expression — T2's minimal primary
+    // face: literal (int, float, rune, hole-free string, bool) and
+    // identifier, ending at the line break or end of file. Anything the
+    // full expression grammar owns (operators, calls, groups, the
+    // interpolation hole) latches T5's pending marker rather than
+    // mis-parsing.
+    pub fn exprText(mut self) -> String {
+        let t = self.cur
+        if t.kind == "ident" {
+            self.next()
+            if self.afterPrimary() == false {
+                return ""
+            }
+            return "P ident " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n"
+        }
+        if t.kind == "int" || t.kind == "float" || t.kind == "rune" {
+            self.next()
+            if self.afterPrimary() == false {
+                return ""
+            }
+            return "P literal " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n"
+        }
+        if t.kind == "string" {
+            if hasHole(t.text) {
+                self.bndLatch("WEC-PENDING hole")
+                return ""
+            }
+            self.next()
+            if self.afterPrimary() == false {
+                return ""
+            }
+            return "P literal " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n"
+        }
+        if t.kind == "keyword" && (t.text == "true" || t.text == "false") {
+            self.next()
+            if self.afterPrimary() == false {
+                return ""
+            }
+            return "P literal " + i64(t.line) + " " + i64(t.col) + " bool " + lexnum.esc(t.text) + "\n"
+        }
+        self.bndLatch("WEC-PENDING expr")
+        return ""
+    }
+
+    // afterPrimary decides whether the minimal expression ends here —
+    // at end of file or on a new line. Any same-line continuation token
+    // belongs to an expression face T5 owns.
+    pub fn afterPrimary(mut self) -> Bool {
+        if self.atEnd() {
+            return true
+        }
+        if self.brokeLine() {
+            return true
+        }
+        self.bndLatch("WEC-PENDING expr")
+        return false
+    }
 }
 
 // run is the parse section's entry (the design's module contract): the
 // driver hands it the lexical sections — the T lines and the D/L lines —
-// and appends what it returns. The empty source is the one shape the
-// skeleton answers exactly: the ast header and the file line, whose
-// absent positions render 0 0 and whose test-module fact is 0 (the
-// driver's fixed file name never ends _test.we). Every other input still
-// awaits its faces.
+// and appends what it returns. The empty source parses to the file line
+// alone; a latched parse answers the diagnostic E line or the N line;
+// everything else is the ast section's P-line family.
 pub fn run(toksText: String, docsText: String) -> String {
     let p = Parser {
         toksText: toksText, docsText: docsText, pos: 0,
@@ -225,10 +1278,14 @@ pub fn run(toksText: String, docsText: String) -> String {
         failed: 0, errLine: 0, errCol: 0, errCode: "", errMsg: "",
         bnd: 0, bndWhat: "",
     }
-    if p.cur.kind == "eof" {
-        return "ast\n" + "P file 0 0 0\n"
+    p.parseFile()
+    if p.bnd != 0 {
+        return "N " + p.bndWhat + "\n"
     }
-    return "WEC-PENDING parse\n"
+    if p.failed != 0 {
+        return "E " + i64(p.errLine) + " " + i64(p.errCol) + " " + p.errCode + " " + lexnum.esc(p.errMsg) + "\n"
+    }
+    return "ast\n" + p.astText
 }
 
 // drive adapts the driver's contract: a lexical error is the whole output

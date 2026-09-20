@@ -251,6 +251,69 @@ func loadCorpus(t *testing.T) []entry {
 		entry{"literal:attr-spaced", "#[x ( 1 )]"},
 		entry{"literal:rune-escape", "'\\n'"},
 		entry{"literal:rune-escape-u", "'\\u{41}'"},
+		// T2's file-structure face: the item dispatch, the naming matrix
+		// (E0011 rides T3's type declarations; E0012/E0013 land here), the
+		// module name-space collisions, the pub/byval/byres prefix order,
+		// and the top-level error codes. Positives stay inside the T2 faces
+		// — empty fn bodies, literal and identifier initializers, named and
+		// qualified type references without tuples; everything wider (list
+		// literals, calls, statements) keeps diverging until its own task.
+		entry{"t2:import-basic", "import std.io\n"},
+		entry{"t2:import-alias", "import std.string as s\n"},
+		entry{"t2:import-two", "import std.io\nimport std.string\n"},
+		entry{"t2:effect-decls", "effect db\npub effect audit\n"},
+		entry{"t2:fn-empty", "fn f() {}\n"},
+		entry{"t2:fn-param", "fn id(x: Int64) -> Int64 {}\n"},
+		entry{"t2:fn-two-params", "fn add(a: Int64, b: Int64) {}\n"},
+		entry{"t2:fn-effect", "fn ping() effect io {}\n"},
+		entry{"t2:fn-effect-qualified", "fn f() effect std.db {}\n"},
+		entry{"t2:fn-qual-type", "fn f(x: std.string.String) {}\n"},
+		entry{"t2:fn-generic-type", "fn f(xs: List<Int64>) {}\n"},
+		entry{"t2:let-annot", "let n: Int64 = 7\n"},
+		entry{"t2:let-string", "let s = \"abc\"\n"},
+		entry{"t2:let-bools", "let a = true\nlet b = false\n"},
+		entry{"t2:let-rune", "let r = 'a'\n"},
+		entry{"t2:let-underscore", "let _ = 1\n"},
+		entry{"t2:let-ident-init", "let x = y\n"},
+		entry{"t2:file-mixed", "import std.io\neffect db\nfn go(x: Int64) effect io {}\nlet n = 3\n"},
+		entry{"t2:err-e0012-fn", "fn F() {}\n"},
+		entry{"t2:err-e0012-let", "let X = 1\n"},
+		entry{"t2:err-e0012-effect", "effect DB\n"},
+		entry{"t2:err-e1403", "effect io\n"},
+		entry{"t2:err-e0404-fn", "fn f() {}\nfn f() {}\n"},
+		entry{"t2:err-e0404-let", "let x = 1\nlet x = 2\n"},
+		entry{"t2:err-e0404-import", "import std.io\nlet io = 1\n"},
+		entry{"t2:err-e0404-over-e1403", "let io = 1\neffect io\n"},
+		entry{"t2:err-e0013-import", "import std.Io\n"},
+		entry{"t2:err-import-eof", "import\n"},
+		entry{"t2:err-import-int", "import 1\n"},
+		entry{"t2:err-var-top", "var x = 1\n"},
+		entry{"t2:err-return-top", "return 1\n"},
+		entry{"t2:err-mock-top", "mock std.io println\n"},
+		entry{"t2:err-pub-eof", "pub\n"},
+		entry{"t2:err-pub-ident", "pub x\n"},
+		entry{"t2:err-byval-pub", "byval pub type T {}\n"},
+		entry{"t2:err-byval-eq", "byval = 1\n"},
+		entry{"t2:err-byval-eof", "byval\n"},
+		entry{"t2:err-byres-ident", "byres x\n"},
+		entry{"t2:err-pub-byres-eof", "pub byres\n"},
+		entry{"t2:err-e0102-first", "+ 1\n"},
+		entry{"t2:err-e0102-after", "let x = 1\n+ 1\n"},
+		entry{"t2:err-item-fallthrough", "x = 1\n"},
+		entry{"t2:err-fn-name-int", "fn 1() {}\n"},
+		entry{"t2:err-fn-noparen", "fn f {}\n"},
+		entry{"t2:err-fn-nobody", "fn f()\n"},
+		entry{"t2:err-fn-nobody-params", "fn f(x: Int64)\n"},
+		entry{"t2:err-param-noannot", "fn f(x) {}\n"},
+		entry{"t2:err-param-int", "fn f(1) {}\n"},
+		entry{"t2:err-param-eof", "fn f(\n"},
+		entry{"t2:err-param-tail", "fn f(x: Int64 2) {}\n"},
+		entry{"t2:err-effect-seg-tok", "fn f() effect {}\n"},
+		entry{"t2:err-typeref-lower", "fn f(x: int) {}\n"},
+		entry{"t2:err-typeref-eof", "let x:\n"},
+		entry{"t2:err-binding-eq-eof", "let x\n"},
+		entry{"t2:err-binding-tok", "let x 1\n"},
+		entry{"t2:n-mut-param", "fn f(mut x: Int64) {}\n"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
@@ -435,7 +498,7 @@ func window(s string, i int) string {
 // face lands (T6). B3b's lexical-only TestLexReconciliation is retired
 // into this test: the lexical comparison is the parse-section-empty prefix
 // of the full output, so asserting both would assert a fraction twice.
-const reconciledFloor = 97
+const reconciledFloor = 206
 
 // TestOutputReconciliation is the B3c differential bar (design D5): for
 // every admitted corpus entry, the wec artifact's FULL serialized output —

@@ -15,12 +15,14 @@
 
 ## T2 T 游标消耗 + 文件结构与顶层项 I
 
-- [ ] **parseFile/checkStart/parseItem 分发 + import/effect/fn 基形/参数/顶层 let**：checkStart 列锚；parseItem 关键字分发（含 var 顶层 E0403、return 顶层 E0401、mock 顶层 E1802）；fnDecl（名字/参数表 annotatedParams——**bnd 闩于参数位 `mut` 词**、返回位、效果段）；顶层 let；命名三检 E0011/E0012/E0013（isPascal/isCamel/isModuleSeg 字符集逐字对齐）+ E0404 撞名（namesText 编码栈 declare/查名——撞名压倒命名的次序照 Go）；行续判 brokeLine 于 if-else 与优先级循环的两处用点。
+- [x] **parseFile/checkStart/parseItem 分发 + import/effect/fn 基形/参数/顶层 let**：checkStart 列锚；parseItem 关键字分发（含 var 顶层 E0403、return 顶层 E0401、mock 顶层 E1802）；fnDecl（名字/参数表 annotatedParams——**bnd 闩于参数位 `mut` 词**、返回位、效果段）；顶层 let；命名三检 E0011/E0012/E0013（isPascal/isCamel/isModuleSeg 字符集逐字对齐）+ E0404 撞名（namesText 编码栈 declare/查名——撞名压倒命名的次序照 Go）；行续判 brokeLine 于 if-else 与优先级循环的两处用点。
   来源：proposal 目标 1、今日事实 1–4；design D1、D2、D6
   验证：命名矩阵 + 撞名 + 顶层错码语料先红后绿；stdlib 源子集（import/fn 密集）翻绿；`we check wec/` exit 0
-- [ ] **属性与 pub 前缀族**：pub 前缀序（pub→byval→声明；byval type/record；byres record）与 pub 尾随形错码；import 路径 isModuleSeg；effect 声明（E1403 内建标签冲突 + 命名次序）。
+  落地（2026-09-20）：parse.we ~1350 行（33 个 impl 方法 + run/drive）；t2: 语料 56/56 全绿（红先态见 T1 记录）；棘轮 97 → **206**；`we check wec/` 与 `we build wec/` 皆 exit 0；stdlib 翻绿 1 枚（io.we——import/fn 密集面）；发散余量 = case 945 + stdlib 6 + wec 4（literal/lextest 全绿）；三枚停点构造与两枚消息面修正入 design 补记二（var 绑 record 停的推广、调用结果字段读停、#31 let-别名复发被塔逮住、lexnum.quote 单 rune 面须换 quoteText）
+- [x] **属性与 pub 前缀族**：pub 前缀序（pub→byval→声明；byval type/record；byres record）与 pub 尾随形错码；import 路径 isModuleSeg；effect 声明（E1403 内建标签冲突 + 命名次序）。
   来源：今日事实 4；design D6
   验证：前缀序正负矩阵语料先红后绿
+  落地（2026-09-20）：pub/byval/byres 三族分发 + 尾随形 E0105 逐形（含 byval 后 pub 的前缀序消息、byres 的 record 限定、pub byres 的 eof 形以 pub 锚位报错照 Go）；isModuleSeg 双源词（ident/keyword——std.test 须拼出，chapter 1 保留闭包只辖名位）；E1403 与 E0404/E0012 的优先级矩阵（撞名 > 内建冲突 > 命名规约）逐形对齐；P fn 行的 recv 空位（名后两空格 = 名域界 + 空 recv 域）补记于补记二-4
 
 ## T3 声明与类型引用
 
