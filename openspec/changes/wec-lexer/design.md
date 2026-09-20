@@ -137,3 +137,18 @@ record Lexer { src: String, n: Int64, off: Int64, line: Int64, col: Int64,
 5. **rune 面 as-built**：consumeRuneLit 每处 fail 后**早退**（Go fail = panic，后续语句不执行——端口保真）；逃逸半面 = `pendingFail("rune escape")`，`'\u{41}'` 等留 T4（任务书原案）。
 6. **wec 自源回归时点订正**：T2 记「−2 wec 自源待 T3/T5 回归」——T3 后仍栏外：lex/lexnum/main 三源均含**字符串**字面（kind 面 T4 才开），数值字面已非障碍。订正为「待 T4/T5」。
 7. **计数**：`reconciled 531`（红态 533 − 2 围栏收紧）；corpus 1073（stdlib 7/wec 3/lextest 36/conformance 978 + 字面 49）；17 包全绿（conformance 933 不动，零 Go 生产码改动）；`we check wec/` exit 0。
+
+## 实现期补记四（T4，2026-09-18）
+
+**两复选框全勾。红先记录在案：语料 +32 字面量（逃逸/洞/attr/非 ASCII 矩阵 + rune 逃逸两枚）+ 围栏拓宽（kinds +string/attr、errs +E0002/E0005/E0007/E0008/E0009）+ 四判据摘除后 `reconciled 1104 corpus entries` + 573 枚「output diverges」（538 string literal / 30 attribute / 5 rune escape 三族 WEC-PENDING；531 旧绿零回归）。真源落地后 `reconciled 1104 corpus entries` 全绿——corpus 1105 唯一栏外 = lextest `"\xff"` 13 值角披露。**
+
+1. **【缺陷发现·follow-up #31，T6 随 #29/#30 登记】We 编译器 let-别名错编译**：`let x = <局部 var>` 绑定的是 var 的**存储**而非快照值——let 读处取 var 当前值。探针族（/tmp，t4probe 项目）：`let snap = i; i = i+1; return snap` 回当前值（**snapLet BUG**）；同形 `var snap: Int64 = i` 拷贝正确（**snapVar OK**）；循环外同中（**snapLetNoLoop BUG**）；快照源与被变 var 不同仍中（**snapLetTwoVars BUG**）；String 同中（**snapStr BUG**）。record 字段读取（`let ln = self.line`）与调用结果（`let c = self.codeHere()`）不受累——lex.we 全库其余 let 皆此两类，故 corpus 1104 绿未受染。wec 绕行 = `validateAttrArgs` 的 `argStart` 改 `var` 快照（唯一 let-from-local-var 点位，注释指明 #31）。修复属编译器变更、须带黄金锚（check 层可钉），不入 B3b。
+2. **任务书 E0009 例形 as-built 订正**：`#[x = f()]` 实死于 **E0001 form**（名后 `=` 非 `(` 非 `]`）——真 E0009 形是 `#[x(y)]`（裸引用）与 `#[limit(5000 + n)]`（conformance check-e0009 案例源：数字实参解析成功后随空白与 `+` 非逗号 → E0009 于实参起点 `"5000 + n"`）。语料矩阵按真实形落；此例也是 #31 的唯一在塔可观测形（argStart 位差 → 列差 5）。
+3. **围栏终态（除 13 值角外全量）**：kinds = 全 named kind 除 comment（塔走 `lex.Scan` 永不产 comment 词）；errs = E0001–E0009 全码集。T2 的 attr-unit 消息判据、T3 的 src-含-`#[` 与 E0003-src-反斜杠与 rune-文本-反斜杠四判据随面落地摘除——`#[cfg(1__0)]`（实参内 E0006）与 lextest `'\n x'`（E0003）两 T3 骑码形随围栏拓宽自动放行翻绿。
+4. **wec 自源回归兑现（订正 T2/T3 的「待 T4/T5」）**：string kind 开闸即回——lex/lexnum/main 三源自 T2 红态起栏外，本窗随 538 族一并翻绿；自举一致性信号（语料②）全量在场。
+5. **E0007 消息的自陷规避**：消息文本含字面 `${`——We 字符串字面内 `${` 恒开洞，直接书写会让 wec 编译自己的 lex.we 时死于自家 E0007；拆串拼接（`"…the $" + "{ hole…"`）绕行（拼接在运行时、词法扫描逐段看）。
+6. **consumeAttrArgs 的括号栈 = String**：`stack = ")"` 起步、push 拼接、pop 切尾、top 取尾字节比对（List 载体停面之外的零机制选择；`([)]` 交错形保真）。
+7. **次序与位置保真点**：attr 序 form（E0001，名前后两形 + `#` 非跟 `[`）→ literal-only（E0009，failAt 于实参原始偏移 base+argStart）→ whitelist（E0008，空集 ⇒ 凡合法 unit 必 E0008 于 unit 起点；emit 的 attr 三字段臂因此在本 build 不可达，按 D4 规范落形）；实参内坏数字 E0006 于实参自身位（failAt(base+i)）；soft 引号语义（洞内/attr 实参内的嵌套串 E0002 位置在该串开口处）。
+8. **trimSpace 的 ASCII 面**：语料可达 = space/tab（\n\r 先死于平衡走查/checkEncoding；\v\f 入集）；Go strings.TrimSpace 会裁的 unicode 空白（U+00A0 等）为不可达角——diverge 即响亮失败（D3 quote 同款纪律）。
+9. **语言面小记（t4probe 探针，/tmp 不入册）**：自递归/模块级互递归（skipArgString↔skipArgHole）/while+`continue` 全绿；E0202 复发于 consumeEscape 的 var 赋值 else-if 链（补尾 else 成固定写法）；`while true` + 值返回须补不可达尾 `return`（检查器不做无穷循环终止分析）；非 unit 值调用须显式弃置（`let _ = expr`，E0605）。
+10. **计数**：`reconciled 1104`（红 573 → 0）；corpus 1105（stdlib 7/wec 3/lextest 36/conformance 978 + 字面 81）；17 包全绿（`go test ./... -count=1` 0 FAIL）；conformance 933 不动（零 Go 生产码改动——wec_test.go 测试码 + wec/ We 源）；`we check wec/` exit 0；`gofmt -l` 净、`git diff --check` 净。

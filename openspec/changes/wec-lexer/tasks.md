@@ -40,12 +40,14 @@
 
 ## T4 字符串、逃逸、attr、插值洞
 
-- [ ] **字符串与逃逸**：`consumeString`（同行闭引 E0002 两形、`$` 非洞普通字符）、`consumeEscape`（`\n \t \r \0 \\ \" \' \u{1-6 hex}` 闭集 E0005、`\u` 域校验——0x10FFFF 上限 + 代理排除，与 Go 词法器同层）。
+- [x] **字符串与逃逸**：`consumeString`（同行闭引 E0002 两形、`$` 非洞普通字符）、`consumeEscape`（`\n \t \r \0 \\ \" \' \u{1-6 hex}` 闭集 E0005、`\u` 域校验——0x10FFFF 上限 + 代理排除，与 Go 词法器同层）。
   来源：proposal 目标 2；design D2
   验证：逃逸正负矩阵（含 `\u{D800}`/`\u{110000}` E0005、尾随 `\` E0005）先红后绿；非 ASCII 字面语料⑦绿
-- [ ] **attr 与洞**：attr 序 form（E0001）→ literal-only（E0009）→ whitelist（E0008 空集）次序；`consumeHole` 深度/括号平衡（E0007 未闭、E0002 跨行）；AttrName/AttrArgs 原样文本（byteSlice）。
+  落地（2026-09-18）：先红（1104 放行/573 发散——538 string/30 attr/5 rune escape 三族 WEC-PENDING）后绿 `reconciled 1104`；闭集七码 + `\u` 域检（空/七位/无 `{`/代理/超域五负 + 10FFFF 正界）+ 尾随 `\` + E0002 两形（EOF/换行）+ 洞四形（平衡/嵌套串/`${f(}` 未平衡/未闭）语料钉；非 ASCII 字面⑦（`"héllo — 中"`）绿；rune 逃逸两枚（`'\n'`/`'\u{41}'`）随 consumeEscape 兑现 T3 预留；wec 自源 −2 于本任务兑现回归（string kind 开闸）
+- [x] **attr 与洞**：attr 序 form（E0001）→ literal-only（E0009）→ whitelist（E0008 空集）次序；`consumeHole` 深度/括号平衡（E0007 未闭、E0002 跨行）；AttrName/AttrArgs 原样文本（byteSlice）。
   来源：proposal 目标 2；design D2
-  验证：attr 三码矩阵（`#[test]` E0008、`#[x = f()]` E0009、`#[` E0001）+ 洞平衡语料先红后绿；语料⑤全量门槛复验（此刻参考侧 kind 集应全覆盖）
+  验证：attr 三码矩阵（~~`#[x = f()]` E0009~~→实死于 E0001 form，E0009 真形 `#[x(y)]`/`#[limit(5000 + n)]`——任务书例形订正，design 补记四-2）+ 洞平衡语料先红后绿；语料⑤全量门槛复验（此刻参考侧 kind 集应全覆盖）
+  落地（2026-09-18）：attr 三码序逐位钉（form 名前后两形/`#` 非跟 `[`、E0009 于实参起点、E0008 于 unit 起点）+ 实参字面量/列表/交错括号/实参内 E0006 五形；**follow-up #31 We 编译器 let-别名错编译被发现**（`let x = 裸局部 var` 绑存储非快照，探针族五证；wec 绕行 = argStart 用 var 快照——design 补记四-1，随 T6 登记）围栏终态 = 全 named kind 除 comment + E0001–E0009 全码集（唯余 13 值角 #30）；17 包全绿、conformance 933 不动、`we check wec/` exit 0
 
 
 ## T5 全量对账 + 突变电池 + 零漂移

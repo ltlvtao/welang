@@ -1,9 +1,10 @@
-// lex — the scanner core of the We-hosted port (B3b T2): checkEncoding's
+// lex — the scanner core of the We-hosted port (B3b T2–T4): checkEncoding's
 // three faces, the main token loop with whitespace and comment skipping,
-// identifiers and keywords, the operator inventory, and the /// docs side
-// channel. The port mirrors internal/lex/lex.go statement for statement;
-// the reconciliation tower requires the serialized output to be
-// byte-identical to the Go lexer's.
+// identifiers and keywords, the operator inventory, the /// docs side
+// channel, the numeric and rune literal faces, and the string, escape,
+// interpolation-hole, and attribute faces. The port mirrors
+// internal/lex/lex.go statement for statement; the reconciliation tower
+// requires the serialized output to be byte-identical to the Go lexer's.
 //
 // Two language-face adaptations shape the record (both disclosed in the
 // change's design notes): We has no panic/recover, so Go's first-error
@@ -267,10 +268,7 @@ impl Lexer {
     }
 
     // scanAll is the main token loop: skip whitespace and comments, then
-    // scan one token, until end of input. The literal faces still to come
-    // ('"' strings, '#' attributes, and the escape half of rune literals)
-    // latch a WEC-PENDING marker — T4's faces; the reconciliation fence
-    // guarantees no admitted source reaches them before those tasks land.
+    // scan one token, until end of input.
     pub fn scanAll(mut self) {
         while true {
             while self.off < self.n {
@@ -299,14 +297,20 @@ impl Lexer {
             }
             let c = self.codeHere()
             if c == 34 {
-                self.pendingFail("string literal")
+                let t = self.scanString()
+                if self.failed == false {
+                    self.emit(t)
+                }
             } else if c == 39 {
                 let t = self.scanRune()
                 if self.failed == false {
                     self.emit(t)
                 }
             } else if c == 35 {
-                self.pendingFail("attribute")
+                let t = self.scanAttr()
+                if self.failed == false {
+                    self.emit(t)
+                }
             } else if c >= 48 && c <= 57 {
                 let t = self.scanNumber()
                 if self.failed == false {
@@ -328,16 +332,15 @@ impl Lexer {
     }
 
     // emit appends one token's serialization line (design D4's T form;
-    // the attr fields join in T4).
+    // attr tokens carry their name and raw argument text as two more
+    // fields — unreachable in this build, where the empty whitelist
+    // fails every unit, but the serialization spec's own shape).
     pub fn emit(mut self, t: Token) {
-        self.outText = self.outText + "T " + lexnum.int64ToString(t.line) + " " + lexnum.int64ToString(t.col) + " " + t.kind + " " + lexnum.esc(t.text) + "\n"
-    }
-
-    // pendingFail latches the not-yet-ported marker for a literal face.
-    pub fn pendingFail(mut self, what: String) {
-        let ln = self.line
-        let cl = self.col
-        self.fail(ln, cl, "WEC-PENDING", "face not ported yet: " + what)
+        var line = "T " + lexnum.int64ToString(t.line) + " " + lexnum.int64ToString(t.col) + " " + t.kind + " " + lexnum.esc(t.text)
+        if t.kind == "attr" {
+            line = line + " " + lexnum.esc(t.attrName) + " " + lexnum.esc(t.attrArgs)
+        }
+        self.outText = self.outText + line + "\n"
     }
 
     // flushDoc emits the pending /// unit, if any, as a D line plus its
@@ -450,9 +453,7 @@ impl Lexer {
     }
 
     // scanRune consumes one rune literal token: exactly one character or
-    // one escape between single quotes on a single line. The escape form
-    // is T4's consumeEscape face and latches the pending marker here; the
-    // fence keeps escape-bearing rune sources out until then.
+    // one escape between single quotes on a single line.
     pub fn scanRune(mut self) -> Token {
         let ln = self.line
         let cl = self.col
@@ -480,16 +481,17 @@ impl Lexer {
             return
         }
         if c == 92 {
-            // T4's consumeEscape face; the fence keeps it out of the
-            // corpus until then.
-            self.pendingFail("rune escape")
-            return
-        }
-        if c == 39 {
+            // one escape counts as the one content character
+            self.consumeEscape()
+            if self.failed {
+                return
+            }
+        } else if c == 39 {
             self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — a rune holds exactly one character or one escape") // '' holds nothing
             return
+        } else {
+            self.advance() // exactly one character
         }
-        self.advance() // exactly one character
         if self.off >= self.n {
             self.fail(quoteLine, quoteCol, "E0003", "unterminated rune literal — not closed before the end of the line")
             return
@@ -504,6 +506,597 @@ impl Lexer {
             return
         }
         self.advance() // closing '
+    }
+
+    // scanString consumes one string literal token, validating escapes
+    // and interpolation balance (E0002/E0005/E0007) on the way.
+    pub fn scanString(mut self) -> Token {
+        let ln = self.line
+        let cl = self.col
+        let start = self.off
+        let _ = self.consumeStringLit(false) // a hard failure latches; the token never emits
+        return Token { kind: "string", text: self.src.byteSlice(start, self.off), line: ln, col: cl, attrName: "", attrArgs: "" }
+    }
+
+    // consumeStringLit consumes one string literal starting at its opening
+    // quote. soft=true reports an end-of-line run by returning false —
+    // used where the quote may be the enclosing literal's own close (an
+    // interpolation hole that never balanced); otherwise the run is E0002
+    // at the opening quote. In the hard case the port latches and returns
+    // false, where Go's fail panics and unwinds (the caller checks the
+    // latch).
+    pub fn consumeStringLit(mut self, soft: Bool) -> Bool {
+        let quoteLine = self.line
+        let quoteCol = self.col
+        self.advance() // opening "
+        while true {
+            var atEnd = false
+            if self.off >= self.n {
+                atEnd = true
+            } else {
+                let c0 = self.codeHere()
+                if c0 == 10 || c0 == 13 {
+                    atEnd = true
+                }
+            }
+            if atEnd {
+                if soft {
+                    return false
+                }
+                self.fail(quoteLine, quoteCol, "E0002", "unterminated string literal — not closed before the end of the line")
+                return false
+            }
+            let c = self.codeHere()
+            if c == 34 {
+                self.advance()
+                return true
+            }
+            if c == 92 {
+                // A backslash may not dangle: the literal then never
+                // closed, which is the primary fact.
+                var dangling = false
+                if self.off + 1 >= self.n {
+                    dangling = true
+                } else {
+                    let nc = self.codeNext()
+                    if nc == 10 || nc == 13 {
+                        dangling = true
+                    }
+                }
+                if dangling {
+                    if soft {
+                        return false
+                    }
+                    self.fail(quoteLine, quoteCol, "E0002", "unterminated string literal — not closed before the end of the line")
+                    return false
+                }
+                self.consumeEscape()
+                if self.failed {
+                    return false
+                }
+            } else if c == 36 && self.codeNext() == 123 {
+                let holeLine = self.line
+                let holeCol = self.col
+                self.advance() // '$'
+                self.advance() // '{'
+                self.consumeHole(holeLine, holeCol, quoteLine, quoteCol)
+                if self.failed {
+                    return false
+                }
+            } else {
+                self.advance()
+            }
+        }
+        return false // unreachable: the loop above only exits by return
+    }
+
+    // consumeHole consumes an interpolation hole after "${", stopping after
+    // the "}" that balances it. A hole is a balanced-brace expression
+    // region: parentheses and brackets opened inside it hold it open — a
+    // "}" inside open parens is ordinary region text, which is what makes
+    // chapter 1's own example "${f(}" unbalanced (the quote then falls
+    // inside the still-open hole). Nested literals inside the hole are
+    // consumed with their own rules, and their braces do not count. A
+    // quote that cannot close a nested literal is the enclosing literal's
+    // own close — with the hole still open that is E0007 at the opening
+    // ${. (The message's literal "${" is assembled by concatenation so
+    // this source's own string literals never open a hole.)
+    pub fn consumeHole(mut self, holeLine: Int64, holeCol: Int64, quoteLine: Int64, quoteCol: Int64) {
+        var depth: Int64 = 1  // braces; the hole's own ${ counts as one
+        var parens: Int64 = 0 // open ( or [ within the hole so far
+        while depth > 0 {
+            var atEnd = false
+            if self.off >= self.n {
+                atEnd = true
+            } else {
+                let c0 = self.codeHere()
+                if c0 == 10 || c0 == 13 {
+                    atEnd = true
+                }
+            }
+            if atEnd {
+                self.fail(quoteLine, quoteCol, "E0002", "unterminated string literal — not closed before the end of the line")
+                return
+            }
+            let c = self.codeHere()
+            if c == 123 {
+                depth = depth + 1
+                self.advance()
+            } else if c == 125 {
+                if parens == 0 {
+                    depth = depth - 1
+                }
+                self.advance()
+            } else if c == 40 || c == 91 {
+                parens = parens + 1
+                self.advance()
+            } else if c == 41 || c == 93 {
+                if parens > 0 {
+                    parens = parens - 1
+                }
+                self.advance()
+            } else if c == 34 {
+                let ok = self.consumeStringLit(true)
+                if ok == false {
+                    self.fail(holeLine, holeCol, "E0007", "unbalanced interpolation braces — the $" + "{ hole is not closed inside the literal")
+                    return
+                }
+            } else if c == 39 {
+                self.consumeRuneLit()
+                if self.failed {
+                    return
+                }
+            } else {
+                self.advance()
+            }
+        }
+    }
+
+    // consumeEscape validates one escape sequence at the current backslash:
+    // the closed set n t r 0 \ " ' and \u{h..} (1-6 hex digits, value at
+    // most U+10FFFF, surrogates forbidden). The cursor lands after the
+    // escape. The default arm renders the offending character the way Go's
+    // strconv.Quote does inside the message (quoteBody), so control
+    // characters stay printable.
+    pub fn consumeEscape(mut self) {
+        let escLine = self.line
+        let escCol = self.col
+        self.advance() // backslash
+        if self.off >= self.n {
+            // A trailing backslash at end of input: defensive (the string
+            // and rune scanners check line ends first), kept total.
+            self.fail(escLine, escCol, "E0005", "invalid escape sequence — a trailing \"\\\" is not in the closed set")
+            return
+        }
+        let c = self.codeHere()
+        if c == 110 || c == 116 || c == 114 || c == 48 || c == 92 || c == 34 || c == 39 {
+            self.advance()
+            return
+        }
+        if c == 117 {
+            self.advance()
+            var braceOk = true
+            if self.off >= self.n {
+                braceOk = false
+            } else if self.codeHere() != 123 {
+                braceOk = false
+            } else {
+                braceOk = true
+            }
+            if braceOk == false {
+                self.fail(escLine, escCol, "E0005", "invalid escape sequence — \"\\u\" wants {h..} with 1-6 hex digits")
+                return
+            }
+            self.advance() // '{'
+            var cnt: Int64 = 0
+            var val: Int64 = 0
+            while true {
+                var isHex = false
+                if self.off < self.n {
+                    if lexnum.isHexDigitB(self.codeHere()) {
+                        isHex = true
+                    }
+                }
+                if isHex == false {
+                    break
+                }
+                cnt = cnt + 1
+                val = val * 16 + lexnum.hexVal(self.codeHere())
+                self.advance()
+            }
+            var bad = false
+            if cnt < 1 {
+                bad = true
+            } else if cnt > 6 {
+                bad = true
+            } else if self.off >= self.n {
+                bad = true
+            } else if self.codeHere() != 125 {
+                bad = true
+            } else if val > 0x10FFFF {
+                bad = true
+            } else if val >= 0xD800 && val <= 0xDFFF {
+                bad = true
+            } else {
+                bad = false
+            }
+            if bad {
+                self.fail(escLine, escCol, "E0005", "invalid escape sequence — \"\\u{h..}\" wants 1-6 hex digits, a value at most U+10FFFF, and no surrogates")
+                return
+            }
+            self.advance() // '}'
+            return
+        }
+        // default: quote the offending character for the message
+        let w = lexnum.widthOf(c)
+        let body = lexnum.quoteBody(self.src.byteSlice(self.off, self.off + w))
+        self.fail(escLine, escCol, "E0005", "invalid escape sequence — \"\\" + body + "\" is not in the closed set")
+    }
+
+    // scanAttr consumes one attribute unit: the token `#[`, a name, optional
+    // parenthesized arguments, and the closing `]` — one lexical structure.
+    // Validation order: form (E0001), then the literal-only argument rule
+    // (E0009), then the closed whitelist (E0008) — with an empty
+    // whitelist, checking the name first would leave E0009 unreachable.
+    // The whitelist is empty in this build, so every well-formed unit dies
+    // E0008 at its start and the Token never reaches emit (the attr fields
+    // stay on the record for the serialization spec's own shape).
+    pub fn scanAttr(mut self) -> Token {
+        let ln = self.line
+        let cl = self.col
+        let start = self.off
+        if self.codeNext() != 91 {
+            self.fail(ln, cl, "E0001", "invalid character — \"#\" must be followed by \"[\" to open an attribute unit")
+            return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+        }
+        self.advance() // '#'
+        self.advance() // '['
+        self.skipHoriz()
+        var nameOk = true
+        if self.off >= self.n {
+            nameOk = false
+        } else if isIdentStartCode(self.codeHere()) == false {
+            nameOk = false
+        } else {
+            nameOk = true
+        }
+        if nameOk == false {
+            let nl = self.line
+            let nc = self.col
+            self.fail(nl, nc, "E0001", "invalid character — the attribute unit expects a name, optional (arguments), then \"]\" on one line")
+            return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+        }
+        let nameLine = self.line
+        let nameCol = self.col
+        let nameStart = self.off
+        while self.off < self.n {
+            if isIdentCharCode(self.codeHere()) {
+                self.advance()
+            } else {
+                break
+            }
+        }
+        let name = self.src.byteSlice(nameStart, self.off)
+        if isKeyword(name) {
+            self.fail(nameLine, nameCol, "E0001", "invalid character — the attribute unit expects a name, optional (arguments), then \"]\" on one line") // a keyword is not a name
+            return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+        }
+        self.skipHoriz()
+        var argsRaw = ""
+        var argsOff: Int64 = 0
+        if self.off < self.n {
+            if self.codeHere() == 40 {
+                argsOff = self.off + 1
+                self.consumeAttrArgs()
+                if self.failed {
+                    return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+                }
+                argsRaw = lexnum.trimSpace(self.src.byteSlice(argsOff, self.off - 1))
+            }
+        }
+        self.skipHoriz()
+        var closeOk = true
+        if self.off >= self.n {
+            closeOk = false
+        } else if self.codeHere() != 93 {
+            closeOk = false
+        } else {
+            closeOk = true
+        }
+        if closeOk == false {
+            let nl = self.line
+            let nc = self.col
+            self.fail(nl, nc, "E0001", "invalid character — the attribute unit expects a name, optional (arguments), then \"]\" on one line")
+            return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+        }
+        self.advance() // ']'
+        if argsRaw != "" {
+            self.validateAttrArgs(argsRaw, argsOff)
+            if self.failed {
+                return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+            }
+        }
+        // the whitelist is empty in this build: every name reports E0008
+        self.fail(ln, cl, "E0008", "unknown attribute — " + lexnum.quoteText(name) + " is not in the closed whitelist")
+        return Token { kind: "", text: "", line: ln, col: cl, attrName: "", attrArgs: "" }
+    }
+
+    // skipHoriz skips the attribute unit's horizontal whitespace.
+    pub fn skipHoriz(mut self) {
+        while self.off < self.n {
+            let c = self.codeHere()
+            if c == 32 || c == 9 {
+                self.advance()
+            } else {
+                break
+            }
+        }
+    }
+
+    // consumeAttrArgs consumes a balanced parenthesized argument region,
+    // starting at '(' and stopping after its matching ')'. Strings and
+    // runes inside are consumed with their own literal rules; a newline
+    // before the unit closes is a form violation. The expected-closer
+    // stack is a String (this build cannot construct a byte list): the
+    // top is its last byte, push appends, pop slices it away.
+    pub fn consumeAttrArgs(mut self) {
+        var stack = ")"
+        self.advance() // '('
+        while stack.byteLength() > 0 {
+            var atEnd = false
+            if self.off >= self.n {
+                atEnd = true
+            } else {
+                let c0 = self.codeHere()
+                if c0 == 10 || c0 == 13 {
+                    atEnd = true
+                }
+            }
+            if atEnd {
+                let nl = self.line
+                let nc = self.col
+                self.fail(nl, nc, "E0001", "invalid character — the attribute unit expects a name, optional (arguments), then \"]\" on one line")
+                return
+            }
+            let c = self.codeHere()
+            if c == 40 {
+                stack = stack + ")"
+                self.advance()
+            } else if c == 91 {
+                stack = stack + "]"
+                self.advance()
+            } else if c == 41 || c == 93 {
+                let sn = stack.byteLength()
+                let closer = self.src.byteSlice(self.off, self.off + 1)
+                if closer != stack.byteSlice(sn - 1, sn) {
+                    let nl = self.line
+                    let nc = self.col
+                    self.fail(nl, nc, "E0001", "invalid character — the attribute unit expects a name, optional (arguments), then \"]\" on one line")
+                    return
+                }
+                stack = stack.byteSlice(0, sn - 1)
+                self.advance()
+            } else if c == 34 {
+                let sl = self.line
+                let sc = self.col
+                let ok = self.consumeStringLit(true)
+                if ok == false {
+                    self.fail(sl, sc, "E0002", "unterminated string literal — not closed before the end of the line")
+                    return
+                }
+            } else if c == 39 {
+                self.consumeRuneLit()
+                if self.failed {
+                    return
+                }
+            } else {
+                self.advance()
+            }
+        }
+    }
+
+    // failAt latches a diagnostic positioned at a byte offset (the
+    // argument-region validator reports at the argument's own start).
+    pub fn failAt(mut self, off: Int64, code: String, message: String) {
+        let (ln, cl) = self.posAt(off)
+        self.fail(ln, cl, code, message)
+    }
+
+    // validateAttrArgs checks the literal-only argument rule (E0009)
+    // against the raw argument text: each argument is a string, number,
+    // boolean, or a literal list of those; anything else — an expression,
+    // call, or reference — fails at the argument's start.
+    pub fn validateAttrArgs(mut self, raw: String, base: Int64) {
+        let n = raw.byteLength()
+        var i: Int64 = 0
+        while true {
+            if self.failed {
+                return
+            }
+            while i < n {
+                let c = lexnum.byteAt(raw, i)
+                if c == 32 || c == 9 {
+                    i = i + 1
+                } else {
+                    break
+                }
+            }
+            if i >= n {
+                return
+            }
+            // var (not let): a let bound from a bare local var aliases the
+            // var's storage in this build's compiler (the snapshot reads
+            // the current value, not the value at binding) — a var-to-var
+            // copy is a real copy. Registered as follow-up #31.
+            var argStart: Int64 = i
+            let (ni, ok) = self.parseArgLiteral(raw, i, base)
+            i = ni
+            if ok == false {
+                self.failAt(base + argStart, "E0009", "non-literal attribute argument — " + lexnum.quoteText(lexnum.collectArg(raw, argStart)) + ": arguments are compile-time literals only")
+                return
+            }
+            while i < n {
+                let c = lexnum.byteAt(raw, i)
+                if c == 32 || c == 9 {
+                    i = i + 1
+                } else {
+                    break
+                }
+            }
+            if i >= n {
+                return
+            }
+            if lexnum.byteAt(raw, i) == 44 {
+                i = i + 1
+            } else {
+                self.failAt(base + argStart, "E0009", "non-literal attribute argument — " + lexnum.quoteText(lexnum.collectArg(raw, argStart)) + ": arguments are compile-time literals only")
+                return
+            }
+        }
+    }
+
+    // parseArgLiteral parses one literal at raw[i], returning the offset
+    // just past it and whether it is a literal. False means the argument
+    // is not a literal (an expression, call, or reference — as in the
+    // `1e5` cut, which is two tokens); a malformed numeric inside the
+    // region reports E0006 directly at the argument's own position (a bad
+    // literal is a literal-form error, not a non-literal argument).
+    pub fn parseArgLiteral(mut self, raw: String, i: Int64, base: Int64) -> (Int64, Bool) {
+        let n = raw.byteLength()
+        let b = lexnum.byteAt(raw, i)
+        if b == 34 {
+            // a string literal is one argument unless it interpolates
+            let (end, interp) = lexnum.skipArgString(raw, i)
+            if end < 0 || interp {
+                return (i, false)
+            }
+            return (end, true)
+        }
+        if b == 91 {
+            // a literal list of literals
+            var j = i + 1
+            while true {
+                if self.failed {
+                    return (i, false)
+                }
+                while j < n {
+                    let c = lexnum.byteAt(raw, j)
+                    if c == 32 || c == 9 {
+                        j = j + 1
+                    } else {
+                        break
+                    }
+                }
+                if j >= n {
+                    return (i, false)
+                }
+                if lexnum.byteAt(raw, j) == 93 {
+                    return (j + 1, true)
+                }
+                let (nj, ok) = self.parseArgLiteral(raw, j, base)
+                if ok == false {
+                    return (i, false)
+                }
+                j = nj
+                while j < n {
+                    let c = lexnum.byteAt(raw, j)
+                    if c == 32 || c == 9 {
+                        j = j + 1
+                    } else {
+                        break
+                    }
+                }
+                var comma = false
+                if j < n {
+                    if lexnum.byteAt(raw, j) == 44 {
+                        comma = true
+                    }
+                }
+                if comma {
+                    j = j + 1
+                    continue
+                }
+                if j >= n {
+                    return (i, false)
+                }
+                if lexnum.byteAt(raw, j) != 93 {
+                    return (i, false)
+                }
+            }
+        }
+        if b == 116 {
+            if lexnum.hasPrefixAt(raw, i, "true") {
+                if i + 4 >= n {
+                    return (i + 4, true)
+                }
+                if isIdentCharCode(lexnum.byteAt(raw, i + 4)) == false {
+                    return (i + 4, true)
+                }
+                return (i, false)
+            }
+            return (i, false)
+        }
+        if b == 102 {
+            if lexnum.hasPrefixAt(raw, i, "false") {
+                if i + 5 >= n {
+                    return (i + 5, true)
+                }
+                if isIdentCharCode(lexnum.byteAt(raw, i + 5)) == false {
+                    return (i + 5, true)
+                }
+                return (i, false)
+            }
+            return (i, false)
+        }
+        if lexnum.isDigitB(b) == false {
+            return (i, false)
+        }
+        // a numeric literal, validated by its own clauses (E0006 at the
+        // argument's position)
+        let end = lexnum.numericSpan(raw, i)
+        let text = raw.byteSlice(i, end)
+        let tn = text.byteLength()
+        var isBased = false
+        if tn >= 2 {
+            if lexnum.byteAt(text, 0) == 48 {
+                let b1 = lexnum.byteAt(text, 1)
+                if b1 == 120 || b1 == 111 || b1 == 98 {
+                    isBased = true
+                }
+            }
+        }
+        if isBased {
+            let detail = lexnum.validateBased(text)
+            if detail != "" {
+                self.failAt(base + i, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": " + detail)
+            }
+            return (end, true)
+        }
+        if lexnum.hasDot(text) {
+            let detail = lexnum.validateFloat(text)
+            if detail != "" {
+                self.failAt(base + i, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": " + detail)
+            }
+            return (end, true)
+        }
+        let j = lexnum.digitRunEnd(text, 0)
+        let digits = text.byteSlice(0, j)
+        let tail = text.byteSlice(j, tn)
+        let detail = lexnum.checkDigitRun(digits, true)
+        if detail != "" {
+            self.failAt(base + i, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": " + detail)
+        }
+        if tail == "" {
+            return (end, true)
+        }
+        if lexnum.knownIntSuffix(tail) {
+            return (end, true)
+        }
+        if lexnum.knownFloatSuffix(tail) || lexnum.allLetters(tail) {
+            self.failAt(base + i, "E0006", "invalid numeric literal — " + lexnum.quoteText(text) + ": the suffix set is closed (i8 i16 i32 i64 u8 u16 u32 u64, floats f32 f64)")
+            return (end, true)
+        }
+        return (i, false) // not one literal token (as in `1e5`): the argument is non-literal
     }
 
     // scanNumber consumes one numeric literal: a greedy numeric-shaped

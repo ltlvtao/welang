@@ -142,38 +142,10 @@ func (s stage) admits(e entry, toks []lex.Token, d *diag.Diagnostic) bool {
 		if d.Code() == "E0001" && strings.Contains(d.Message(), "is not valid UTF-8") {
 			return firstBadByteNameable(e.src)
 		}
-		// The attribute face reports its form violations as E0001 too (the
-		// "#"-not-followed and unit-shape messages); that face is T4's, so
-		// until then the code set alone cannot keep its entries out — the
-		// messages name the attribute unit, and the discriminator is
-		// computed from the reference's own output. The attribute face can
-		// also die inside its arguments with the ARGUMENT's own code (an
-		// E0006 from a malformed number in `#[cfg(1__0)]`), so any source
-		// carrying `#[` stays out until then — conservative by design and
-		// removed with the rest of the fence at T5.
-		if d.Code() == "E0001" && strings.Contains(d.Message(), "attribute unit") {
-			return false
-		}
-		if strings.Contains(e.src, "#[") {
-			return false
-		}
-		// The escape half of the rune face rides E0003 the same way: a
-		// source carrying a backslash can reach T4's consumeEscape before
-		// failing the shape, so it stays out until then.
-		if d.Code() == "E0003" && strings.Contains(e.src, `\`) {
-			return false
-		}
 		return true
 	}
 	for _, tk := range toks {
 		if s.kinds[tk.Kind] {
-			// The rune face's escape half rides the same kind: a rune
-			// token whose text carries a backslash is T4's consumeEscape
-			// face, so until then it stays out — the discriminator reads
-			// the reference's own token text.
-			if tk.Kind == "rune" && strings.Contains(tk.Text, `\`) {
-				return false
-			}
 			continue
 		}
 		if s.operators && !namedKinds[tk.Kind] {
@@ -187,14 +159,17 @@ func (s stage) admits(e entry, toks []lex.Token, d *diag.Diagnostic) bool {
 // fence is the current task's stage. T2 admitted the scanner core's kinds —
 // ident, keyword, and the operator kinds wholesale — plus the two error
 // codes its faces produce (E0001 across its encoding and inventory
-// shapes, E0004 for the unterminated block comment). T3 widens it with
-// the numeric kinds and E0006/E0003. Later tasks widen it further (T4 the
-// literal kinds with the remaining codes, T5 the full corpus with the
-// fence removed).
+// shapes, E0004 for the unterminated block comment). T3 widened it with
+// the numeric kinds and E0006/E0003; T4 adds the string and attr kinds
+// and the remaining codes, which is the full kind vocabulary and the
+// full code set — every named kind except comment (the tower scans with
+// lex.Scan, so comment tokens never appear) and every E0001-E0009 the
+// reference produces. Only the thirteen unnameable byte values stay
+// excluded (follow-up #30); T5 removes the fence itself.
 var fence = stage{
-	kinds:     map[string]bool{"ident": true, "keyword": true, "eof": true, "int": true, "float": true, "rune": true},
+	kinds:     map[string]bool{"ident": true, "keyword": true, "eof": true, "int": true, "float": true, "rune": true, "string": true, "attr": true},
 	operators: true,
-	errs:      map[string]bool{"E0001": true, "E0004": true, "E0006": true, "E0003": true},
+	errs:      map[string]bool{"E0001": true, "E0002": true, "E0003": true, "E0004": true, "E0005": true, "E0006": true, "E0007": true, "E0008": true, "E0009": true},
 }
 
 // entry is one corpus source under its corpus-qualified name.
@@ -273,15 +248,58 @@ func loadCorpus(t *testing.T) []entry {
 		entry{"literal:num-range-dotdot", "1..5"},
 		entry{"literal:num-based-range", "0x1..2"},
 		// T3's rune face: the plain character forms and E0003's two
-		// shapes (unterminated, and empty-or-multi-character). Escape
-		// forms ('\n', '\u{41}') are T4's consumeEscape face and stay
-		// fence-excluded by the token-text discriminator.
+		// shapes (unterminated, and empty-or-multi-character). The escape
+		// forms ('\n', '\u{41}') ride T4's consumeEscape; they live with
+		// the string block below.
 		entry{"literal:rune-pos", "'a'"},
 		entry{"literal:rune-pos-nonascii", "'中'"},
 		entry{"literal:rune-empty-neg", "''"},
 		entry{"literal:rune-multi-neg", "'ab'"},
 		entry{"literal:rune-eof-neg", "'a"},
 		entry{"literal:rune-newline-neg", "'a\n'"},
+		// T4's string and escape face: the closed escape set, the \u
+		// domain rule (at most U+10FFFF, no surrogates), the dangling
+		// backslash as an unterminated literal, and the interpolation
+		// hole's brace/paren balance — including chapter 1's own `${f(}`
+		// shape, where the closing quote falls inside the still-open
+		// hole.
+		entry{"literal:str-plain", "\"abc\""},
+		entry{"literal:str-dollar-plain", "\"cost: $5\""},
+		entry{"literal:str-escapes", "\"\\n\\t\\r\\0\\\\\\\"\\'\""},
+		entry{"literal:str-u-escape", "\"\\u{41}\""},
+		entry{"literal:str-u-max", "\"\\u{10FFFF}\""},
+		entry{"literal:str-nonascii", "\"héllo — 中\""},
+		entry{"literal:str-esc-neg", "\"\\e\""},
+		entry{"literal:str-u-surrogate", "\"\\u{D800}\""},
+		entry{"literal:str-u-past-max", "\"\\u{110000}\""},
+		entry{"literal:str-u-empty", "\"\\u{}\""},
+		entry{"literal:str-u-seven", "\"\\u{1234567}\""},
+		entry{"literal:str-u-nobrace", "\"\\u41\""},
+		entry{"literal:str-dangling", "\"abc\\"},
+		entry{"literal:str-unterminated", "\"abc"},
+		entry{"literal:hole-balanced", "\"a${1 + 1}b\""},
+		entry{"literal:hole-nested-string", "\"${\"x\"}\""},
+		entry{"literal:hole-unbalanced", "\"${f(}\""},
+		entry{"literal:hole-unclosed", "\"${1\""},
+		// T4's attribute face: the validation order (form E0001, then
+		// the literal-only rule E0009, then the empty whitelist E0008),
+		// the balanced-argument walk with its string/rune literals, and
+		// a bad number dying inside the arguments (E0006 at the
+		// argument's own position).
+		entry{"literal:attr-whitelist", "#[test]"},
+		entry{"literal:attr-nonliteral", "#[x(y)]"},
+		entry{"literal:attr-open-eof", "#["},
+		entry{"literal:attr-hash-alone", "# x"},
+		entry{"literal:attr-digit-name", "#[1x]"},
+		entry{"literal:attr-keyword-name", "#[fn]"},
+		entry{"literal:attr-with-args", "#[cfg(1)]"},
+		entry{"literal:attr-arg-literals", "#[x(\"a\", 2, true)]"},
+		entry{"literal:attr-arg-list", "#[x([1, 2])]"},
+		entry{"literal:attr-args-mismatch", "#[x(]"},
+		entry{"literal:attr-args-badnum", "#[x(1__0)]"},
+		entry{"literal:attr-spaced", "#[x ( 1 )]"},
+		entry{"literal:rune-escape", "'\\n'"},
+		entry{"literal:rune-escape-u", "'\\u{41}'"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
