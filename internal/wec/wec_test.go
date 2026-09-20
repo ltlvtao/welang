@@ -15,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/ltlvtao/welang/internal/cli"
-	"github.com/ltlvtao/welang/internal/diag"
 	"github.com/ltlvtao/welang/internal/lex"
 )
 
@@ -86,33 +85,11 @@ func serialize(src []byte) string {
 	return b.String()
 }
 
-// namedKinds separates the closed kind vocabulary from operator kinds,
-// whose Kind is the operator's own text (the Token contract). The set is
-// the serialization contract's own, pinned here so the fence's operator
-// arm cannot misclassify a named kind.
-var namedKinds = map[string]bool{
-	"ident": true, "keyword": true, "int": true, "float": true,
-	"string": true, "rune": true, "attr": true, "comment": true,
-	"eof": true,
-}
-
-// stage is one task's slice of the corpus fence (design D5): an entry runs
-// only when the reference side's token kinds all fall inside the stage's
-// kind set — operator kinds admitted wholesale by flag — and, for error
-// entries, the diagnostic code is in the stage's code set. The fence is
-// computed from the reference side's own live output, never hand-listed,
-// so a face that has not landed yet cannot run before its task.
-type stage struct {
-	kinds     map[string]bool
-	operators bool
-	errs      map[string]bool
-}
-
 // unnameable reports whether byte value b is one of the thirteen values a
 // We string literal cannot construct (C0, C1, F5-FF — design D2-3's
 // observational-invariance corner): the reference side's E0001 message
 // carries the byte's value, and the wec side has no way to name it. Such
-// entries are fence-excluded with a logged disclosure, never silently.
+// entries are excluded with a logged disclosure, never silently.
 func unnameable(b byte) bool {
 	return b == 0xC0 || b == 0xC1 || b >= 0xF5
 }
@@ -130,46 +107,6 @@ func firstBadByteNameable(src string) bool {
 		off += size
 	}
 	return true
-}
-
-func (s stage) admits(e entry, toks []lex.Token, d *diag.Diagnostic) bool {
-	if d != nil {
-		if !s.errs[d.Code()] {
-			return false
-		}
-		// The thirteen unnameable byte values ride only the invalid-UTF-8
-		// shape of E0001 (proposal's non-goal corner).
-		if d.Code() == "E0001" && strings.Contains(d.Message(), "is not valid UTF-8") {
-			return firstBadByteNameable(e.src)
-		}
-		return true
-	}
-	for _, tk := range toks {
-		if s.kinds[tk.Kind] {
-			continue
-		}
-		if s.operators && !namedKinds[tk.Kind] {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-// fence is the current task's stage. T2 admitted the scanner core's kinds —
-// ident, keyword, and the operator kinds wholesale — plus the two error
-// codes its faces produce (E0001 across its encoding and inventory
-// shapes, E0004 for the unterminated block comment). T3 widened it with
-// the numeric kinds and E0006/E0003; T4 adds the string and attr kinds
-// and the remaining codes, which is the full kind vocabulary and the
-// full code set — every named kind except comment (the tower scans with
-// lex.Scan, so comment tokens never appear) and every E0001-E0009 the
-// reference produces. Only the thirteen unnameable byte values stay
-// excluded (follow-up #30); T5 removes the fence itself.
-var fence = stage{
-	kinds:     map[string]bool{"ident": true, "keyword": true, "eof": true, "int": true, "float": true, "rune": true, "string": true, "attr": true},
-	operators: true,
-	errs:      map[string]bool{"E0001": true, "E0002": true, "E0003": true, "E0004": true, "E0005": true, "E0006": true, "E0007": true, "E0008": true, "E0009": true},
 }
 
 // entry is one corpus source under its corpus-qualified name.
@@ -199,7 +136,7 @@ func loadCorpus(t *testing.T) []entry {
 		// walk (the reference's CR loop indexes the stripped string while
 		// positions come from the original — the port carries that
 		// quirk). The 0xFF shape lives only in the lex-test corpus and is
-		// fence-excluded as one of the thirteen unnameable values.
+		// excluded as one of the thirteen unnameable values.
 		entry{"literal:utf8-stray-lead", "\xc3("},
 		entry{"literal:utf8-truncated", "\xe2\x82"},
 		entry{"literal:utf8-surrogate", "\xed\xa0\x80"},
@@ -363,9 +300,9 @@ var lexSampleRe = regexp.MustCompile(`(?:lexMust|lexFail)\(t, (` + "`[^`]*`" + `
 // lexTestLiterals extracts those samples verbatim (corpus item ③ of
 // design D7): strconv decodes the Go literal, so \r, \uFEFF, and \xff
 // reach the corpus as the exact bytes the reference lexer sees. The
-// samples span every face; the stage fence admits each only when its
-// task has landed, and the unnameable-byte corner (the "\xff" sample) is
-// excluded by the fence with a logged disclosure.
+// samples span every face and all of them run (the T2-T4 stage fence
+// retired at T5); the unnameable-byte corner (the "\xff" sample) is
+// excluded with a logged disclosure.
 func lexTestLiterals(t *testing.T) []entry {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "lex", "lex_test.go"))
@@ -459,17 +396,18 @@ func runWec(t *testing.T, bin, dir, src string) string {
 }
 
 // TestLexReconciliation is B3b's differential bar at its lexical layer:
-// for every corpus entry the fence admits, the wec artifact's serialized
-// output must equal internal/lex's live serialization byte for byte.
+// for every corpus entry — the full corpus; the T2-T4 stage fence is
+// gone, retired at T5 when its vocabulary reached the reference's whole
+// face — the wec artifact's serialized output must equal internal/lex's
+// live serialization byte for byte. The single remaining exclusion is the
+// thirteen-unnameable-byte corner (follow-up #30), disclosed per entry.
 func TestLexReconciliation(t *testing.T) {
 	bin, dir := buildWec(t)
 	ran := 0
 	for _, e := range loadCorpus(t) {
-		toks, _, d := lex.Scan("wec-input.we", []byte(e.src))
+		_, _, d := lex.Scan("wec-input.we", []byte(e.src))
 		if d != nil && d.Code() == "E0001" && strings.Contains(d.Message(), "is not valid UTF-8") && !firstBadByteNameable(e.src) {
 			t.Logf("corpus: %s excluded — its first bad byte is one of the thirteen unnameable values (follow-up #30)", e.name)
-		}
-		if !fence.admits(e, toks, d) {
 			continue
 		}
 		ran++
@@ -480,7 +418,7 @@ func TestLexReconciliation(t *testing.T) {
 		}
 	}
 	if ran == 0 {
-		t.Fatal("the fence admitted no entries — the stage set is wrong")
+		t.Fatal("the corpus admitted no entries — the extractor is broken")
 	}
 	t.Logf("reconciled %d corpus entries", ran)
 }

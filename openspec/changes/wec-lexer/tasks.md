@@ -52,15 +52,18 @@
 
 ## T5 全量对账 + 突变电池 + 零漂移
 
-- [ ] **全量逐字节对账**：语料①–⑦全清单（stdlib 7 文件 + wec 自源 3 + lex 样例 + E0001–E0009 矩阵 + 933 案例源 + 编码补充形 + 非 ASCII 项）塔全绿——阶段门槛摘除。
+- [x] **全量逐字节对账**：语料①–⑦全清单（stdlib 7 文件 + wec 自源 3 + lex 样例 + E0001–E0009 矩阵 + 933 案例源 + 编码补充形 + 非 ASCII 项）塔全绿——阶段门槛摘除。
   来源：proposal 目标 4；design D7
   验证：`go test ./internal/wec/ -count=1` 全量绿；语料条目数 as-built 记账；逐字节（成功/失败两栏）
-- [ ] **突变电池 ≥6 枚**：design D7 的 M1–M6 逐枚施加于 wec We 源、塔击杀判决表、逐枚还原。
+  落地（2026-09-20）：stage/fence/admits/namedKinds 四件删除、13 值角剔除内联单一判定点；`reconciled 1104`（corpus 1105，唯一剔除 lextest `"\xff"` 披露）；行为保持（T4 围栏已放行全词表）——摘除的结构意义 = 不再有阶段门能藏未来漂移；三测全绿
+- [x] **突变电池 ≥6 枚**：design D7 的 M1–M6 逐枚施加于 wec We 源、塔击杀判决表、逐枚还原。
   来源：design D7
   验证：每枚「施加 → 至少一枚语料红 → 还原 → 全绿」记档；击杀层（塔/单测）逐枚判定
-- [ ] **零漂移全量复验**：conformance 933 `-count=1` 零改写全绿；`go build ./...`、`go vet ./...`、`gofmt -l` 0 文件、16+1 包全绿；`git diff --check` 净。
+  落地（2026-09-20）：6/6 击杀、击杀层全为塔层（发散 2/870/1031/13/2/205——M1 宽表/M2 关键词/M3 列推进/M4 `..` 条款/M5 \u 上限/M6 转义下界），逐枚 exit 码与判决表入 design 补记五；M5 定点性自证（代理臂未动 ⇒ surrogate 条目存活）；附带发现 = 解析器按文本收词、kind 面唯一观测点是塔；逐枚还原复跑绿 ×6
+- [x] **零漂移全量复验**：conformance 933 `-count=1` 零改写全绿；`go build ./...`、`go vet ./...`、`gofmt -l` 0 文件、16+1 包全绿；`git diff --check` 净。
   来源：proposal 目标 6
   验证：各命令退出码 0；testdata `git status` 零改动
+  落地（2026-09-20）：build/vet/gofmt（refr/ 外 0 文件）/git diff --check 全净；17 包 -count=1 全绿（conformance 200.8s 零改写、testdata 0 行漂移）；零 Go 生产码改动（本任务唯一改动 = wec_test.go 围栏摘除）
 
 
 ## T6 审查与归档

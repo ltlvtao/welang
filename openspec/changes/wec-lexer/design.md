@@ -152,3 +152,24 @@ record Lexer { src: String, n: Int64, off: Int64, line: Int64, col: Int64,
 8. **trimSpace 的 ASCII 面**：语料可达 = space/tab（\n\r 先死于平衡走查/checkEncoding；\v\f 入集）；Go strings.TrimSpace 会裁的 unicode 空白（U+00A0 等）为不可达角——diverge 即响亮失败（D3 quote 同款纪律）。
 9. **语言面小记（t4probe 探针，/tmp 不入册）**：自递归/模块级互递归（skipArgString↔skipArgHole）/while+`continue` 全绿；E0202 复发于 consumeEscape 的 var 赋值 else-if 链（补尾 else 成固定写法）；`while true` + 值返回须补不可达尾 `return`（检查器不做无穷循环终止分析）；非 unit 值调用须显式弃置（`let _ = expr`，E0605）。
 10. **计数**：`reconciled 1104`（红 573 → 0）；corpus 1105（stdlib 7/wec 3/lextest 36/conformance 978 + 字面 81）；17 包全绿（`go test ./... -count=1` 0 FAIL）；conformance 933 不动（零 Go 生产码改动——wec_test.go 测试码 + wec/ We 源）；`we check wec/` exit 0；`gofmt -l` 净、`git diff --check` 净。
+
+## 实现期补记五（T5，2026-09-20）
+
+**三复选框全勾。fence 整体摘除：`stage`/`fence`/`admits`/`namedKinds` 四件删除，13 值角剔除改内联 `continue`（原先在 admits 与主循环两处重复判定同一谓词，现单一判定点 + 日志披露）；`ran==0` 响亮失败保留（围栏不再存在后它守的是提取器本身）。摘除是行为保持的——T4 围栏已放行全 named kind 与全码集，故计数不变：`reconciled 1104 corpus entries`（corpus 1105，唯一剔除 = lextest `"\xff"`）。结构意义 = 不再有阶段门能藏未来漂移：从此语料⑤全量与任何新加语料无条件过塔。**
+
+1. **突变电池判决表（M1–M6，B2b 形制：施加于仓内 wec 源 → 塔跑取红 → `git checkout` 单文件还原 → 复跑取绿；日志在 /tmp/b3b-mut/，逐枚 exit 码在档）**：
+
+   | 突变 | 点位 | 发散条目 | 代表击杀与判决 |
+   | --- | --- | --- | --- |
+   | M1 宽表界：widthOf 2 字节档 `return 2`→`3` | lexnum.we widthOf | 2 | str-nonascii、case:run-for-string——非 ASCII 词文本错切 + 列漂移；**塔层击杀** |
+   | M2 关键字表删一词：`t == "fn" \|\|` 去除 | lex.we isKeyword | 870 | 全语料 keyword→ident 的 kind 面；**塔层击杀**（见第 2 条的附带发现） |
+   | M3 列推进差一：advance 的 `col+1`→`col+2` | lex.we advance | 1031 | 几乎全语料（行内第二词起列漂移）；**塔层击杀** |
+   | M4 E0006 条款界：numericSpan 的 `..` 探测 `==46`→`==45` | lexnum.we numericSpan | 13 | num-range-dotdot、num-based-range + 11 枚含 `..` 范围的 conformance 源（span 吞点 → 错误的 E0006/错切）；**塔层击杀** |
+   | M5 逃逸域检删其一：`\u` 上限 `>0x10FFFF`→`>0xFFFFFFFF` | lex.we consumeEscape | 2 | str-u-past-max、lextest `"\u{110000}"`——**代理臂未动故 str-u-surrogate 存活**，去一不去二的定点性自证；**塔层击杀** |
+   | M6 序列化转义支路：esc 可打印下界 `0x21`→`0x20`（空格直通） | lexnum.we esc | 205 | 全部错误条目（E 行消息含空格 `\20`→直通）+ 含空格的词文本/docs 行；**塔层击杀** |
+
+   每枚还原后 `TestLexReconciliation` 复跑绿（exit 0 ×6）；六枚终态 `git diff --stat wec/` 为空。击杀层全为塔层——**wec 的 We 源没有任何 Go 侧内部单测，塔（构建 + 语料对账）是 wec 语义漂移的唯一击杀面**，这正是差分杠的意义所在。
+2. **M2 的附带发现（披露，非缺陷）**：删除 `fn` 关键字后 mutated wec **仍构建成功**——解析器按 token 文本收词而非 kind，`fn` 报 ident 照样解析。即 kind 面漂移在构建层不可观测，唯一观测点是塔的序列化 kind 字段。参考实现自身的一致性不受影响（解析器行为本就文本等价），但它说明：任何「kind 语义」的回归只有对账塔能拦。
+3. **电池方法论**：突变施加于仓内源而非塔的临时拷贝（塔每轮从仓重新拷贝构建，等价）；「还原 → 全绿」逐枚复跑而非只在终点跑一次。M3 首轮锚点缩进写错（16 空格 vs 实际 12）——apply 断言 `count==1` 拦下、该轮红跑实为未突变的绿跑，修正锚点后重跑；断言机制本身即电池的防呆（count≠1 即拒绝施加）。
+4. **零漂移全量复验**：`go build ./...`、`go vet ./...`、`gofmt -l`（refr/ 外 0 文件）、`git diff --check` 全净；`go test ./... -count=1` 17 包全绿（conformance 200.8s 零改写、`internal/conformance/testdata` git status 0 行、wec 66.3s、benchmarks 51.6s、runtime 28.4s）。零 Go 生产码改动——本任务全部改动 = wec_test.go 测试码（围栏摘除）。
+5. **计数**：`reconciled 1104`（corpus 1105：stdlib 7/wec 3/lextest 36/conformance 978 + 字面 81，剔除 1）；电池 6/6 击杀（发散 2/870/1031/13/2/205）；17 包全绿；本任务无 wec/ We 源改动（fence 摘除纯塔侧）。
