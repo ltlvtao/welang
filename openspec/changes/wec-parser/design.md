@@ -166,3 +166,21 @@ P arm <line> <col>                       // MatchArm：子行 = 模式、守卫?
 5. **#31 let-别名复发被塔在运行期逮住**：parseImport 的 `let pathCol = segCol`（裸局部 var）绑**存储**非快照——while 循环改 segCol 后 pathCol 跟随，输出 P import 的路径锚变成末段（甚而别名列），而 Go 锚**首段**。B3b 纪律（let-from-裸-var 用 var 快照）重申并绕行：锚位改从字段读直取（`let pathCol: Int64 = first.col`——字段读不别名）。此枚是 #31 在「值经三层调用后错位」形上的首例：构建绿、检查绿，仅对账塔的字节比较能逮。
 6. **lexnum.quote 单 rune 面的误用**：B3b 的 `quote` 是 E0001 字节值消息的单 rune %q 面（首 rune 可打印时返回**整段**——故多 rune 可打印首字形碰巧全对）；解析器消息引整段词文本，首 rune 为 `"`/`\`（串、rune 逃逸词）时内容丢失。全量换 `quoteText`（B3b 已有的多 rune %q 面，31 处）；10 枚 literal 串/rune 逃逸语料由红转绿。
 7. **记账**：棘轮 97 → **206**（t2: 56/56 + 10 枚消息面 + 词法面存量）；发散余量 955 = case 945 + stdlib 6 + wec 4（literal 与 lextest 族全绿）；stdlib 翻绿 1 枚（io.we——import/fn 密集即 T2 面）；`we check`/`we build` 皆 exit 0。
+
+### 补记三（T3 期·自举内存面修复，2026-10-08）
+
+T3 增量使塔中止于自举项 `wec:parse.we`（产物 OOM 死、runWec 首 Fatal——「一运行就退出」的直接机理）。根因不在 T3 新码，而在两处遗留的二次方串累积被源码增长推过内存上限：
+
+1. **机理——bootstrap 运行时的字符串缓冲是永生的**（`wec/build/rt-str.c` 头注即权威：回收属 ADR-0003 门槛下的 B2 分配器工作）：`__we_str_concat` 每次新鲜 malloc、全程无 free；GC 域只覆盖 record/List 盒。任何 `out = out + 片段` 的逐单元累积因而是无界真泄漏，不可指望 GC 兜底。两处病灶：`lex.we` emit 的 per-token `outText` 追加（B3b T2 遗留）与 `parse.we` drive 的 per-line toks/docs 重拼（本 change T1 遗留，补记一第 6 条）。T3 使 parse.we 51,595B/6,902 词 → 119,947B/15,268 词（词元 2.3× ⇒ 二次方代价 ~5.4×），自举项由 T2 时的可存活（~GB 级泄漏）转为 OOM 死。
+2. **偏差一——drive 以位置切分替代一切构建**：drive 逐行拼装的每个「行」本就是 `lexOut` 的逐字 byteSlice，且序列化行永非空（各行以其字母起头）⇒ tokens 节恰为〔tokens 头行换行后, docs 头行行首〕的字节区间、docs 节恰为其后区间。as-built 改为两次 `byteSlice` 直取（运行时 byteslice 返内指针共享源缓冲——零分配零拷贝），逐行扫描仅余「找 docs 头行」的线性走查。既定的「分块 + 归并」在此处失去存在理由：要归并的构件是原文的连续区间。
+3. **偏差二——lex 侧以常量块两级折叠替代 List 平衡归并**：桶清单须住扫描器记录（跨方法调用的状态载体），而 **record 带 List 字段 = 停面 B**（D1 停面表 P3 族），方案原形在本构建不可表达。承重层是分块本身（它拆掉 S·T/2 的二次方），顶层归并形只差常数因子，故取最简可表达形：新字段 `outTail` 作开块，emit 行进 tail、过 8 KiB 折叠进 `outText`，render 末尾 `outText + outTail`；拼接顺序未动，输出字节恒等。docsText 侧不动：语料源 `///` 单元为零（实测 grep），该量级永不付一次折叠。
+4. **验证（实跑）**：杀手项 `wec:parse.we` 修复后 exit 0、**峰值 RSS 150MB**（修复前 OOM 死）、输出形态正确（tokens 节 + `N WEC-PENDING stmt`——与参考的分歧属 T4+ 未落地面）；完整塔 PASS 245.9s、`reconciled 378/1305 ≥ 棘轮 206`（378 为 T3 面翻绿所致；本修复保字节恒等，不贡献对账数）；docs 节抽查（`literal:docs-run` 形）切分逐字节正确。此为塔自 T3 增量后首次完整跑通（此前 OOM 中止）。
+5. **遗留披露——`charAt` 二次方（独立事项，建议登记 follow-up）**：`__we_str_charat` 从头走查 O(i)（rt-str.c），扫描器每 rune 经 codeHere/codeNext 多次走查 ⇒ 扫描 O(R²) 纯 CPU：parse.we 项单跑 3:20、塔 245.9s 中约 200s 耗于此。此缺先于本修复存在、与泄漏无关（该项 RSS 稳定 115MB、状态 R 可证）；`lexnum.byteAt` 为 O(1)（probeByteValue(byteSlice(i,i+1))），改预测宽推进即可线性化。次要累积点按「只修两处」约定不动（unesc 逐字节、astText 逐项、itemStartsText——量级皆有界，数十 MB 以下）。
+
+### 补记四（T3 落地，2026-10-09）
+
+1. **记账**：棘轮 206 → **381**；语料 as-built 1306（放行 1305，剔 1 仍为 #30）；t3: 语料 144/144 全绿；翻绿构成 = t3 144 + conformance case 30（纯声明形源 29 + 漏册同病 `check-e0404-variant-fn` 1）+ stdlib 1；发散余量 = case 915 + stdlib 5 + wec 4（四源自身皆含 fn 体语句 → `N WEC-PENDING stmt`，T4 面）；完整塔 PASS 236–248s（补记三-4 修复后首跑 245.9s，收口复跑 247.7s）。
+2. **载体判决——interface 两缓冲分组 vs foreign 逐项追加**：Go 侧 `InterfaceDecl` 的关联型与方法签名是两个切片（astser 序列化恒先 assocs 后 methods，与源序解耦——`fn` 先于 `type` 的交错源在 P 行族里重排，`t3:iface-method-before-assoc` 钉住），流式载体取 assocsText/methodsText 两缓冲分组拼接；`ForeignBlock` 的 Items 是单一切片源序承载（serItem 循环）——逐项解析即逐项追加（append-as-parsed）。检错序两钉 = `err-iface-item-sep`（方法间行隔）与 `err-impl-assoc-after-method`（impl 内 assoc 须先于方法）。
+3. **收口期塔逮真缺陷两枚**（红测试即语料本体，先修后绿）：① **sum 变体只 dupCheck 未入册**——`type S = A | A` 的第二枚查无不撞（参考 E0404@1:14）；Go 位点 = dupCheck/checkPascal 后即 `p.names[vt.Text] = vt.Line`（parser.go:1342，先于载荷解析），We 侧同位补 `registerRaw`。此枚同时拦着一枚 conformance 用例（`check-e0404-variant-fn`：变体 `Circle` 撞 fn `Circle`——fn 侧 dupCheck 找不到变体的册），修复后双面同绿。② **runeText 可打印 ASCII 表基差一**——表首字节 0x20（空格）而索引取 `r - 0x21`，`"\u{63}"` 渲染成 `"b"` ≠ `"c"` 误报 E1701；索引订正 `r - 0x20`（守卫 `r >= 0x21` 不动——0x20 自身走 byteChar）。
+4. **闭集解码面**：E1701 的 ABI 字面量校验经 descText 拆码——`\u{}` 域检共享 rune/串两形（parseUEscape/hexDigitVal/validRune），码点经 runeText 算术渲染（可打印 ASCII 无探针表泄漏位——lexnum 只出探针表与控制表，故自带 0x20–0x7E run 表；表基事实见 3②）。
+5. **where-bound 角锚**：`P named` 的 ArgLine/ArgCol 是泛型实参 `<` 位；where 约束的 iface 名参考不填（零值）——泛型应用形下仍拼 `0 0`。typeref 主面（参数位/字段位/返回位/载荷位）照填 anglePos。

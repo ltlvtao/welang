@@ -11,8 +11,14 @@
 // stop is an error latch (failed + the four err fields) that every
 // failure-capable caller checks; and this build cannot construct records
 // carrying List fields, so the token stream never materializes as a list
-// — each token's serialization line is appended to outText as it is
-// scanned, and the docs side channel accumulates as pre-rendered strings.
+// — each token's serialization line is appended as it is scanned, into
+// outTail, the open chunk of a two-level build: a chunk past 8 KiB folds
+// into outText and the chunk restarts. Immutable strings admit no
+// in-place builder, and the runtime's string buffers are immortal
+// (reclamation is the allocator work ADR-0003 gates), so one ever-growing
+// concat leaves quadratic dead intermediates — the self-host corpus entry
+// died on that. The docs side channel accumulates as pre-rendered strings
+// (no corpus source carries /// units; that volume never pays a fold).
 // The observable contract is unchanged: a failed scan contributes only
 // the E line, a successful one the tokens and docs sections.
 
@@ -35,7 +41,9 @@ pub record Token {
 // Lexer is the scan state. col is the 1-based rune column of the next
 // unconsumed rune. off/ri track the same position as byte offset and
 // rune index (kept in lockstep; widthOf maps between them once
-// checkEncoding has guaranteed well-formedness). docOpen/docLast plus
+// checkEncoding has guaranteed well-formedness). outText/outTail carry
+// the tokens section: closed 8 KiB chunks, then the open one (the
+// two-level build the file header names). docOpen/docLast plus
 // pendStart/pendEnd/pendBody hold the /// side channel's pending unit
 // until a run break or end of input flushes it into docsText.
 pub record Lexer {
@@ -52,6 +60,7 @@ pub record Lexer {
     errCode: String,
     errMsg: String,
     outText: String,
+    outTail: String,
     docsText: String,
     docsCount: Int64,
     docOpen: Bool,
@@ -69,7 +78,7 @@ pub fn run(src: String) -> String {
         src: src, n: src.byteLength(), rn: src.runeCount(),
         off: 0, ri: 0, line: 1, col: 1,
         failed: false, errLine: 0, errCol: 0, errCode: "", errMsg: "",
-        outText: "", docsText: "", docsCount: 0,
+        outText: "", outTail: "", docsText: "", docsCount: 0,
         docOpen: false, docLast: 0, pendStart: 0, pendEnd: 0, pendBody: "",
     }
     l.checkEncoding()
@@ -86,7 +95,7 @@ fn render(l: Lexer) -> String {
     if l.failed {
         return "E " + lexnum.int64ToString(l.errLine) + " " + lexnum.int64ToString(l.errCol) + " " + l.errCode + " " + lexnum.esc(l.errMsg) + "\n"
     }
-    var out = "tokens\n" + l.outText
+    var out = "tokens\n" + l.outText + l.outTail
     if l.docsCount > 0 {
         out = out + "docs\n" + l.docsText
     }
@@ -334,13 +343,21 @@ impl Lexer {
     // emit appends one token's serialization line (design D4's T form;
     // attr tokens carry their name and raw argument text as two more
     // fields — unreachable in this build, where the empty whitelist
-    // fails every unit, but the serialization spec's own shape).
+    // fails every unit, but the serialization spec's own shape). The
+    // line lands in outTail, the open chunk; a chunk past 8 KiB folds
+    // into outText and the chunk restarts, so the section builds as
+    // blocks rather than one ever-growing concat — the file header's
+    // two-level build.
     pub fn emit(mut self, t: Token) {
         var line = "T " + lexnum.int64ToString(t.line) + " " + lexnum.int64ToString(t.col) + " " + t.kind + " " + lexnum.esc(t.text)
         if t.kind == "attr" {
             line = line + " " + lexnum.esc(t.attrName) + " " + lexnum.esc(t.attrArgs)
         }
-        self.outText = self.outText + line + "\n"
+        self.outTail = self.outTail + line + "\n"
+        if self.outTail.byteLength() >= 8192 {
+            self.outText = self.outText + self.outTail
+            self.outTail = ""
+        }
     }
 
     // flushDoc emits the pending /// unit, if any, as a D line plus its

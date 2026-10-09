@@ -1,13 +1,16 @@
 // parse — the parser port (B3c): internal/parser/parser.go transcribed as
-// We source. T2 lands the file structure: the item dispatch with its
-// pub/byval/byres prefix order, imports and effect declarations, the fn
-// basic shape with its annotated parameter list and effect segment, and
-// top-level lets with literal and identifier initializers — plus the
-// naming matrix, the module name-space collisions, and the top-level
-// error codes. The faces still pending (composite declarations, type
-// references beyond the named forms, statements, the full expression
-// grammar, documentation attachment) latch the pending marker, so the
-// tower records those entries as divergent rather than mis-parsing them.
+// We source. T2 landed the file structure (the item dispatch with its
+// prefix order, imports, effect declarations, the fn basic shape, top-level
+// lets, the naming matrix, the module name-space collisions); T3 lands the
+// composite declaration family — record in its three categories, sum with
+// bare and payload variants, newtype, interface with associated types and
+// method signatures, impl with associated-type bindings and methods, the
+// foreign block — and the type-reference family beyond the named forms:
+// the unit and tuple forms, the fn type with its effect tags, and the
+// generic and where clauses every declaration takes. The faces still
+// pending (statements, the full expression grammar, documentation
+// attachment) latch the pending marker, so the tower records those entries
+// as divergent rather than mis-parsing them.
 //
 // The serialized text this module walks is pure ASCII on its face — esc
 // renders every byte outside 0x21-0x7E as backslash-hex — so byteAt is
@@ -239,7 +242,7 @@ fn isModuleSeg(s: String) -> Bool {
 
 // isPascal is the type-name convention: a first byte in A-Z — the whole
 // rule, exactly as the reference writes it (E0011 rides the type
-// declarations T3 owns).
+// declarations).
 fn isPascal(s: String) -> Bool {
     if s.byteLength() == 0 {
         return false
@@ -309,6 +312,188 @@ fn typeRefMsg(text: String) -> String {
     return "unexpected token — " + lexnum.quoteText(text) + " fits no type reference production: type references are Name, module.Name, Name<T…>, (T1, …, Tn), (), Dyn<I>, and fn(…) -> T"
 }
 
+// closedEscapeByte answers the byte one closed-set escape decodes to —
+// the escape face the lexer ratified (B3b T4) — or the empty string when
+// the byte names no escape (every decode is exactly one byte, so the
+// empty string is an unambiguous refusal).
+fn closedEscapeByte(e: Int64) -> String {
+    if e == 110 {
+        return "\n"
+    }
+    if e == 116 {
+        return "\t"
+    }
+    if e == 114 {
+        return "\r"
+    }
+    if e == 48 {
+        return "\0"
+    }
+    if e == 92 {
+        return "\\"
+    }
+    if e == 34 {
+        return "\""
+    }
+    if e == 39 {
+        return "'"
+    }
+    return ""
+}
+
+// descText decodes a string token's text the way the reference's foreign
+// ABI comparison does — the faithful closed-set port: the entry and exit
+// quotes verified, the seven single-byte escapes and \u{h..} decoded, and
+// any shape outside the decode (a dangling backslash, an unknown escape,
+// an interpolation opener) refusing with the whole inner text, which can
+// only compare unequal against the one accepted ABI — exactly as the
+// reference's refusal to decode answers unequal.
+fn descText(text: String) -> String {
+    let n = text.byteLength()
+    if n < 2 {
+        return text
+    }
+    if lexnum.byteAt(text, 0) != 34 || lexnum.byteAt(text, n - 1) != 34 {
+        return text
+    }
+    let inner = text.byteSlice(1, n - 1)
+    let m = inner.byteLength()
+    var out = ""
+    var i: Int64 = 0
+    while i < m {
+        let b = lexnum.byteAt(inner, i)
+        if b != 0x5C {
+            if b == 0x24 && i + 1 < m && lexnum.byteAt(inner, i + 1) == 0x7B {
+                return inner
+            }
+            out = out + inner.byteSlice(i, i + 1)
+            i = i + 1
+            continue
+        }
+        if i + 1 >= m {
+            return inner
+        }
+        let e = lexnum.byteAt(inner, i + 1)
+        if e == 117 {
+            let (r, end, ok) = parseUEscape(inner, i + 1)
+            if ok == false || validRune(r) == false {
+                return inner
+            }
+            out = out + runeText(r)
+            i = end + 1
+            continue
+        }
+        let d = closedEscapeByte(e)
+        if d == "" {
+            return inner
+        }
+        out = out + d
+        i = i + 2
+    }
+    return out
+}
+
+// parseUEscape decodes the u{h..} clause at s[i] (the u itself, one to six
+// hex digits inside braces, the rune domain the reference enforces). It
+// answers the rune, the closing brace's offset, and whether the clause
+// decoded; the lexer has already refused every malformed escape in a green
+// token, so a miss is the unreachable defensive branch.
+fn parseUEscape(s: String, i: Int64) -> (Int64, Int64, Bool) {
+    let n = s.byteLength()
+    if i + 1 >= n {
+        return (0, i, false)
+    }
+    if lexnum.byteAt(s, i + 1) != 123 {
+        return (0, i, false)
+    }
+    var v: Int64 = 0
+    var k = i + 2
+    var digits: Int64 = 0
+    while k < n {
+        let d = hexDigitVal(lexnum.byteAt(s, k))
+        if d < 0 {
+            break
+        }
+        v = v * 16 + d
+        digits = digits + 1
+        k = k + 1
+    }
+    if digits < 1 || digits > 6 {
+        return (0, i, false)
+    }
+    if k >= n {
+        return (0, i, false)
+    }
+    if lexnum.byteAt(s, k) != 125 {
+        return (0, i, false)
+    }
+    if validRune(v) == false {
+        return (0, i, false)
+    }
+    return (v, k, true)
+}
+
+// hexDigitVal is one hex digit's value or -1 — unlike lexnum's hexVal it
+// owns the full domain, because here the caller has NOT already checked
+// the digit class.
+fn hexDigitVal(b: Int64) -> Int64 {
+    if b >= 48 && b <= 57 {
+        return b - 48
+    }
+    if b >= 97 && b <= 102 {
+        return b - 97 + 10
+    }
+    if b >= 65 && b <= 70 {
+        return b - 65 + 10
+    }
+    return 0 - 1
+}
+
+// validRune is the \u{h..} domain: at most U+10FFFF, never a surrogate.
+fn validRune(v: Int64) -> Bool {
+    if v > 0x10FFFF {
+        return false
+    }
+    if v >= 0xD800 && v <= 0xDFFF {
+        return false
+    }
+    return true
+}
+
+// runeText renders one rune's UTF-8 bytes by arithmetic — the language has
+// no shift or mask, so the low six bits come off as remainder and the
+// carry moves by division. The one-byte printable range has no producer
+// in lexnum (the probe tables never leak plain ASCII), so it carries its
+// own run table; every other byte is exactly the ranges byteChar names.
+fn runeText(r: Int64) -> String {
+    if r < 0x80 {
+        if r >= 0x21 && r <= 0x7E {
+            let ascii = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+            return ascii.byteSlice(r - 0x20, r - 0x20 + 1)
+        }
+        return lexnum.byteChar(r)
+    }
+    if r < 0x800 {
+        let b2 = 128 + r % 64
+        let x = r / 64
+        return lexnum.byteChar(192 + x) + lexnum.byteChar(b2)
+    }
+    if r < 0x10000 {
+        let b3 = 128 + r % 64
+        var x = r / 64
+        let b2 = 128 + x % 64
+        x = x / 64
+        return lexnum.byteChar(224 + x) + lexnum.byteChar(b2) + lexnum.byteChar(b3)
+    }
+    let b4 = 128 + r % 64
+    var x = r / 64
+    let b3 = 128 + x % 64
+    x = x / 64
+    let b2 = 128 + x % 64
+    x = x / 64
+    return lexnum.byteChar(240 + x) + lexnum.byteChar(b2) + lexnum.byteChar(b3) + lexnum.byteChar(b4)
+}
+
 impl Parser {
     // fail latches the first diagnostic; later calls are no-ops, which is
     // the port's equivalent of Go's panic already having unwound.
@@ -375,6 +560,23 @@ impl Parser {
         if isCamel(t.text) == false {
             self.failTok(t, "E0012",
                 "variable, function, and method names must be camelCase — " + lexnum.quoteText(t.text) + " is not camelCase")
+        }
+    }
+
+    // checkPascal enforces E0011 at a type-name token.
+    pub fn checkPascal(mut self, t: Token) {
+        if isPascal(t.text) == false {
+            self.failTok(t, "E0011",
+                "type name must be PascalCase — " + lexnum.quoteText(t.text) + " is not PascalCase")
+        }
+    }
+
+    // tupleArity enforces E0602 at a tuple's opening parenthesis, shared by
+    // the type and expression tuple productions; the noun names which one.
+    pub fn tupleArity(mut self, open: Token, n: Int64, noun: String) {
+        if n > 8 {
+            self.failTok(open, "E0602",
+                "tuple arity above eight — the tuple " + noun + " has " + i64(n) + " elements; the arity bound forces naming: the longer the tuple, the more it wants to be a record")
         }
     }
 
@@ -467,10 +669,9 @@ impl Parser {
 
     // parseItem dispatches one top-level item by its keyword; a non-item
     // statement that passed the start class is E0105 naming the item
-    // productions. The composite declarations latch pending — their task
-    // is T3. itemStarts records the item's start line for T6's
+    // productions. itemStarts records the item's start line for T6's
     // documentation attachment pass, exactly where the reference records
-    // it.
+    // it. The test block is T4's face and latches pending.
     pub fn parseItem(mut self) {
         let t = self.cur
         self.itemStartsText = self.itemStartsText + i64(t.line) + " "
@@ -504,7 +705,7 @@ impl Parser {
             if t.text == "byres" {
                 self.next()
                 if isKw(self.cur, "record") {
-                    self.bndLatch("WEC-PENDING decl")
+                    let fc = self.parseRecordDecl(false, "resource", false, t.line, t.col)
                     return
                 }
                 if self.atEnd() {
@@ -519,7 +720,7 @@ impl Parser {
                 let pk = self.peek()
                 if isKw(pk, "type") {
                     self.next()
-                    self.bndLatch("WEC-PENDING decl")
+                    self.parseSumDecl(false, true, t.line, t.col)
                     return
                 }
                 if isKw(pk, "pub") {
@@ -529,7 +730,7 @@ impl Parser {
                 }
                 if isKw(pk, "record") {
                     self.next()
-                    self.bndLatch("WEC-PENDING decl")
+                    let fc = self.parseRecordDecl(false, "value", false, t.line, t.col)
                     return
                 }
                 if pk.kind == "eof" {
@@ -544,8 +745,32 @@ impl Parser {
                 self.parseEffectDecl(false, t.line, t.col)
                 return
             }
-            if t.text == "record" || t.text == "newtype" || t.text == "type" || t.text == "interface" || t.text == "impl" || t.text == "foreign" || t.text == "test" {
-                self.bndLatch("WEC-PENDING decl")
+            if t.text == "record" {
+                let fc = self.parseRecordDecl(false, "gc", false, t.line, t.col)
+                return
+            }
+            if t.text == "newtype" {
+                self.parseNewtypeDecl(false, t.line, t.col)
+                return
+            }
+            if t.text == "type" {
+                self.parseSumDecl(false, false, t.line, t.col)
+                return
+            }
+            if t.text == "interface" {
+                self.parseInterfaceDecl(false, t.line, t.col)
+                return
+            }
+            if t.text == "impl" {
+                self.parseImplDecl(t.line, t.col)
+                return
+            }
+            if t.text == "foreign" {
+                self.parseForeignDecl(t.line, t.col)
+                return
+            }
+            if t.text == "test" {
+                self.bndLatch("WEC-PENDING test")
                 return
             }
             if t.text == "mock" {
@@ -572,22 +797,34 @@ impl Parser {
             return
         }
         if isKw(self.cur, "type") {
-            self.bndLatch("WEC-PENDING decl")
+            self.parseSumDecl(true, false, t.line, t.col)
             return
         }
         if isKw(self.cur, "byval") {
             let bv = self.cur
             self.next()
-            if isKw(self.cur, "type") || isKw(self.cur, "record") {
-                self.bndLatch("WEC-PENDING decl")
+            if isKw(self.cur, "type") {
+                self.parseSumDecl(true, true, t.line, t.col)
+                return
+            }
+            if isKw(self.cur, "record") {
+                let fc = self.parseRecordDecl(true, "value", false, t.line, t.col)
                 return
             }
             self.failTok(bv, "E0105",
                 "unexpected token — byval prefixes type or record here; the prefix order is pub, then byval, then the declaration")
             return
         }
-        if isKw(self.cur, "record") || isKw(self.cur, "newtype") || isKw(self.cur, "interface") {
-            self.bndLatch("WEC-PENDING decl")
+        if isKw(self.cur, "record") {
+            let fc = self.parseRecordDecl(true, "gc", false, t.line, t.col)
+            return
+        }
+        if isKw(self.cur, "newtype") {
+            self.parseNewtypeDecl(true, t.line, t.col)
+            return
+        }
+        if isKw(self.cur, "interface") {
+            self.parseInterfaceDecl(true, t.line, t.col)
             return
         }
         if isKw(self.cur, "effect") {
@@ -597,7 +834,7 @@ impl Parser {
         if isKw(self.cur, "byres") {
             self.next()
             if isKw(self.cur, "record") {
-                self.bndLatch("WEC-PENDING decl")
+                let fc = self.parseRecordDecl(true, "resource", false, t.line, t.col)
                 return
             }
             if self.atEnd() {
@@ -731,11 +968,18 @@ impl Parser {
     // parseEffectSegment parses the fn declaration's effect segment: the
     // effect keyword (the caller verified it) followed by one or more
     // effect tags, bare or qualified. The tags ride the P fn line as
-    // space-joined fields, so this answers the joined spelling.
-    pub fn parseEffectSegment(mut self) -> (String, Int64, Int64) {
+    // space-joined fields, so this answers the joined spelling. The
+    // foreign fn's segment is REQUIRED, so inside a foreign block a
+    // non-identifier token is not an error here — the foreign item's own
+    // E1703 check reports it, and the bare claim (empty tags, the effect
+    // keyword's own position) answers for a trailing segment.
+    pub fn parseEffectSegment(mut self, inForeign: Bool) -> (String, Int64, Int64) {
         self.next()
         let t = self.cur
         if t.kind != "ident" {
+            if inForeign {
+                return ("", self.last.line, self.last.col)
+            }
             if self.atEnd() {
                 self.failTok(t, "E0105", "unexpected end of file — an effect segment names at least one effect")
                 return ("", 0, 0)
@@ -785,9 +1029,8 @@ impl Parser {
     }
 
     // parseFnDecl parses `[pub] fn name<T…>(params) [effect tags] [-> type]
-    // [where …] block`. The generic clause and the where clause are T3's
-    // faces; a fn carrying either latches pending. The body block is the
-    // one block face T2 owns — empty; anything inside it is T4's.
+    // [where …] block`. The body block is the one block face T2 owns —
+    // empty; anything inside it is T4's.
     pub fn parseFnDecl(mut self, isPub: Bool, line: Int64, col: Int64) {
         self.next()
         let t = self.cur
@@ -808,9 +1051,12 @@ impl Parser {
         let nameLine = t.line
         let nameCol = t.col
         self.next()
+        var tpsText = ""
         if self.cur.kind == "<" {
-            self.bndLatch("WEC-PENDING tparam")
-            return
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return
+            }
         }
         if self.cur.kind != "(" {
             if self.atEnd() {
@@ -829,7 +1075,7 @@ impl Parser {
         var effectLine: Int64 = 0
         var effectCol: Int64 = 0
         if isKw(self.cur, "effect") {
-            let (tags, el, ec) = self.parseEffectSegment()
+            let (tags, el, ec) = self.parseEffectSegment(false)
             effectTags = tags
             effectLine = el
             effectCol = ec
@@ -847,9 +1093,12 @@ impl Parser {
                 return
             }
         }
+        var whereT = ""
         if isKw(self.cur, "where") && self.brokeLine() == false {
-            self.bndLatch("WEC-PENDING where")
-            return
+            whereT = self.whereText()
+            if self.stopped() {
+                return
+            }
         }
         if self.cur.kind != "{" {
             if self.atEnd() {
@@ -872,16 +1121,23 @@ impl Parser {
             head = head + effectTags + " "
         }
         head = head + i64(effectLine) + " " + i64(effectCol) + " 0 " + i64(nameLine) + " " + i64(nameCol) + "\n"
-        self.astText = self.astText + head + paramsText + retText + bodyText
+        self.astText = self.astText + head + tpsText + paramsText + retText + whereT + bodyText
         self.registerRaw(name, nameLine)
     }
 
     // annotatedParams parses the annotated parameter entries of an open
     // parameter list — everything after its leading ( through the closing
     // ) — rendering each parameter's P lines as it goes. The one bnd
-    // boundary of the whole reference lives here: a mut parameter.
+    // boundary of the whole reference lives in the loop: a mut parameter.
     pub fn annotatedParams(mut self) -> String {
         self.next()
+        return self.paramsLoop()
+    }
+
+    // paramsLoop is annotatedParams' loop alone — the receiver-parameter
+    // list consumes its receiver entry first, then hands the remaining
+    // entries (leading comma already consumed) to the same loop.
+    pub fn paramsLoop(mut self) -> String {
         var out = ""
         while true {
             if self.cur.kind == ")" {
@@ -981,17 +1237,19 @@ impl Parser {
     }
 
     // typeRefText parses one type reference into an annotation slot and
-    // renders its P lines. T2 owns the named forms — Name, module.Name,
-    // and their generic applications; the paren, tuple, unit, and fn
-    // type forms are T3's and latch pending. The Go original carries the
-    // last lowercase segment as one token var; a var here holds only a
-    // scalar or a String face, so the segment's three fields travel in
-    // their own vars (same discipline as parseImport).
+    // renders its P lines: the named forms (Name, module.Name, and their
+    // generic applications), the paren family (the unit type and the
+    // tuple type), and the fn type with its effect tags. The Go original
+    // carries the last lowercase segment as one token var; a var here
+    // holds only a scalar or a String face, so the segment's three fields
+    // travel in their own vars (same discipline as parseImport).
     pub fn typeRefText(mut self) -> String {
         let t = self.cur
-        if isKw(t, "fn") || t.kind == "(" {
-            self.bndLatch("WEC-PENDING typeref")
-            return ""
+        if isKw(t, "fn") {
+            return self.fnTypeText()
+        }
+        if t.kind == "(" {
+            return self.parenTypeText()
         }
         if t.kind == "ident" {
             self.next()
@@ -1110,6 +1368,1445 @@ impl Parser {
             return false
         }
         return false
+    }
+
+    // parseSumDecl parses `[pub] [byval] type Name<T…> = V1 | … | Vn
+    // [derives …]` (chapter 8): bare variants and payload variants, the
+    // payload list comma-separated. A line-starting `|` after a complete
+    // variant ends the declaration without a derives clause (the keyword
+    // stays for the next item position); the same-line `|` continues.
+    pub fn parseSumDecl(mut self, isPub: Bool, isByval: Bool, line: Int64, col: Int64) {
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — a sum declaration is type Name = V1 | … | Vn")
+                return
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where the type name goes: a sum declaration is type Name = V1 | … | Vn")
+            return
+        }
+        self.dupCheck(t)
+        if self.stopped() {
+            return
+        }
+        self.checkPascal(t)
+        if self.stopped() {
+            return
+        }
+        let name = t.text
+        let nameLine = t.line
+        let nameCol = t.col
+        self.registerRaw(name, nameLine)
+        self.next()
+        var tpsText = ""
+        if self.cur.kind == "<" {
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return
+            }
+        }
+        if self.cur.kind != "=" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a sum declaration is type Name = V1 | … | Vn")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where the = of a sum declaration goes")
+            return
+        }
+        self.next()
+        var body = ""
+        var vText = ""
+        var payloadText = ""
+        var payloadCount: Int64 = 0
+        var derivesText = ""
+        while true {
+            let vt = self.cur
+            if vt.kind != "ident" {
+                if self.atEnd() {
+                    self.failTok(vt, "E0105", "unexpected end of file — a variant list wants at least one variant")
+                    return
+                }
+                self.failTok(vt, "E0105",
+                    "unexpected token — " + lexnum.quoteText(vt.text) + " where a variant name goes: variants are Name or Name(payload types)")
+                return
+            }
+            self.dupCheck(vt)
+            if self.stopped() {
+                return
+            }
+            self.checkPascal(vt)
+            if self.stopped() {
+                return
+            }
+            self.registerRaw(vt.text, vt.line)
+            vText = "P variant " + i64(vt.line) + " " + i64(vt.col) + " " + lexnum.esc(vt.text) + "\n"
+            payloadText = ""
+            payloadCount = 0
+            self.next()
+            if self.cur.kind == "(" {
+                self.next()
+                while true {
+                    if self.cur.kind == ")" {
+                        if payloadCount == 0 {
+                            self.failTok(self.cur, "E0105",
+                                "unexpected token — an empty payload list fits no production: a variant is bare, or carries one to eight payload types")
+                            return
+                        }
+                        self.next()
+                        break
+                    }
+                    if self.atEnd() {
+                        self.failTok(self.cur, "E0105", "unexpected end of file — a payload list closes with )")
+                        return
+                    }
+                    let ty = self.typeRefText()
+                    if self.stopped() {
+                        return
+                    }
+                    vText = vText + ty
+                    payloadCount = payloadCount + 1
+                    if self.cur.kind == "," {
+                        self.next()
+                        continue
+                    }
+                    if self.cur.kind == ")" {
+                        self.next()
+                        break
+                    }
+                    self.failTok(self.cur, "E0105",
+                        "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a payload list: payloads are comma-separated type references and the list closes with )")
+                    return
+                }
+                if payloadCount > 8 {
+                    self.failTok(vt, "E0701",
+                        "variant payload arity above eight — " + lexnum.quoteText(vt.text) + " declares " + i64(payloadCount) + " payload types; a record payload names its fields")
+                    return
+                }
+            }
+            body = body + vText
+            if self.cur.kind == "|" {
+                if self.brokeLine() {
+                    break
+                }
+                self.next()
+                continue
+            }
+            derivesText = self.derivesSlot()
+            if self.stopped() {
+                return
+            }
+            break
+        }
+        if derivesText == "" {
+            derivesText = "-\n"
+        }
+        self.astText = self.astText + "P sum " + i64(line) + " " + i64(col) + " " + b01(isPub) + " " + b01(isByval) + " " + lexnum.esc(name) + " " + i64(nameLine) + " " + i64(nameCol) + "\n" + tpsText + body + derivesText
+    }
+
+    // parseRecordDecl parses chapter 8's record declaration: `[pub] [byval |
+    // byres] record Name<T…> { fields } [derives …]`. The prefixes are
+    // consumed by the caller; line/col anchor at the outermost one. The
+    // field list is comma- or newline-separated with a uniform trailing
+    // comma — braces are brackets, so line breaks inside fold. The answer
+    // is the field count: the foreign block's opaque reuse (which passes
+    // opaque in) rejects a non-zero count at its item head after the
+    // production has run, so no partial tree escapes the diagnostic.
+    pub fn parseRecordDecl(mut self, isPub: Bool, cat: String, opaque: Bool, line: Int64, col: Int64) -> Int64 {
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — a record declaration is record Name { fields }")
+                return 0
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where the record name goes: a record declaration is record Name { fields }")
+            return 0
+        }
+        self.dupCheck(t)
+        if self.stopped() {
+            return 0
+        }
+        self.checkPascal(t)
+        if self.stopped() {
+            return 0
+        }
+        let name = t.text
+        let nameLine = t.line
+        let nameCol = t.col
+        self.registerRaw(name, nameLine)
+        self.next()
+        var tpsText = ""
+        if self.cur.kind == "<" {
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return 0
+            }
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a record wants its field block")
+                return 0
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a record's field block opens")
+            return 0
+        }
+        self.next()
+        self.depth = self.depth + 1
+        var fieldsText = ""
+        var count: Int64 = 0
+        while true {
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a record's field block closes with }")
+                return 0
+            }
+            let ft = self.cur
+            if ft.kind != "ident" {
+                self.failTok(ft, "E0105",
+                    "unexpected token — " + lexnum.quoteText(ft.text) + " where a field name goes: fields are name: type pairs")
+                return 0
+            }
+            self.checkCamel(ft)
+            if self.stopped() {
+                return 0
+            }
+            self.next()
+            if self.cur.kind != ":" {
+                self.failTok(ft, "E0105",
+                    "unexpected token — field " + lexnum.quoteText(ft.text) + " carries no annotation: fields are name: type; field types are never inferred")
+                return 0
+            }
+            self.next()
+            let ty = self.typeRefText()
+            if self.stopped() {
+                return 0
+            }
+            fieldsText = fieldsText + "P field " + i64(ft.line) + " " + i64(ft.col) + " " + lexnum.esc(ft.text) + "\n" + ty
+            count = count + 1
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.cur.kind == "ident" && self.brokeLine() {
+                continue
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a record's field block closes with }")
+                return 0
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a record field list: fields are name: type pairs separated by commas or line breaks")
+            return 0
+        }
+        self.depth = self.depth - 1
+        let dText = self.derivesSlot()
+        if self.stopped() {
+            return 0
+        }
+        self.astText = self.astText + "P record " + i64(line) + " " + i64(col) + " " + b01(isPub) + " " + lexnum.esc(cat) + " " + lexnum.esc(name) + " " + b01(opaque) + " " + i64(nameLine) + " " + i64(nameCol) + "\n" + tpsText + fieldsText + dText
+        return count
+    }
+
+    // parseNewtypeDecl parses `newtype Name<T…>(Underlying) [derives …]`
+    // (chapter 8): a zero-cost wrapper over exactly one type — the wrapped
+    // list takes no comma. The prefix is consumed by the caller; line/col
+    // anchor at the outermost prefix token.
+    pub fn parseNewtypeDecl(mut self, isPub: Bool, line: Int64, col: Int64) {
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — a newtype declaration is newtype Name(Type)")
+                return
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where the newtype name goes: a newtype declaration is newtype Name(Type)")
+            return
+        }
+        self.dupCheck(t)
+        if self.stopped() {
+            return
+        }
+        self.checkPascal(t)
+        if self.stopped() {
+            return
+        }
+        let name = t.text
+        let nameLine = t.line
+        let nameCol = t.col
+        self.registerRaw(name, nameLine)
+        self.next()
+        var tpsText = ""
+        if self.cur.kind == "<" {
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return
+            }
+        }
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a newtype wraps its underlying type in (…)")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a newtype's underlying type opens: a newtype wraps exactly one underlying type")
+            return
+        }
+        self.next()
+        let underText = self.typeRefText()
+        if self.stopped() {
+            return
+        }
+        if self.cur.kind != ")" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a newtype closes with )")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "a newtype wraps exactly one underlying type — the wrapped list takes no comma and closes with )")
+            return
+        }
+        self.next()
+        let dText = self.derivesSlot()
+        if self.stopped() {
+            return
+        }
+        self.astText = self.astText + "P newtype " + i64(line) + " " + i64(col) + " " + b01(isPub) + " " + lexnum.esc(name) + " " + i64(nameLine) + " " + i64(nameCol) + "\n" + tpsText + underText + dText
+    }
+
+    // typeParamsText parses the `<T1, …, Tk>` clause of a declaration: the
+    // parameters are PascalCase names (E0011 rides here), the clause holds
+    // one to eight (E0825 at the clause's own `<` after the walk), and only
+    // the bare `>` closes (closeAngle owns the merged-closer diagnostic).
+    pub fn typeParamsText(mut self) -> String {
+        let open = self.cur
+        self.next()
+        if self.cur.kind == ">" {
+            self.failTok(self.cur, "E0105",
+                "unexpected token — \">\" opens an empty generic parameter clause: a clause holds one to eight names")
+            return ""
+        }
+        var out = ""
+        var count: Int64 = 0
+        while true {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a generic parameter clause closes with >")
+                return ""
+            }
+            let nt = self.cur
+            if nt.kind != "ident" {
+                self.failTok(nt, "E0105",
+                    "unexpected token — " + lexnum.quoteText(nt.text) + " in a generic parameter clause: the parameters are PascalCase names")
+                return ""
+            }
+            self.checkPascal(nt)
+            if self.stopped() {
+                return ""
+            }
+            out = out + "P tparam " + i64(nt.line) + " " + i64(nt.col) + " " + lexnum.esc(nt.text) + "\n"
+            count = count + 1
+            self.next()
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.closeAngle() {
+                break
+            }
+            if self.stopped() {
+                return ""
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a generic parameter clause closes with >")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a generic parameter clause: the clause closes with >")
+            return ""
+        }
+        if count > 8 {
+            self.failTok(open, "E0825",
+                "generic parameter count above eight — the clause declares " + i64(count) + " parameters; a clause carries at most eight")
+            return ""
+        }
+        return out
+    }
+
+    // whereText parses the where clause's comma-separated constraint list.
+    pub fn whereText(mut self) -> String {
+        self.next()
+        var out = ""
+        while true {
+            out = out + self.boundRefText()
+            if self.stopped() {
+                return ""
+            }
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            return out
+        }
+        return out
+    }
+
+    // boundRefText parses one where constraint — `T: Iface [+ Iface2 …]`
+    // or the equality form `T.Assoc == Type` — rendering the P where line
+    // and its bound or equality children. The bound's iface names carry no
+    // angle anchor (the reference builds them without ArgLine/ArgCol), so
+    // the P named line spells 0 0 there even under a generic application.
+    pub fn boundRefText(mut self) -> String {
+        let st = self.cur
+        if st.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(st, "E0105", "unexpected end of file — a where constraint is T: Iface or T.Assoc == Type")
+                return ""
+            }
+            self.failTok(st, "E0105",
+                "unexpected token — " + lexnum.quoteText(st.text) + " where a where subject goes: a constraint is T: Iface or T.Assoc == Type")
+            return ""
+        }
+        self.next()
+        if self.cur.kind == "." {
+            self.next()
+            let at = self.cur
+            if at.kind != "ident" {
+                if self.atEnd() {
+                    self.failTok(at, "E0105", "unexpected end of file — an equality constraint is T.Assoc == Type")
+                    return ""
+                }
+                self.failTok(at, "E0105",
+                    "unexpected token — " + lexnum.quoteText(at.text) + " where the associated type goes: an equality constraint is T.Assoc == Type")
+                return ""
+            }
+            self.next()
+            if self.cur.kind != "==" {
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — an equality constraint is T.Assoc == Type")
+                    return ""
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " where == goes: an equality constraint is T.Assoc == Type")
+                return ""
+            }
+            let eq = self.cur
+            self.next()
+            let rhsText = self.typeRefText()
+            if self.stopped() {
+                return ""
+            }
+            return "P where " + i64(st.line) + " " + i64(st.col) + " " + lexnum.esc(st.text) + "\n" +
+                "P typeeq " + i64(eq.line) + " " + i64(eq.col) + " " + lexnum.esc(at.text) + "\n" + rhsText
+        }
+        if self.cur.kind != ":" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a where constraint is T: Iface or T.Assoc == Type")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a constraint's : or == goes: a constraint is T: Iface or T.Assoc == Type")
+            return ""
+        }
+        self.next()
+        var out = "P where " + i64(st.line) + " " + i64(st.col) + " " + lexnum.esc(st.text) + "\n"
+        while true {
+            let it = self.cur
+            if it.kind != "ident" || isPascal(it.text) == false {
+                if self.atEnd() {
+                    self.failTok(it, "E0105", "unexpected end of file — a bound names an interface: T: Iface [+ Iface2 …]")
+                    return ""
+                }
+                self.failTok(it, "E0105",
+                    "unexpected token — " + lexnum.quoteText(it.text) + " where a bound goes: a bound names an interface, T: Iface [+ Iface2 …]")
+                return ""
+            }
+            self.next()
+            out = out + "P named " + i64(it.line) + " " + i64(it.col) + " " + lexnum.esc("") + " " + lexnum.esc(it.text) + " 0 0\n"
+            let argsText = self.genericArgsText()
+            if self.stopped() {
+                return ""
+            }
+            out = out + argsText
+            if self.cur.kind == "+" {
+                self.next()
+                continue
+            }
+            return out
+        }
+        return out
+    }
+
+    // derivesSlot parses the optional derives clause trailing a composite
+    // declaration: same-line `derives` then the bare targets Eq, Hash, Show
+    // (E0824's three message forms — duplicate, the Shareable misspelling,
+    // the unknown name). A clause on a new line belongs to the next item
+    // position, so the empty slot `-\n` answers.
+    pub fn derivesSlot(mut self) -> String {
+        if isKw(self.cur, "derives") == false {
+            return "-\n"
+        }
+        if self.brokeLine() {
+            return "-\n"
+        }
+        let t = self.cur
+        self.next()
+        var out = "P derives " + i64(t.line) + " " + i64(t.col)
+        var seenEq = false
+        var seenHash = false
+        var seenShow = false
+        while true {
+            let nt = self.cur
+            if nt.kind != "ident" {
+                if self.atEnd() {
+                    self.failTok(nt, "E0105", "unexpected end of file — a derives clause is derives Eq, Hash, Show")
+                    return ""
+                }
+                self.failTok(nt, "E0105",
+                    "unexpected token — " + lexnum.quoteText(nt.text) + " in a derives clause: the clause is derives followed by the bare names Eq, Hash, Show")
+                return ""
+            }
+            self.next()
+            if nt.text == "Eq" || nt.text == "Hash" || nt.text == "Show" {
+                var dup = false
+                if nt.text == "Eq" {
+                    if seenEq {
+                        dup = true
+                    }
+                    seenEq = true
+                }
+                if nt.text == "Hash" {
+                    if seenHash {
+                        dup = true
+                    }
+                    seenHash = true
+                }
+                if nt.text == "Show" {
+                    if seenShow {
+                        dup = true
+                    }
+                    seenShow = true
+                }
+                if dup {
+                    self.failTok(nt, "E0824",
+                        "unknown or duplicate derive target — " + lexnum.quoteText(nt.text) + " appears twice in the clause; each target appears at most once")
+                    return ""
+                }
+            } else {
+                if nt.text == "Shareable" {
+                    self.failTok(nt, "E0824",
+                        "unknown or duplicate derive target — \"Shareable\" is not a derive target; it is a where bound, not a clause target")
+                    return ""
+                }
+                self.failTok(nt, "E0824",
+                    "unknown or duplicate derive target — " + lexnum.quoteText(nt.text) + " is not a derive target; the clause takes \"Eq\", \"Hash\", and \"Show\"")
+                return ""
+            }
+            out = out + " " + lexnum.esc(nt.text)
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            return out + "\n"
+        }
+        return out
+    }
+
+    // parseInterfaceDecl parses `[pub] interface Name<T…> { items }`:
+    // associated types (`type Name`, at most four — E0803) and method
+    // signatures, newline-separated. The serializer groups the assoc lines
+    // before the method lines while the source may interleave the two
+    // legally, so the walk keeps two buffers and composes grouped; the
+    // method names join the interface's own member name space (not the
+    // module's), where a collision is the ordinary E0404. A where clause
+    // here is its own rejection (it trails a signature or an impl head,
+    // not an interface declaration).
+    pub fn parseInterfaceDecl(mut self, isPub: Bool, line: Int64, col: Int64) {
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — an interface declaration is interface Name { items }")
+                return
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where the interface name goes: an interface declaration is interface Name { items }")
+            return
+        }
+        self.dupCheck(t)
+        if self.stopped() {
+            return
+        }
+        self.checkPascal(t)
+        if self.stopped() {
+            return
+        }
+        let name = t.text
+        let nameLine = t.line
+        let nameCol = t.col
+        self.registerRaw(name, nameLine)
+        self.next()
+        var tpsText = ""
+        if self.cur.kind == "<" {
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return
+            }
+        }
+        if isKw(self.cur, "where") {
+            self.failTok(self.cur, "E0105",
+                "unexpected token — \"where\" fits no production here: a where clause trails a fn signature or an impl head, not an interface declaration")
+            return
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an interface wants its item block")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where an interface's item block opens")
+            return
+        }
+        self.next()
+        self.depth = self.depth + 1
+        var assocsText = ""
+        var methodsText = ""
+        var memberNames = ""
+        var assocCount: Int64 = 0
+        while true {
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an interface's item block closes with }")
+                return
+            }
+            if isKw(self.cur, "type") {
+                let kw = self.cur
+                let (aText, aName) = self.assocText()
+                if self.stopped() {
+                    return
+                }
+                if assocCount >= 4 {
+                    self.failTok(kw, "E0803",
+                        "associated type count above four — " + lexnum.quoteText(name) + " declares a fifth associated type " + lexnum.quoteText(aName) + "; an interface declares at most four")
+                    return
+                }
+                assocCount = assocCount + 1
+                assocsText = assocsText + aText
+            } else {
+                if isKw(self.cur, "fn") {
+                    let (mText, members2) = self.methodSigText(memberNames)
+                    memberNames = members2
+                    if self.stopped() {
+                        return
+                    }
+                    methodsText = methodsText + mText
+                } else {
+                    self.failTok(self.cur, "E0105",
+                        "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no interface item production: an interface declares associated types and methods only")
+                    return
+                }
+            }
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an interface's item block closes with }")
+                return
+            }
+            if self.brokeLine() == false {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no production: interface items are separated by newlines and carry no separator token")
+                return
+            }
+        }
+        self.depth = self.depth - 1
+        self.astText = self.astText + "P interface " + i64(line) + " " + i64(col) + " " + b01(isPub) + " " + lexnum.esc(name) + " " + i64(nameLine) + " " + i64(nameCol) + "\n" + tpsText + assocsText + methodsText
+    }
+
+    // assocText parses one associated type `type Name`: PascalCase, no
+    // upper bound on the hole (E0804 — bounds belong in where clauses).
+    // The name answers alongside the P line, for the count diagnostic's
+    // message.
+    pub fn assocText(mut self) -> (String, String) {
+        self.next()
+        let nt = self.cur
+        if nt.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(nt, "E0105", "unexpected end of file — an associated type is type Name")
+                return ("", "")
+            }
+            self.failTok(nt, "E0105",
+                "unexpected token — " + lexnum.quoteText(nt.text) + " where the associated type's name goes: a hole is type Name")
+            return ("", "")
+        }
+        self.checkPascal(nt)
+        if self.stopped() {
+            return ("", "")
+        }
+        self.next()
+        if self.cur.kind == ":" {
+            self.next()
+            self.failTok(self.cur, "E0804",
+                "associated type declares an upper bound — the associated type " + lexnum.quoteText(nt.text) + " carries an upper bound; bounds belong in where clauses, not on the hole's declaration")
+            return ("", "")
+        }
+        return ("P assoc " + i64(nt.line) + " " + i64(nt.col) + " " + lexnum.esc(nt.text) + "\n", nt.text)
+    }
+
+    // methodSigText parses one interface method signature `fn name(self,
+    // params…) [effect tags] [-> type] [{ default body }]`. The name joins
+    // the interface's member name space before the camelCase gate (the
+    // collision outranks the convention, as at module level); the body is
+    // OPTIONAL — a signature without one answers the empty body slot, and
+    // the item loop's separator check reports a stray token after it. The
+    // updated member space answers alongside the P lines.
+    pub fn methodSigText(mut self, memberNames: String) -> (String, String) {
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — a method signature is fn name(self, params…) [-> type]")
+                return ("", memberNames)
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where the method name goes: a method signature is fn name(self, params…) [-> type]")
+            return ("", memberNames)
+        }
+        let prev = namesLineOf(memberNames, t.text)
+        if prev != 0 {
+            self.failTok(t, "E0404",
+                "duplicate name in one module — " + lexnum.quoteText(t.text) + " is already declared at line " + i64(prev) + "; one module has one name space")
+            return ("", memberNames)
+        }
+        var members = memberNames + t.text + " " + i64(t.line) + "\n"
+        self.checkCamel(t)
+        if self.stopped() {
+            return ("", memberNames)
+        }
+        let name = t.text
+        let nameLine = t.line
+        let nameCol = t.col
+        self.next()
+        var tpsText = ""
+        if self.cur.kind == "<" {
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return ("", memberNames)
+            }
+        }
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a method's parameter list opens with the receiver")
+                return ("", memberNames)
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a method's parameter list opens: the first parameter is the receiver self or mut self")
+            return ("", memberNames)
+        }
+        let (recv, paramsText) = self.recvParamList(name)
+        if self.stopped() {
+            return ("", memberNames)
+        }
+        var effectTags = ""
+        var effectLine: Int64 = 0
+        var effectCol: Int64 = 0
+        if isKw(self.cur, "effect") {
+            let (tags, el, ec) = self.parseEffectSegment(false)
+            effectTags = tags
+            effectLine = el
+            effectCol = ec
+            if self.stopped() {
+                return ("", memberNames)
+            }
+        }
+        var retText = "-\n"
+        var hasRet: Int64 = 0
+        if self.cur.kind == "->" {
+            self.next()
+            retText = self.typeRefText()
+            hasRet = 1
+            if self.stopped() {
+                return ("", memberNames)
+            }
+        }
+        if isKw(self.cur, "where") {
+            self.failTok(self.cur, "E0105",
+                "unexpected token — \"where\" fits no production here: a where clause trails a fn declaration's signature or an impl head, not a method signature")
+            return ("", memberNames)
+        }
+        var bodyText = "-\n"
+        if self.cur.kind == "{" {
+            bodyText = self.fnBlock(name, hasRet)
+            if self.stopped() {
+                return ("", memberNames)
+            }
+        }
+        var head = "P msig 0 0 " + lexnum.esc(name) + " " + lexnum.esc(recv)
+        if effectTags != "" {
+            head = head + " " + effectTags
+        }
+        head = head + " " + i64(effectLine) + " " + i64(effectCol) + " " + i64(hasRet) + " " + i64(nameLine) + " " + i64(nameCol) + "\n"
+        return (head + tpsText + paramsText + retText + bodyText, members)
+    }
+
+    // recvParamList parses a method's parameter list from its `(` through
+    // the closing `)`: the receiver entry first — the bare parameter self
+    // or mut self, unannotated and so spelled (E0801's two forms, E0802)
+    // — then, after a comma, the ordinary annotated entries through the
+    // shared paramsLoop. The receiver spelling answers for the header.
+    pub fn recvParamList(mut self, method: String) -> (String, String) {
+        let open = self.cur
+        self.next()
+        if self.cur.kind == ")" {
+            self.failTok(open, "E0801",
+                "method declares no receiver — " + lexnum.quoteText(method) + " declares no parameters; the receiver is the bare parameter \"self\" or \"mut self\"")
+            return ("", "")
+        }
+        var recv = ""
+        if isKw(self.cur, "mut") {
+            self.next()
+            let st = self.cur
+            if st.kind != "ident" {
+                if self.atEnd() {
+                    self.failTok(st, "E0105", "unexpected end of file — a receiver is the bare parameter self or mut self")
+                    return ("", "")
+                }
+                self.failTok(st, "E0105",
+                    "unexpected token — " + lexnum.quoteText(st.text) + " where the receiver goes: a receiver is the bare parameter self or mut self")
+                return ("", "")
+            }
+            if st.text != "self" {
+                self.failTok(st, "E0802",
+                    "method receiver must be named self — the receiver is spelled " + lexnum.quoteText(st.text) + "; a receiver is \"self\" or \"mut self\"")
+                return ("", "")
+            }
+            recv = "mut self"
+            self.next()
+        } else {
+            let st = self.cur
+            if st.kind != "ident" {
+                if self.atEnd() {
+                    self.failTok(st, "E0105", "unexpected end of file — a method's parameter list opens with the receiver self or mut self")
+                    return ("", "")
+                }
+                self.failTok(st, "E0105",
+                    "unexpected token — " + lexnum.quoteText(st.text) + " where a method's receiver goes: the first parameter is the bare receiver self or mut self")
+                return ("", "")
+            }
+            let pk = self.peek()
+            if pk.kind == ":" {
+                self.failTok(st, "E0801",
+                    "method declares no receiver — the first parameter of " + lexnum.quoteText(method) + " carries an annotation; the receiver is the bare parameter \"self\" or \"mut self\"")
+                return ("", "")
+            }
+            if st.text != "self" {
+                self.failTok(st, "E0802",
+                    "method receiver must be named self — the receiver is spelled " + lexnum.quoteText(st.text) + "; a receiver is \"self\" or \"mut self\"")
+                return ("", "")
+            }
+            recv = "self"
+            self.next()
+        }
+        if self.cur.kind == "," {
+            self.next()
+            let paramsText = self.paramsLoop()
+            return (recv, paramsText)
+        }
+        if self.cur.kind != ")" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a parameter list closes with )")
+                return ("", "")
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a parameter list: parameters are name: type pairs")
+            return ("", "")
+        }
+        self.next()
+        return (recv, "")
+    }
+
+    // parseImplDecl parses `impl<T…> Head [for Head2] [where …] { items }`:
+    // without `for` the impl is inherent (the iface slot stays empty);
+    // with it the first head is the interface. The items — associated-type
+    // bindings first (E0806: a binding after a method definition), then
+    // method definitions — stream in source order: in a green parse the
+    // bindings precede the methods, so source order is the serializer's
+    // grouped order. The impl's method names enter no name space.
+    pub fn parseImplDecl(mut self, line: Int64, col: Int64) {
+        self.next()
+        var tpsText = ""
+        if self.cur.kind == "<" {
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return
+            }
+        }
+        let headText = self.typeRefText()
+        if self.stopped() {
+            return
+        }
+        var ifaceText = "-\n"
+        var finalHeadText = headText
+        if isKw(self.cur, "for") {
+            ifaceText = headText
+            self.next()
+            finalHeadText = self.typeRefText()
+            if self.stopped() {
+                return
+            }
+        }
+        var whereT = ""
+        if isKw(self.cur, "where") && self.brokeLine() == false {
+            whereT = self.whereText()
+            if self.stopped() {
+                return
+            }
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an impl wants its item block")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where an impl's item block opens")
+            return
+        }
+        self.next()
+        self.depth = self.depth + 1
+        var itemsText = ""
+        var lastMethod = ""
+        var methodCount: Int64 = 0
+        while true {
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an impl's item block closes with }")
+                return
+            }
+            if isKw(self.cur, "type") {
+                let kw = self.cur
+                let (bText, bName) = self.assocBindingText()
+                if self.stopped() {
+                    return
+                }
+                if methodCount > 0 {
+                    self.failTok(kw, "E0806",
+                        "associated type binding after a method definition — the binding of " + lexnum.quoteText(bName) + " follows the method " + lexnum.quoteText(lastMethod) + "; associated-type bindings precede methods in an impl")
+                    return
+                }
+                itemsText = itemsText + bText
+            } else {
+                if isKw(self.cur, "fn") || isKw(self.cur, "pub") {
+                    let (mText, mName) = self.implMethodText()
+                    if self.stopped() {
+                        return
+                    }
+                    lastMethod = mName
+                    methodCount = methodCount + 1
+                    itemsText = itemsText + mText
+                } else {
+                    self.failTok(self.cur, "E0105",
+                        "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no impl item production: an impl defines associated-type bindings and methods")
+                    return
+                }
+            }
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an impl's item block closes with }")
+                return
+            }
+            if self.brokeLine() == false {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no production: impl items are separated by newlines and carry no separator token")
+                return
+            }
+        }
+        self.depth = self.depth - 1
+        self.astText = self.astText + "P impl " + i64(line) + " " + i64(col) + "\n" + tpsText + ifaceText + finalHeadText + whereT + itemsText
+    }
+
+    // assocBindingText parses one associated-type binding `type Name =
+    // Type`. The name answers alongside the P lines, for the ordering
+    // diagnostic's message.
+    pub fn assocBindingText(mut self) -> (String, String) {
+        self.next()
+        let nt = self.cur
+        if nt.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(nt, "E0105", "unexpected end of file — an associated-type binding is type Name = Type")
+                return ("", "")
+            }
+            self.failTok(nt, "E0105",
+                "unexpected token — " + lexnum.quoteText(nt.text) + " where the binding's name goes: a binding is type Name = Type")
+            return ("", "")
+        }
+        self.checkPascal(nt)
+        if self.stopped() {
+            return ("", "")
+        }
+        self.next()
+        if self.cur.kind != "=" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an associated-type binding is type Name = Type")
+                return ("", "")
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a binding's = goes: a binding is type Name = Type")
+            return ("", "")
+        }
+        self.next()
+        let tyText = self.typeRefText()
+        if self.stopped() {
+            return ("", "")
+        }
+        return ("P assocbind " + i64(nt.line) + " " + i64(nt.col) + " " + lexnum.esc(nt.text) + "\n" + tyText, nt.text)
+    }
+
+    // implMethodText parses one impl method definition `[pub] fn name(self,
+    // params…) [effect tags] [-> type] block`: the body block is REQUIRED
+    // here (a signature without one is the interface face), a where clause
+    // is rejected with its own message, and the method's name enters no
+    // name space — impl methods are not module items. The name answers
+    // alongside the P lines, for the ordering diagnostic's message.
+    pub fn implMethodText(mut self) -> (String, String) {
+        let t = self.cur
+        var isPub = false
+        if isKw(t, "pub") {
+            isPub = true
+            self.next()
+            if isKw(self.cur, "fn") == false {
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — an impl method definition is [pub] fn name(self, params…) block")
+                    return ("", "")
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " after pub: an impl method definition is [pub] fn name(self, params…) block")
+                return ("", "")
+            }
+        }
+        let line = t.line
+        let col = t.col
+        self.next()
+        let nt = self.cur
+        if nt.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(nt, "E0105", "unexpected end of file — an impl method definition is [pub] fn name(self, params…) block")
+                return ("", "")
+            }
+            self.failTok(nt, "E0105",
+                "unexpected token — " + lexnum.quoteText(nt.text) + " where the method name goes: an impl method definition is [pub] fn name(self, params…) block")
+            return ("", "")
+        }
+        self.checkCamel(nt)
+        if self.stopped() {
+            return ("", "")
+        }
+        let name = nt.text
+        let nameLine = nt.line
+        let nameCol = nt.col
+        self.next()
+        var tpsText = ""
+        if self.cur.kind == "<" {
+            tpsText = self.typeParamsText()
+            if self.stopped() {
+                return ("", "")
+            }
+        }
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a method's parameter list opens with the receiver")
+                return ("", "")
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a method's parameter list opens: the first parameter is the receiver self or mut self")
+            return ("", "")
+        }
+        let (recv, paramsText) = self.recvParamList(name)
+        if self.stopped() {
+            return ("", "")
+        }
+        var effectTags = ""
+        var effectLine: Int64 = 0
+        var effectCol: Int64 = 0
+        if isKw(self.cur, "effect") {
+            let (tags, el, ec) = self.parseEffectSegment(false)
+            effectTags = tags
+            effectLine = el
+            effectCol = ec
+            if self.stopped() {
+                return ("", "")
+            }
+        }
+        var retText = "-\n"
+        var hasRet: Int64 = 0
+        if self.cur.kind == "->" {
+            self.next()
+            retText = self.typeRefText()
+            hasRet = 1
+            if self.stopped() {
+                return ("", "")
+            }
+        }
+        if isKw(self.cur, "where") {
+            self.failTok(self.cur, "E0105",
+                "unexpected token — \"where\" fits no production here: a where clause trails a fn declaration's signature or an impl head, not a method definition")
+            return ("", "")
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a method definition wants its body block")
+                return ("", "")
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a method definition's body block opens")
+            return ("", "")
+        }
+        let bodyText = self.fnBlock(name, hasRet)
+        if self.stopped() {
+            return ("", "")
+        }
+        var head = "P fn " + i64(line) + " " + i64(col) + " " + b01(isPub) + " " + lexnum.esc(name) + " " + lexnum.esc(recv)
+        if effectTags != "" {
+            head = head + " " + effectTags
+        }
+        head = head + " " + i64(effectLine) + " " + i64(effectCol) + " 0 " + i64(nameLine) + " " + i64(nameCol) + "\n"
+        return (head + tpsText + paramsText + retText + bodyText, name)
+    }
+
+    // parseForeignDecl parses `foreign "c" { items }` (chapter 17): the
+    // ABI string is exactly "c" through descText's split decode (E1701
+    // carries the raw token text), and the items are foreign fn
+    // declarations and opaque type declarations — record heads with no
+    // field block. The head line and every item append to astText as they
+    // parse, because the record item's own parseRecordDecl appends its P
+    // lines directly: an fn item held back for a final compose would land
+    // after a later record's lines. Braces are brackets, so the loop
+    // carries no separator checks — line breaks inside fold.
+    pub fn parseForeignDecl(mut self, line: Int64, col: Int64) {
+        self.next()
+        let ab = self.cur
+        if ab.kind == "eof" {
+            self.failTok(ab, "E0105", "unexpected end of file — a foreign block is foreign \"c\" { items }")
+            return
+        }
+        if ab.kind != "string" || descText(ab.text) != "c" {
+            self.failTok(ab, "E1701",
+                "foreign block's ABI string is not \"c\" — got " + ab.text)
+            return
+        }
+        self.next()
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a foreign block's item block opens with {")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a foreign block's item block opens")
+            return
+        }
+        self.next()
+        self.depth = self.depth + 1
+        self.astText = self.astText + "P foreign " + i64(line) + " " + i64(col) + " c\n"
+        while true {
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a foreign block closes with }")
+                return
+            }
+            let head = self.cur
+            var isPub = false
+            if isKw(head, "pub") {
+                isPub = true
+                self.next()
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — a foreign block closes with }")
+                    return
+                }
+            }
+            if isKw(self.cur, "fn") {
+                let itText = self.foreignFnItem(isPub, head)
+                if self.stopped() {
+                    return
+                }
+                self.astText = self.astText + itText
+            } else {
+                if isKw(self.cur, "record") {
+                    let itText = self.foreignRecordItem(isPub, "gc", head)
+                    if self.stopped() {
+                        return
+                    }
+                    self.astText = self.astText + itText
+                } else {
+                    if isKw(self.cur, "byval") && isKw(self.peek(), "record") {
+                        self.next()
+                        let itText = self.foreignRecordItem(isPub, "value", head)
+                        if self.stopped() {
+                            return
+                        }
+                        self.astText = self.astText + itText
+                    } else {
+                        if isKw(self.cur, "byres") && isKw(self.peek(), "record") {
+                            self.next()
+                            let itText = self.foreignRecordItem(isPub, "resource", head)
+                            if self.stopped() {
+                                return
+                            }
+                            self.astText = self.astText + itText
+                        } else {
+                            self.failTok(head, "E0105",
+                                "unexpected token — " + lexnum.quoteText(head.text) + " in a foreign block: a foreign block holds foreign function declarations and opaque type declarations, nothing else")
+                            return
+                        }
+                    }
+                }
+            }
+        }
+        self.depth = self.depth - 1
+    }
+
+    // foreignFnItem parses one foreign fn declaration `fn name(params)
+    // effect tags [-> type]`: the effect segment is REQUIRED (E1703 — the
+    // declaration is the only evidence of the callee's effects), a generic
+    // clause refuses the monomorphic boundary (E1704), and a body block is
+    // not the form (the zero body serializes as the block line at 0 0).
+    // The name's registration waits until the whole item is green, the
+    // reference's own end-of-item registration point.
+    pub fn foreignFnItem(mut self, isPub: Bool, head: Token) -> String {
+        self.next()
+        let nt = self.cur
+        if nt.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(nt, "E0105", "unexpected end of file — a foreign fn declaration is fn name(params) effect tags")
+                return ""
+            }
+            self.failTok(nt, "E0105",
+                "unexpected token — " + lexnum.quoteText(nt.text) + " where a fn name goes: a foreign fn declaration is fn name(params) effect tags")
+            return ""
+        }
+        self.dupCheck(nt)
+        if self.stopped() {
+            return ""
+        }
+        self.checkCamel(nt)
+        if self.stopped() {
+            return ""
+        }
+        let name = nt.text
+        let nameLine = nt.line
+        let nameCol = nt.col
+        self.next()
+        if self.cur.kind == "<" {
+            self.failTok(nt, "E1704",
+                "foreign function declaration with a generic clause — " + lexnum.quoteText(name) + "; the boundary is monomorphic: declare each instantiation, or wrap the polymorphism in a We-side generic function")
+            return ""
+        }
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a fn wants its parameter list")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a fn's parameter list opens")
+            return ""
+        }
+        let paramsText = self.annotatedParams()
+        if self.stopped() {
+            return ""
+        }
+        if isKw(self.cur, "effect") == false {
+            self.failTok(nt, "E1703",
+                "foreign function declaration without an effect segment — " + lexnum.quoteText(name) + " has no body; the declaration is the only evidence of the callee's effects, so the segment must be written")
+            return ""
+        }
+        let (effectTags, effectLine, effectCol) = self.parseEffectSegment(true)
+        if self.stopped() {
+            return ""
+        }
+        var retText = "-\n"
+        if self.cur.kind == "->" {
+            self.next()
+            retText = self.typeRefText()
+            if self.stopped() {
+                return ""
+            }
+        }
+        if self.cur.kind == "{" {
+            self.failTok(head, "E0105",
+                "a foreign fn declares no body — the native side holds it; a foreign block holds foreign function declarations and opaque type declarations, nothing else")
+            return ""
+        }
+        self.registerRaw(name, nameLine)
+        var out = "P fn " + i64(head.line) + " " + i64(head.col) + " " + b01(isPub) + " " + lexnum.esc(name) + "  "
+        if effectTags != "" {
+            out = out + effectTags + " "
+        }
+        out = out + i64(effectLine) + " " + i64(effectCol) + " 1 " + i64(nameLine) + " " + i64(nameCol) + "\n"
+        return out + paramsText + retText + "P block 0 0\n"
+    }
+
+    // foreignRecordItem parses one opaque type declaration — a record head
+    // reused with the opaque flag: parseRecordDecl runs the full production
+    // (so a field block's own diagnostics still report), and a non-zero
+    // field count then refuses at the item head. The record's P lines land
+    // inside parseRecordDecl itself, so the empty string answers here.
+    pub fn foreignRecordItem(mut self, isPub: Bool, cat: String, head: Token) -> String {
+        let count = self.parseRecordDecl(isPub, cat, true, head.line, head.col)
+        if self.stopped() {
+            return ""
+        }
+        if count != 0 {
+            self.failTok(head, "E0105",
+                "a record with fields is an ordinary record, not an opaque type declaration; a foreign block holds foreign function declarations and opaque type declarations, nothing else")
+            return ""
+        }
+        return ""
+    }
+
+    // parenTypeText parses the paren family of type references: `()` the
+    // unit type, and `(T1, …, Tn)` the tuple type — two or more elements
+    // (a single parenthesized type is no production; the diagnostic anchors
+    // at the open parenthesis itself), trailing comma allowed, arity bound
+    // eight (E0602 at the open, shared with the expression side).
+    pub fn parenTypeText(mut self) -> String {
+        let open = self.cur
+        self.next()
+        if self.cur.kind == ")" {
+            self.next()
+            return "P unittype " + i64(open.line) + " " + i64(open.col) + "\n"
+        }
+        let firstText = self.typeRefText()
+        if self.stopped() {
+            return ""
+        }
+        if self.cur.kind != "," {
+            self.failTok(open, "E0105", typeRefMsg(open.text))
+            return ""
+        }
+        var elemsText = firstText
+        var count: Int64 = 1
+        while true {
+            self.next()
+            if self.cur.kind == ")" {
+                break
+            }
+            elemsText = elemsText + self.typeRefText()
+            if self.stopped() {
+                return ""
+            }
+            count = count + 1
+            if self.cur.kind == "," {
+                continue
+            }
+            if self.cur.kind == ")" {
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a tuple type closes with )")
+                return ""
+            }
+            self.failTok(self.cur, "E0105", typeRefMsg(self.cur.text))
+            return ""
+        }
+        self.next()
+        self.tupleArity(open, count, "type")
+        if self.stopped() {
+            return ""
+        }
+        return "P tupletype " + i64(open.line) + " " + i64(open.col) + "\n" + elemsText
+    }
+
+    // fnTypeText parses the fn type reference `fn(T1, …, Tn) [tags] -> T`:
+    // the parameter list holds bare type references (no names), the effect
+    // tags are optional bare-or-qualified names anchored at the first tag
+    // token, and the `->` with the result type is required.
+    pub fn fnTypeText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a fn type opens its parameter list with (")
+                return ""
+            }
+            self.failTok(self.cur, "E0105", typeRefMsg(self.cur.text))
+            return ""
+        }
+        self.next()
+        var paramsText = ""
+        var tagLine: Int64 = 0
+        var tagCol: Int64 = 0
+        while true {
+            if self.cur.kind == ")" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a fn type's parameter list closes with )")
+                return ""
+            }
+            paramsText = paramsText + self.typeRefText()
+            if self.stopped() {
+                return ""
+            }
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == ")" {
+                self.next()
+                break
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a function type reference: fn(T1, …, Tn) [tags] -> T")
+            return ""
+        }
+        if self.cur.kind == "ident" {
+            tagLine = self.cur.line
+            tagCol = self.cur.col
+        }
+        let tags = self.effectTagList()
+        if self.cur.kind != "->" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a fn type declares its result with ->")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a function type reference: fn(T1, …, Tn) [tags] -> T")
+            return ""
+        }
+        self.next()
+        let retText = self.typeRefText()
+        if self.stopped() {
+            return ""
+        }
+        var head = "P fntype " + i64(t.line) + " " + i64(t.col)
+        if tags != "" {
+            head = head + " " + tags
+        }
+        head = head + " " + i64(tagLine) + " " + i64(tagCol) + "\n"
+        return head + paramsText + retText
     }
 
     // parseBinding parses `let|var name [: type] = expr` (the keyword
@@ -1293,40 +2990,48 @@ pub fn run(toksText: String, docsText: String) -> String {
 // its own line boundaries into the T-line and D/L-line sections (the
 // headers drop out, the lines keep theirs) and run takes them. Escaped
 // text never carries a raw newline, so the split is exact.
+//
+// The split is positional, not a rebuild: a serialization line is never
+// empty, so the token section is exactly the byte range between the
+// tokens header's newline and the docs header's line, and the docs
+// section the range past the docs header's newline — two byteSlice calls,
+// each sharing the source's bytes, allocate nothing. The previous form
+// re-concatenated the sections one line at a time, which under the
+// bootstrap runtime's immortal string buffers is quadratic dead
+// intermediates; the self-host corpus entry died on that.
 pub fn drive(lexOut: String) -> String {
     if lexOut.byteLength() >= 2 {
         if lexOut.byteSlice(0, 2) == "E " {
             return ""
         }
     }
-    var toks = ""
-    var docs = ""
-    var inDocs = false
-    var headerSkipped = false
     let n = lexOut.byteLength()
-    var lineStart: Int64 = 0
-    var i: Int64 = 0
-    while i < n {
-        if lexnum.byteAt(lexOut, i) == 10 {
-            if i > lineStart {
-                let line = lexOut.byteSlice(lineStart, i)
-                if headerSkipped == false {
-                    headerSkipped = true
-                } else {
-                    if line == "docs" {
-                        inDocs = true
-                    } else {
-                        if inDocs {
-                            docs = docs + line + "\n"
-                        } else {
-                            toks = toks + line + "\n"
-                        }
-                    }
-                }
-            }
-            lineStart = i + 1
-        }
-        i = i + 1
+    let headerEnd = lineEndAt(lexOut, 0)
+    var toksStart = headerEnd + 1
+    if toksStart > n {
+        toksStart = n
     }
-    return run(toks, docs)
+    // The docs header, when present, is one whole line equal to "docs"
+    // (every section line starts with its letter, so no T/D/L line can
+    // spell it); its line start ends the token section.
+    var docsAt = n
+    var ls = toksStart
+    while ls < n {
+        let le = lineEndAt(lexOut, ls)
+        if lexOut.byteSlice(ls, le) == "docs" {
+            docsAt = ls
+            break
+        }
+        ls = le + 1
+    }
+    var toksEnd = n
+    var docsStart = n
+    if docsAt < n {
+        toksEnd = docsAt
+        docsStart = lineEndAt(lexOut, docsAt) + 1
+        if docsStart > n {
+            docsStart = n
+        }
+    }
+    return run(lexOut.byteSlice(toksStart, toksEnd), lexOut.byteSlice(docsStart, n))
 }

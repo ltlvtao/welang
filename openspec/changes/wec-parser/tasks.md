@@ -26,12 +26,14 @@
 
 ## T3 声明与类型引用
 
-- [ ] **复合声明族**：record（gc/value/resource 三形、字段表 FieldDecl、derives）、sum（variant 载荷形 + 无载荷形）、newtype、interface（MethodSig/AssocDecl）、impl（AssocBinding/WhereBound/TypeEq/TypeParam）、foreign 块的声明面（E1701–E1704 产生式）。
+- [x] **复合声明族**：record（gc/value/resource 三形、字段表 FieldDecl、derives）、sum（variant 载荷形 + 无载荷形）、newtype、interface（MethodSig/AssocDecl）、impl（AssocBinding/WhereBound/TypeEq/TypeParam）、foreign 块的声明面（E1701–E1704 产生式）。
   来源：proposal 目标 1；design D4（各节点 P 行）
   验证：conformance 源声明密集子集先红后绿；E17xx 矩阵（parser 产生式侧）
-- [ ] **typeref 族**：parseTypeRef（Pascal 名/qual 链/泛型实参 anglePos）、元组型（E0602 arity）、unit 型、fn 型、Dyn<I>；NamedType 的 ArgLine/ArgCol 位。
+  落地（2026-10-09）：parseSumDecl/parseRecordDecl/parseNewtypeDecl/parseInterfaceDecl/parseImplDecl/parseForeignDecl 六族 + typeParamsText/whereText/derivesSlot；载体判决 = interface 两缓冲分组（assocs 先于 methods，与源序解耦）vs foreign 逐项追加（单一切片源序承载）入补记四-2；E1701 的 ABI 闭集校验经 descText 拆码（\u{} 域检 + runeText 算术渲染，补记四-4）；收口期塔逮真缺陷两枚（sum 变体漏入册——t3 语料与 conformance `check-e0404-variant-fn` 双面捕获；runeText 表基差一）订正入补记四-3；T3 期自举内存面修复见补记三；E17xx 矩阵全绿（E1702 语句位归 T4）
+- [x] **typeref 族**：parseTypeRef（Pascal 名/qual 链/泛型实参 anglePos）、元组型（E0602 arity）、unit 型、fn 型、Dyn<I>；NamedType 的 ArgLine/ArgCol 位。
   来源：今日事实 4；design D4
   验证：类型标注密集语料先红后绿
+  落地（2026-10-09）：parseTypeRef（Pascal 名/qual 链/泛型实参 anglePos——where-bound 的 iface 名参考不填角锚，泛型应用形下仍拼 0 0，补记四-5）、元组 E0602、unit、fn 型（effect 标签）、Dyn<I>（钉拼写——具名应用面 T2 已开）；t3: 语料 144/144 绿、棘轮 206 → **381**（conformance case 翻绿 30 + stdlib 1——纯声明形源；发散余量 = case 915 + stdlib 5 + wec 4）；红先态补取（原始红态未随开发期记档——OOM 期跨段）：parse.we 回退 HEAD=T2 全量复跑（2026-10-09），t3: 143/144 发散（`t3:ty-dyn` 在 T2 解析器下即绿——钉拼写枚的本义）、reconciled 恰 207 = 206 基线 + 该枚
 
 ## T4 块、语句与模式
 
