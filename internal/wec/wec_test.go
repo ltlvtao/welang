@@ -472,6 +472,56 @@ func loadCorpus(t *testing.T) []entry {
 		entry{"t3:err-ty-fn-noarrow", "fn f(x: fn(Int64)) { }\n"},
 		entry{"t3:err-ty-fn-eof", "fn f(x: fn(\n"},
 		entry{"t3:err-ty-fn-arrow-eof", "fn f(x: fn(Int64) ->\n"},
+		// T4's statement face: the block loop and statement dispatch — the
+		// direct flag with defer's one-layer law (E0204/E0203), the mock
+		// depth law's failure arm (E1802 at depth 0; the depth-2 positive
+		// rides T4-B's test face), let/var bindings and both assignment
+		// heads, return's hasRet check (E0402), the if/else chain with the
+		// valueless-if rule (E0202), loopDepth on break/continue (E0201),
+		// for, scope resource with its own E0404 wording, the statement
+		// separation law (E0105), foreign's statement-position code
+		// (E1702), and the tail-expression form. Operands stay inside the
+		// faces already landed — literals, idents, true/false — since
+		// richer expressions ride T5.
+		entry{"t4:stmt-let", "fn f() { let x = 1\n }\n"},
+		entry{"t4:stmt-var-annot", "fn f() { var n: Int64 = 7\n }\n"},
+		entry{"t4:stmt-two", "fn f() { let x = 1\nlet y = 2\n }\n"},
+		entry{"t4:stmt-tail-expr", "fn f() -> Int64 { 1\n }\n"},
+		entry{"t4:stmt-assign-name", "fn f() { x = 2\n }\n"},
+		entry{"t4:stmt-assign-self", "impl P { fn set(self) { self.x = 1\n }\n }\n"},
+		entry{"t4:err-stmt-nosep", "fn f() { let x = 1 let y = 2 }\n"},
+		entry{"t4:err-stmt-pub", "fn f() { pub x\n }\n"},
+		entry{"t4:err-foreign-stmt", "fn f() { foreign \"c\" { }\n }\n"},
+		entry{"t4:err-mock-fnbody", "fn f() { mock std.io println\n }\n"},
+		entry{"t4:return-bare", "fn f() { return\n }\n"},
+		entry{"t4:return-value", "fn f() -> Int64 { return 1\n }\n"},
+		entry{"t4:err-return-value-noret", "fn f() { return 1\n }\n"},
+		entry{"t4:err-return-eof", "fn f() { return"},
+		entry{"t4:if-basic", "fn f(c: Bool) { if c { let x = 1\n }\n }\n"},
+		entry{"t4:if-else", "fn f(c: Bool) { if c { let x = 1\n } else { let y = 2\n }\n }\n"},
+		entry{"t4:if-else-if", "fn f(a: Bool, b: Bool) { if a { let x = 1\n } else if b { let y = 2\n } else { let z = 3\n }\n }\n"},
+		entry{"t4:if-else-block-if", "fn f(a: Bool) { if a { let x = 1\n } else { if a { let y = 2\n }\n }\n }\n"},
+		entry{"t4:if-value-tail", "fn f(c: Bool) -> Int64 { if c { 1\n } else { 2\n }\n }\n"},
+		entry{"t4:if-tail-noelse", "fn f(c: Bool) -> Int64 { if c { 1\n }\n }\n"},
+		entry{"t4:err-if-valueless-init", "fn f(c: Bool) { let x = if c { 1\n }\n }\n"},
+		entry{"t4:err-if-nothing", "fn f(c: Bool) { if c let x = 1\n }\n"},
+		entry{"t4:while-basic", "fn f(c: Bool) { while c { let x = 1\n }\n }\n"},
+		entry{"t4:loop-break", "fn f() { loop { break\n }\n }\n"},
+		entry{"t4:while-continue", "fn f(c: Bool) { while c { continue\n }\n }\n"},
+		entry{"t4:err-break-noloop", "fn f() { break\n }\n"},
+		entry{"t4:err-continue-noloop", "fn f() { continue\n }\n"},
+		entry{"t4:err-break-top", "break\n"},
+		entry{"t4:defer-block", "fn f() { defer { let x = 1\n }\n }\n"},
+		entry{"t4:err-defer-nested", "fn f(c: Bool) { while c { defer { }\n }\n }\n"},
+		entry{"t4:err-defer-nonblock", "fn f() { defer g\n }\n"},
+		entry{"t4:for-binding", "fn f(xs: List<Int64>) { for x in xs { let y = x\n }\n }\n"},
+		entry{"t4:for-wildcard", "fn f(xs: List<Int64>) { for _ in xs { }\n }\n"},
+		entry{"t4:err-for-noin", "fn f(xs: List<Int64>) { for x xs { }\n }\n"},
+		entry{"t4:scope-resource", "fn f() { scope resource(h = g) { let x = 1\n }\n }\n"},
+		entry{"t4:scope-resource-two", "fn f() { scope resource(h = g, i = h) { }\n }\n"},
+		entry{"t4:err-scope-underscore", "fn f() { scope resource(_ = g) { }\n }\n"},
+		entry{"t4:err-scope-dup", "fn f() { scope resource(h = g, h = g) { }\n }\n"},
+		entry{"t4:err-scope-camel", "fn f() { scope resource(H = g) { }\n }\n"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
@@ -656,7 +706,7 @@ func window(s string, i int) string {
 // face lands (T6). B3b's lexical-only TestLexReconciliation is retired
 // into this test: the lexical comparison is the parse-section-empty prefix
 // of the full output, so asserting both would assert a fraction twice.
-const reconciledFloor = 381
+const reconciledFloor = 523
 
 // TestOutputReconciliation is the B3c differential bar (design D5): for
 // every admitted corpus entry, the wec artifact's FULL serialized output —

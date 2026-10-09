@@ -184,3 +184,16 @@ T3 增量使塔中止于自举项 `wec:parse.we`（产物 OOM 死、runWec 首 F
 3. **收口期塔逮真缺陷两枚**（红测试即语料本体，先修后绿）：① **sum 变体只 dupCheck 未入册**——`type S = A | A` 的第二枚查无不撞（参考 E0404@1:14）；Go 位点 = dupCheck/checkPascal 后即 `p.names[vt.Text] = vt.Line`（parser.go:1342，先于载荷解析），We 侧同位补 `registerRaw`。此枚同时拦着一枚 conformance 用例（`check-e0404-variant-fn`：变体 `Circle` 撞 fn `Circle`——fn 侧 dupCheck 找不到变体的册），修复后双面同绿。② **runeText 可打印 ASCII 表基差一**——表首字节 0x20（空格）而索引取 `r - 0x21`，`"\u{63}"` 渲染成 `"b"` ≠ `"c"` 误报 E1701；索引订正 `r - 0x20`（守卫 `r >= 0x21` 不动——0x20 自身走 byteChar）。
 4. **闭集解码面**：E1701 的 ABI 字面量校验经 descText 拆码——`\u{}` 域检共享 rune/串两形（parseUEscape/hexDigitVal/validRune），码点经 runeText 算术渲染（可打印 ASCII 无探针表泄漏位——lexnum 只出探针表与控制表，故自带 0x20–0x7E run 表；表基事实见 3②）。
 5. **where-bound 角锚**：`P named` 的 ArgLine/ArgCol 是泛型实参 `<` 位；where 约束的 iface 名参考不填（零值）——泛型应用形下仍拼 `0 0`。typeref 主面（参数位/字段位/返回位/载荷位）照填 anglePos。
+
+### 补记五（T4 落地·上半刀，2026-10-09）
+
+T4 的两枚复选框本就是两条垂直可验的验收线，按框拆两刀：上半刀收 block 与语句族（本补记），下半刀收 match/模式族与 test/mock。语句族独立成塔绿面已足（棘轮 +142）。
+
+1. **记账**：棘轮 381 → **523**；语料 as-built 1344（放行 1344，剔 1 仍为 #30 角）；t4: 39/39 绿；翻绿 141 = t4 38 + stdlib 3（io/test/time——体内容即语句面）+ conformance case 100；发散余量 821 = case 815 + stdlib 2 + wec 4（类别：expr 689——T5 面、test 49——下半刀、pattern 2——下半刀、docs 1——T6 面，另 80 枚首差窗口未露 N 行，结构同类）；红先态记档 /tmp/t4-red.log（reconciled 382/1343、t4 37/38 红；`t4:err-break-top` 红态即绿——break 顶层走 parseItem 的 fallthrough，两态同形）。
+2. **载体判决——else-折叠 P 行手术**：Go 的 else 块在 `len(Items)==1 && ExprStmt && If` 时折叠进 else-if 链。流式载体无树可查，改在组合后的 P 行上做同一判定：blockLoopText 增返项数，cnt==1 且剥首行 `P block` 后取前缀 `P exprstmt `、再剥后取前缀 `P if ` 即折叠——三段剥离与参考三重条件字面等价，无启发式。弃用的候选是括号平衡探针：if 条件含 `{`（构造字面量形）即破。BlockExpr 锚点取闭括号后的 cur（参考的结构体字面量求值序，非 else 关键字位）。
+3. **afterPrimary 停点集**：参考的 parseBinary/parsePostfix 两循环头折为一门。停 = atEnd / depth==0 && brokeLine / `}`/`)`/`,` / 后缀 default 臂**含关键字**（故 `if c let x = 1` 由体块检查报 E0105 引 let，而非此处闩）。真面两枚：`[` 的 E0105 与 `=` 双语境（语句位 E0105 assignAfterExpr / 值位 E0103）——参考先于任何 T5 产生式触达，故归 T4 面；续面（21 操作符 + `.`/`(`/`?`/`<` 与构造 `{`）闩 T5。
+4. **消息拼写对账纪律**：携带稿把 E0103 与 assignAfterExpr-E0105 拼作连字符，复读 parser.go 逮出——两消息皆 em dash `—` 加裸引号 `"="`。塔只钉语料命中的面；未命中拼写（for 头 eof/泛型、scope 头诸形、`[`、E0103）无塔防，靠对参考逐条人工复核，本条记录该纪律。
+5. **exprValue 场域清单**（Go exprCtx 0/1 的 We 镜像；唯一读点 = ifExprText 的 E0202）：置 1 于赋值双头的值、return 值、scope 绑定值、binding 初值、headExprText、else-if 链递归；置 0 于 exprstmt。valSite 缺省位 "this value position"（parsePrimary 的 valueless 关键字臂用裸 valSite——T5/下半刀面，此处不碰）。
+6. **fn 上下文栈复用**：fctxLine 参数承两类上下文——fn 体 `name;hasRet;0` 与 defer 体空名行 `;0;1`；fnsTopFlag/fnsTopName 供 return 双查。mock 深度律内嵌 blockLoopText（savedTest 1→2 else→0），深度 2 正形待下半刀的 test 面。
+7. **22 词保留闭集**逐词对账 parser.go:2158-2161；tokAhead 只读探针不推游标——#31 纪律的读侧延伸（探针走 toksText 的 T 行，不触碰 last/cur 的行位事实）。
+8. **自举性能面复钉（非回归，在案未决）**：塔 330.7s（T3 收口 247.7s）。增量主项 = wec:parse.we 自源条目：源码 T4 期间 51.6KB → 151.3KB，在补记三-5 的 charAt O(R²) 扫描面上自然放大；本窗口前缀计时（600/1200/2400 行 = 4.5s/23.4s/>60s 超时）确认超线性仍在。该条目闩点在词法完成后的极早处（`Token { … }` 构造面 → N 行），慢全在词法扫描，与 T4-A 码无涉。follow-up 裁定仍待用户（补记三-5 同案——charAt 线性化即消）。

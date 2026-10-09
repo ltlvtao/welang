@@ -63,6 +63,7 @@ pub record Parser {
     shortBody: Int64,
     fnBrace: Int64,
     valSite: String,
+    exprValue: Int64,
     fnsText: String,
     namesText: String,
     itemStartsText: String,
@@ -254,6 +255,25 @@ fn isPascal(s: String) -> Bool {
 // isKw is the keyword test: kind keyword plus the word itself.
 fn isKw(t: Token, word: String) -> Bool {
     return t.kind == "keyword" && t.text == word
+}
+
+// hasPrefix reports whether s begins with the bytes of pre.
+fn hasPrefix(s: String, pre: String) -> Bool {
+    let n = pre.byteLength()
+    if s.byteLength() < n {
+        return false
+    }
+    return s.byteSlice(0, n) == pre
+}
+
+// stmtReservedWord is the statement dispatch's closed rejection list —
+// every keyword that names a production of its own elsewhere and so fits
+// no statement production here (the reference's own switch case list).
+fn stmtReservedWord(w: String) -> Bool {
+    return w == "pub" || w == "import" || w == "as" || w == "mut" || w == "else" || w == "in" ||
+        w == "where" || w == "derives" || w == "with" || w == "resource" || w == "effect" ||
+        w == "case" || w == "timeout" || w == "collectAll" || w == "record" || w == "byval" ||
+        w == "byres" || w == "newtype" || w == "type" || w == "interface" || w == "impl" || w == "test"
 }
 
 // b01 renders a bool as the 0/1 field spelling.
@@ -1194,33 +1214,87 @@ impl Parser {
     }
 
     // fnBlock parses a function body's top-level block: the fn context
-    // goes on the stack, the loop depth resets, and the block context is
-    // restored on exit as the reference's save/restore pair does. The one
-    // body shape T2 answers is the empty block — a statement inside
-    // latches T4's pending marker, and an unclosed body ends at the
-    // reference's own block-closer error.
+    // goes on the stack, the loop depth resets (a fn body starts no loop),
+    // and the block runs at direct — the one level where defer is a legal
+    // item.
     pub fn fnBlock(mut self, name: String, hasRet: Int64) -> String {
-        let open = self.cur
-        self.next()
-        self.fnsText = self.fnsText + name + ";" + i64(hasRet) + ";0\n"
         let savedLoop = self.loopDepth
         let savedDirect = self.direct
         self.loopDepth = 0
         self.direct = 1
-        let out = "P block " + i64(open.line) + " " + i64(open.col) + "\n"
-        if self.cur.kind == "}" {
-            self.next()
-            self.loopDepth = savedLoop
-            self.direct = savedDirect
-            self.popFn()
-            return out
+        let (out, n) = self.blockLoopText(1, name + ";" + i64(hasRet) + ";0")
+        self.loopDepth = savedLoop
+        self.direct = savedDirect
+        return out
+    }
+
+    // blockLoopText is the shared `{ items }` loop (the reference's block):
+    // it consumes the opening brace itself, runs at the given direct flag,
+    // pushes the fn context line when one is given (the fn body's own and
+    // the defer body's no-return context), applies the mock depth law
+    // (a pending 1 marks this block as the test body's own — its items run
+    // at 2, the one depth where mock is legal; every nested block runs at
+    // 0), and enforces the statement separation law. It answers the block's
+    // P lines and its item count (the else-fold probe reads the count).
+    pub fn blockLoopText(mut self, direct: Int64, fctxLine: String) -> (String, Int64) {
+        let open = self.cur
+        self.next()
+        if fctxLine != "" {
+            self.fnsText = self.fnsText + fctxLine + "\n"
         }
-        if self.atEnd() {
-            self.failTok(self.cur, "E0105", "unexpected end of file — a block wants its closing }")
-            return ""
+        let savedDirect = self.direct
+        self.direct = direct
+        let savedTest = self.inTestBody
+        if savedTest == 1 {
+            self.inTestBody = 2
+        } else {
+            self.inTestBody = 0
         }
-        self.bndLatch("WEC-PENDING stmt")
-        return ""
+        var out = "P block " + i64(open.line) + " " + i64(open.col) + "\n"
+        var count: Int64 = 0
+        while true {
+            if self.cur.kind == "}" {
+                self.next()
+                self.direct = savedDirect
+                self.inTestBody = savedTest
+                if fctxLine != "" {
+                    self.popFn()
+                }
+                return (out, count)
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a block wants its closing }")
+                return ("", 0)
+            }
+            self.checkStart(false)
+            if self.stopped() {
+                return ("", 0)
+            }
+            out = out + self.stmtText()
+            if self.stopped() {
+                return ("", 0)
+            }
+            count = count + 1
+            if self.cur.kind == "}" {
+                self.next()
+                self.direct = savedDirect
+                self.inTestBody = savedTest
+                if fctxLine != "" {
+                    self.popFn()
+                }
+                return (out, count)
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a block wants its closing }")
+                return ("", 0)
+            }
+            if self.brokeLine() == false {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " after a complete statement: a statement ends at its line break; only } or a new statement follows")
+                return ("", 0)
+            }
+        }
+        return (out, count)
     }
 
     // popFn drops the innermost fn context (the encoded stack's tail).
@@ -1234,6 +1308,617 @@ impl Parser {
             i = i - 1
         }
         self.fnsText = self.fnsText.byteSlice(0, i + 1)
+    }
+
+    // fnsTopStart finds the start offset of the fn stack's top line.
+    pub fn fnsTopStart(mut self) -> Int64 {
+        let n = self.fnsText.byteLength()
+        var i = n - 2
+        while i >= 0 {
+            if lexnum.byteAt(self.fnsText, i) == 10 {
+                break
+            }
+            i = i - 1
+        }
+        return i + 1
+    }
+
+    // fnsTopFlag reads the hasRet (idx 0) or deferBody (idx 1) flag of the
+    // top fn context — the `name;hasRet;deferBody` line's fields.
+    pub fn fnsTopFlag(mut self, idx: Int64) -> Int64 {
+        let st = self.fnsTopStart()
+        let n = self.fnsText.byteLength()
+        var j = st
+        var semi: Int64 = 0
+        while j < n {
+            let c = lexnum.byteAt(self.fnsText, j)
+            if c == 59 {
+                if semi == idx {
+                    if j + 1 < n && lexnum.byteAt(self.fnsText, j + 1) == 49 {
+                        return 1
+                    }
+                    return 0
+                }
+                semi = semi + 1
+            }
+            if c == 10 {
+                return 0
+            }
+            j = j + 1
+        }
+        return 0
+    }
+
+    // fnsTopName reads the top fn context's name (up to its first ;).
+    pub fn fnsTopName(mut self) -> String {
+        let st = self.fnsTopStart()
+        let n = self.fnsText.byteLength()
+        var j = st
+        while j < n {
+            let c = lexnum.byteAt(self.fnsText, j)
+            if c == 59 || c == 10 {
+                break
+            }
+            j = j + 1
+        }
+        return self.fnsText.byteSlice(st, j)
+    }
+
+    // tokAhead reads the token n positions past the cursor without
+    // consuming — the statement head probes (self.field =, the assignment
+    // =) walk it read-only; a position past the last T line answers the
+    // eof-shaped ground state, so a probe there simply fails to match.
+    pub fn tokAhead(mut self, n: Int64) -> Token {
+        var p = self.pos
+        var i: Int64 = 0
+        while i < n {
+            p = lineEndAt(self.toksText, p) + 1
+            i = i + 1
+        }
+        return tokAt(self.toksText, p)
+    }
+
+    // headExprText parses a control-flow head (a condition or scrutinee):
+    // a value expression with the postfix `{` suspended — the brace that
+    // follows a head opens the body, never a construction.
+    pub fn headExprText(mut self) -> String {
+        self.noBrace = self.noBrace + 1
+        let savedValue = self.exprValue
+        self.exprValue = 1
+        let e = self.exprText()
+        self.exprValue = savedValue
+        self.noBrace = self.noBrace - 1
+        return e
+    }
+
+    // stmtText dispatches one statement by keyword (the reference's parseStmt):
+    // the reserved closure rejects its own list, the self.field and
+    // plain-name assignment probes read the token stream ahead, and
+    // everything else in the start class is an expression statement.
+    pub fn stmtText(mut self) -> String {
+        let t = self.cur
+        if t.kind == "keyword" {
+            let w = t.text
+            if w == "let" || w == "var" {
+                let (body, nm, nl, nc) = self.parseBinding()
+                if self.stopped() {
+                    return ""
+                }
+                return body
+            }
+            if w == "return" {
+                return self.returnText()
+            }
+            if w == "while" {
+                return self.whileText()
+            }
+            if w == "loop" {
+                return self.loopText()
+            }
+            if w == "break" || w == "continue" {
+                return self.breakContText()
+            }
+            if w == "defer" {
+                return self.deferText()
+            }
+            if w == "for" {
+                return self.forText()
+            }
+            if w == "scope" {
+                // chapter 13's resource form stays a statement of its own;
+                // chapter 18's compound forms are expressions and wrap in
+                // an expression statement below.
+                if isKw(self.peek(), "resource") {
+                    return self.scopeResText()
+                }
+            } else {
+                if w == "mock" {
+                    if self.inTestBody == 2 {
+                        // the depth-2 positive rides the test/mock face
+                        self.bndLatch("WEC-PENDING test")
+                        return ""
+                    }
+                    self.failTok(t, "E1802",
+                        "mock declaration outside a test block — a mock exists only as a direct item of a test block body; move it into the test block whose calls it should intercept")
+                    return ""
+                }
+                if w == "foreign" {
+                    // chapter 19's own position rule, its own code: the
+                    // boundary is declared per module, and a block below
+                    // the top level fits no statement production's intent
+                    // either way (E1702 over the generic E0105).
+                    self.failTok(t, "E1702",
+                        "foreign block outside the top level — the boundary is declared per module, not per expression")
+                    return ""
+                }
+                if stmtReservedWord(w) {
+                    self.failTok(t, "E0105",
+                        "unexpected token — " + lexnum.quoteText(w) + " fits no statement production: statements are let|var bindings, name assignments, return, chapter 3's control statements, and expression statements")
+                    return ""
+                }
+            }
+            // if/match/fn/true/false/task/select: keyword-led expression
+            // forms wrap in an expression statement (chapter 2).
+        }
+        // `self.field = expr` — chapter 10's one field-write form, probed
+        // at the token level ahead of the plain-name assignment below.
+        if t.kind == "ident" && t.text == "self" {
+            let t1 = self.tokAhead(1)
+            let t2 = self.tokAhead(2)
+            let t3 = self.tokAhead(3)
+            if t1.kind == "." && t2.kind == "ident" && t3.kind == "=" && t3.line == t.line {
+                self.next()
+                self.next()
+                let ft = self.cur
+                self.next()
+                let op = self.cur
+                self.next()
+                let savedValue = self.exprValue
+                self.exprValue = 1
+                let v = self.exprText()
+                self.exprValue = savedValue
+                if self.stopped() {
+                    return ""
+                }
+                return "P assign " + i64(t.line) + " " + i64(t.col) + " self " + lexnum.esc(ft.text) + " " + i64(op.line) + " " + i64(op.col) + "\n" + v
+            }
+        }
+        if t.kind == "ident" {
+            let pk = self.peek()
+            if pk.kind == "=" && pk.line == t.line {
+                self.next()
+                let op = self.cur
+                self.next()
+                let savedValue = self.exprValue
+                self.exprValue = 1
+                let v = self.exprText()
+                self.exprValue = savedValue
+                if self.stopped() {
+                    return ""
+                }
+                // the empty field slot spells the adjacent-space pair
+                return "P assign " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "  " + i64(op.line) + " " + i64(op.col) + "\n" + v
+            }
+        }
+        let savedValue = self.exprValue
+        self.exprValue = 0
+        let e = self.exprText()
+        self.exprValue = savedValue
+        if self.stopped() {
+            return ""
+        }
+        return "P exprstmt " + i64(t.line) + " " + i64(t.col) + "\n" + e
+    }
+
+    // returnText parses `return` / `return expr`. Outside any fn body it
+    // is E0401; a value where the fn declares none is E0402 (a bare return
+    // in a fn with a declared type parses — exhaustiveness is the types
+    // stage's).
+    pub fn returnText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        var hasValue: Int64 = 1
+        if self.atEnd() {
+            hasValue = 0
+        } else {
+            if self.cur.kind == "}" {
+                hasValue = 0
+            } else {
+                if self.depth == 0 && self.brokeLine() {
+                    hasValue = 0
+                }
+            }
+        }
+        if self.fnsText == "" {
+            self.failTok(t, "E0401",
+                "return outside a function body — no function context encloses this return; a defer body runs at function exit and carries no return of its own")
+            return ""
+        }
+        if self.fnsTopFlag(1) == 1 {
+            self.failTok(t, "E0401",
+                "return outside a function body — no function context encloses this return; a defer body runs at function exit and carries no return of its own")
+            return ""
+        }
+        if hasValue == 1 && self.fnsTopFlag(0) == 0 {
+            self.failTok(t, "E0402",
+                "return with a value in a function that declares none — " + lexnum.quoteText(self.fnsTopName()) + " declares no return type; bare return exits a valueless function legally")
+            return ""
+        }
+        if hasValue == 1 {
+            let savedValue = self.exprValue
+            self.exprValue = 1
+            let v = self.exprText()
+            self.exprValue = savedValue
+            if self.stopped() {
+                return ""
+            }
+            return "P return " + i64(t.line) + " " + i64(t.col) + " 1\n" + v
+        }
+        return "P return " + i64(t.line) + " " + i64(t.col) + " 0\n-\n"
+    }
+
+    // whileText parses `while cond block`; the body is a loop body for the
+    // break/continue depth.
+    pub fn whileText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        let cond = self.headExprText()
+        if self.stopped() {
+            return ""
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a while wants its body block")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a while body block opens")
+            return ""
+        }
+        let saved = self.loopDepth
+        self.loopDepth = saved + 1
+        let (body, n) = self.blockLoopText(0, "")
+        self.loopDepth = saved
+        if self.stopped() {
+            return ""
+        }
+        return "P while " + i64(t.line) + " " + i64(t.col) + "\n" + cond + body
+    }
+
+    // loopText parses `loop block`.
+    pub fn loopText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a loop wants its body block")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a loop body block opens")
+            return ""
+        }
+        let saved = self.loopDepth
+        self.loopDepth = saved + 1
+        let (body, n) = self.blockLoopText(0, "")
+        self.loopDepth = saved
+        if self.stopped() {
+            return ""
+        }
+        return "P loop " + i64(t.line) + " " + i64(t.col) + "\n" + body
+    }
+
+    // breakContText parses bare break/continue; outside any loop body they
+    // are E0201 (loop depth is a pure position fact — a closure body
+    // resets it).
+    pub fn breakContText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        if self.loopDepth == 0 {
+            self.failTok(t, "E0201",
+                "break or continue outside a loop — " + lexnum.quoteText(t.text) + " stands in a block that is not inside a loop body; bare break and continue control the innermost enclosing while or loop")
+            return ""
+        }
+        if t.text == "break" {
+            return "P break " + i64(t.line) + " " + i64(t.col) + "\n"
+        }
+        return "P continue " + i64(t.line) + " " + i64(t.col) + "\n"
+    }
+
+    // deferText parses `defer block` (E0203) as a direct item of a function
+    // body's block (E0204). The body is a plain block in a no-return
+    // context: returns inside it are E0401, whatever function encloses the
+    // defer.
+    pub fn deferText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        if self.direct != 1 {
+            self.failTok(t, "E0204",
+                "defer placement — defer is not a direct item of the function body's block; defer runs at function exit in reverse order and needs the single exit-point placement")
+            return ""
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — defer takes a block: defer { … }")
+                return ""
+            }
+            self.failTok(t, "E0203",
+                "defer body must be a block — the operand is an expression, not a block; the single ratified shape is defer { ... }")
+            return ""
+        }
+        let (blk, n) = self.blockLoopText(0, ";0;1")
+        if self.stopped() {
+            return ""
+        }
+        return "P defer " + i64(t.line) + " " + i64(t.col) + "\n" + blk
+    }
+
+    // forText parses `for pat in expr block` (chapter 5): the head pattern
+    // is irrefutable and the iterated expression is a control-flow head.
+    // The body is a loop body for the break/continue depth.
+    pub fn forText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        let pat = self.forHeadText()
+        if self.stopped() {
+            return ""
+        }
+        if isKw(self.cur, "in") == false {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a for head is pat in iterable")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a for head's in goes: a for head is pat in iterable")
+            return ""
+        }
+        self.next()
+        let iter = self.headExprText()
+        if self.stopped() {
+            return ""
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a for wants its body block")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a for body block opens")
+            return ""
+        }
+        let saved = self.loopDepth
+        self.loopDepth = saved + 1
+        let (body, n) = self.blockLoopText(0, "")
+        self.loopDepth = saved
+        if self.stopped() {
+            return ""
+        }
+        return "P for " + i64(t.line) + " " + i64(t.col) + "\n" + pat + iter + body
+    }
+
+    // forHeadText parses a for head's irrefutable pattern: a binding name,
+    // the wildcard, or a tuple of them — chapter 8's let-head grammar is
+    // the one authority for irrefutable patterns. The tuple form rides the
+    // pattern face and latches pending; a refutable shape anchors its own
+    // first token.
+    pub fn forHeadText(mut self) -> String {
+        let t = self.cur
+        if t.kind == "_" {
+            self.next()
+            return "P patwild " + i64(t.line) + " " + i64(t.col) + "\n"
+        }
+        if t.kind == "ident" && isPascal(t.text) == false {
+            self.checkCamel(t)
+            if self.stopped() {
+                return ""
+            }
+            self.next()
+            return "P patbind " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n"
+        }
+        if t.kind == "(" {
+            self.bndLatch("WEC-PENDING pattern")
+            return ""
+        }
+        if t.kind == "eof" {
+            self.failTok(t, "E0105", "unexpected end of file — the \"for\" head takes an irrefutable pattern: a binding, the wildcard, or a tuple of them")
+            return ""
+        }
+        self.failTok(t, "E0105",
+            "unexpected token — " + lexnum.quoteText(t.text) + " fits no production here: the \"for\" head takes an irrefutable pattern, a binding, the wildcard, or a tuple of them; refutable patterns are match-only")
+        return ""
+    }
+
+    // scopeResText parses `scope resource(name = expr, …) block` (chapter
+    // 13). The binding list is a paren region (line breaks fold, depth
+    // wraps it); head names are block bindings — camelCase (E0012) and
+    // duplicates (E0404, the head's own wording) keep their codes. The
+    // body is a plain nested block: loop depth persists and defer inside
+    // is not at a function body's top level.
+    pub fn scopeResText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        self.next()
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a scope resource head is scope resource(name = expr, …) { … }")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where \"(\" opens the scope resource binding list: a scope resource head is scope resource(name = expr, …) { … }")
+            return ""
+        }
+        self.next()
+        self.depth = self.depth + 1
+        var out = "P scoperes " + i64(t.line) + " " + i64(t.col) + "\n"
+        var seen = ""
+        while true {
+            let nt = self.cur
+            if nt.kind != "ident" && nt.kind != "_" {
+                if self.atEnd() {
+                    self.failTok(nt, "E0105", "unexpected end of file — a scope resource binding is name = expr")
+                    return ""
+                }
+                self.failTok(nt, "E0105",
+                    "unexpected token — " + lexnum.quoteText(nt.text) + " where a scope resource binding's name goes: a binding is name = expr")
+                return ""
+            }
+            if nt.kind == "_" {
+                self.failTok(nt, "E0105",
+                    "unexpected token — \"_\" fits no scope resource binding: each head binding takes over a handle and names it")
+                return ""
+            }
+            self.checkCamel(nt)
+            if self.stopped() {
+                return ""
+            }
+            let prev = namesLineOf(seen, nt.text)
+            if prev != 0 {
+                self.failTok(nt, "E0404",
+                    "duplicate name in one module — the scope resource head binds " + lexnum.quoteText(nt.text) + " twice, first at line " + i64(prev) + "; a head binds each name at most once")
+                return ""
+            }
+            seen = seen + nt.text + " " + i64(nt.line) + "\n"
+            self.next()
+            if self.cur.kind != "=" {
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — a scope resource binding is name = expr")
+                    return ""
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a scope resource binding's = goes: a binding is name = expr")
+                return ""
+            }
+            self.next()
+            let savedValue = self.exprValue
+            self.exprValue = 1
+            let val = self.exprText()
+            self.exprValue = savedValue
+            if self.stopped() {
+                return ""
+            }
+            out = out + "P scopebind " + i64(nt.line) + " " + i64(nt.col) + " " + lexnum.esc(nt.text) + "\n" + val
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == ")" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — the scope resource binding list closes with )")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where the scope resource binding list closes with )")
+            return ""
+        }
+        self.depth = self.depth - 1
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a scope resource wants its body block")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a scope resource body block opens")
+            return ""
+        }
+        let (body, n) = self.blockLoopText(0, "")
+        if self.stopped() {
+            return ""
+        }
+        return out + body
+    }
+
+    // ifExprText parses `if cond block [else block | if]` (chapter 3). An
+    // else-if chain nests in the else position; `else { if … }` folds to
+    // the same shape — recognized on the composed lines, since the port
+    // never materializes the tree: the fold shape is a single-item block
+    // whose one item is an expression statement holding an if (the item
+    // line spells P exprstmt and the child's first line spells P if), and
+    // the block's own line and the wrapper strip away. Without else the
+    // form produces no value — in a value position it is E0202 (the
+    // statement position is legal).
+    pub fn ifExprText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        let cond = self.headExprText()
+        if self.stopped() {
+            return ""
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — an if wants its then block")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where an if's then block opens")
+            return ""
+        }
+        let (thenText, tn) = self.blockLoopText(0, "")
+        if self.stopped() {
+            return ""
+        }
+        var elseText = "-\n"
+        if isKw(self.cur, "else") && self.brokeLine() == false {
+            self.next()
+            if isKw(self.cur, "if") {
+                // the chain arm is a value position, whatever the outer
+                // context — the reference passes valueCtx to the recursion
+                let savedValue = self.exprValue
+                self.exprValue = 1
+                let inner = self.ifExprText()
+                self.exprValue = savedValue
+                if self.stopped() {
+                    return ""
+                }
+                elseText = inner
+            } else {
+                if self.cur.kind != "{" {
+                    if self.atEnd() {
+                        self.failTok(self.cur, "E0105", "unexpected end of file — else wants its block")
+                        return ""
+                    }
+                    self.failTok(self.cur, "E0105",
+                        "unexpected token — " + lexnum.quoteText(self.cur.text) + " where an else block opens (else if continues the chain)")
+                    return ""
+                }
+                let (blk, cnt) = self.blockLoopText(0, "")
+                if self.stopped() {
+                    return ""
+                }
+                // the BlockExpr anchor is read AFTER the block closes —
+                // the token that follows the closing } (the reference's
+                // struct-literal evaluation order)
+                var folded = ""
+                if cnt == 1 {
+                    let n1 = lineEndAt(blk, 0)
+                    let rest = blk.byteSlice(n1 + 1, blk.byteLength())
+                    if hasPrefix(rest, "P exprstmt ") {
+                        let n2 = lineEndAt(rest, 0)
+                        let rest2 = rest.byteSlice(n2 + 1, rest.byteLength())
+                        if hasPrefix(rest2, "P if ") {
+                            folded = rest2
+                        }
+                    }
+                }
+                if folded != "" {
+                    elseText = folded
+                } else {
+                    elseText = "P blockexpr " + i64(self.cur.line) + " " + i64(self.cur.col) + "\n" + blk
+                }
+            }
+        }
+        if self.exprValue == 1 && elseText == "-\n" {
+            var site = self.valSite
+            if site == "" {
+                site = "this value position"
+            }
+            self.failTok(t, "E0202",
+                "valueless form in value position — an if without else produces no value and cannot stand in " + site + "; valueless forms are statements")
+            return ""
+        }
+        return "P if " + i64(t.line) + " " + i64(t.col) + "\n" + cond + thenText + elseText
     }
 
     // typeRefText parses one type reference into an annotation slot and
@@ -2874,9 +3559,12 @@ impl Parser {
         }
         self.next()
         let saved = self.valSite
+        let savedValue = self.exprValue
         self.valSite = "a let initializer"
+        self.exprValue = 1
         let initText = self.exprText()
         self.valSite = saved
+        self.exprValue = savedValue
         if self.stopped() {
             return ("", "", 0, 0)
         }
@@ -2901,12 +3589,13 @@ impl Parser {
         self.astText = self.astText + "P toplet " + i64(line) + " " + i64(col) + " " + b01(isPub) + "\n" + body
     }
 
-    // exprText parses one initializer expression — T2's minimal primary
-    // face: literal (int, float, rune, hole-free string, bool) and
-    // identifier, ending at the line break or end of file. Anything the
-    // full expression grammar owns (operators, calls, groups, the
-    // interpolation hole) latches T5's pending marker rather than
-    // mis-parsing.
+    // exprText parses one expression — the minimal primary face plus the
+    // if expression, the one keyword-led form the statement family owns
+    // (chapter 3's if is a statement through its valueless arm): literal
+    // (int, float, rune, hole-free string, bool), identifier, and
+    // if/else chains. Anything the full expression grammar owns (operators,
+    // calls, groups, the interpolation hole, the other keyword-led forms)
+    // latches T5's pending marker rather than mis-parsing.
     pub fn exprText(mut self) -> String {
         let t = self.cur
         if t.kind == "ident" {
@@ -2934,6 +3623,9 @@ impl Parser {
             }
             return "P literal " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n"
         }
+        if t.kind == "keyword" && t.text == "if" {
+            return self.ifExprText()
+        }
         if t.kind == "keyword" && (t.text == "true" || t.text == "false") {
             self.next()
             if self.afterPrimary() == false {
@@ -2945,18 +3637,60 @@ impl Parser {
         return ""
     }
 
-    // afterPrimary decides whether the minimal expression ends here —
-    // at end of file or on a new line. Any same-line continuation token
-    // belongs to an expression face T5 owns.
+    // afterPrimary decides whether the expression face ends at the token
+    // under the cursor — the reference's parseBinary and parsePostfix loop
+    // heads folded into one gate (design D8's statement-side boundary):
+    // end of file, the depth-zero line-break boundary, the enclosing
+    // regions' closing delimiters, and — the postfix switch's default arm —
+    // every token that continues no production, keywords included (so a
+    // keyword after a head reports at the body-block check, not here). The
+    // continuing faces are T5's and latch pending; two faces are real here
+    // because the reference raises them before any T5 production could
+    // see the token: `[` fails in the postfix loop itself, and `=` keeps
+    // the two-context residue rule (an assignment attempt on a non-name
+    // target in statement position, E0103 in a value position).
     pub fn afterPrimary(mut self) -> Bool {
         if self.atEnd() {
             return true
         }
-        if self.brokeLine() {
+        if self.depth == 0 && self.brokeLine() {
             return true
         }
-        self.bndLatch("WEC-PENDING expr")
-        return false
+        let k = self.cur.kind
+        if k == "}" || k == ")" || k == "," {
+            return true
+        }
+        if k == "{" {
+            if self.noBrace > 0 {
+                return true
+            }
+            self.bndLatch("WEC-PENDING expr")
+            return false
+        }
+        if k == "=" {
+            if self.exprValue == 0 {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — \"=\" after a complete expression statement: assignment targets are bare names (the one field form, self.field, belongs to a method receiver)")
+                return false
+            }
+            self.failTok(self.cur, "E0103",
+                "assignment is not an expression — \"=\" cannot appear in an expression position: assignment is a statement, not an expression")
+            return false
+        }
+        if k == "[" {
+            self.failTok(self.cur, "E0105",
+                "unexpected token — \"[\" fits no postfix production: postfix is .name or (args); indexing is by named methods (the collections chapter)")
+            return false
+        }
+        if k == "." || k == "(" || k == "?" || k == "<" ||
+            k == "*" || k == "/" || k == "%" || k == "+" || k == "-" ||
+            k == "<<" || k == ">>" || k == "&" || k == "^" || k == "|" ||
+            k == "<=" || k == ">" || k == ">=" || k == "==" || k == "!=" ||
+            k == "&&" || k == "||" || k == ".." {
+            self.bndLatch("WEC-PENDING expr")
+            return false
+        }
+        return true
     }
 }
 
@@ -2970,7 +3704,7 @@ pub fn run(toksText: String, docsText: String) -> String {
         toksText: toksText, docsText: docsText, pos: 0,
         cur: tokAt(toksText, 0), last: zeroTok(),
         depth: 0, loopDepth: 0, direct: 0, noBrace: 0, shortBody: 0, fnBrace: 0,
-        valSite: "", fnsText: "", namesText: "", itemStartsText: "",
+        valSite: "", exprValue: 0, fnsText: "", namesText: "", itemStartsText: "",
         testModule: 0, inTestBody: 0, astText: "",
         failed: 0, errLine: 0, errCol: 0, errCode: "", errMsg: "",
         bnd: 0, bndWhat: "",

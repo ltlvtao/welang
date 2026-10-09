@@ -37,9 +37,10 @@
 
 ## T4 块、语句与模式
 
-- [ ] **block 与语句族**：block（direct/inTestBody 深度律——mock 唯一合法深度 2）、binding/assign（赋值目标规则——单字段形 self.field，We 与 Go 同律）、return（fnsText 栈的 hasRet 检查）、if/else-if（补尾 else E0202）、while/loop/break/continue（loopDepth）、defer（E0204 一层）、for、scope/scope resource/timeout、ExprStmt 与尾表达式律。
+- [x] **block 与语句族**：block（direct/inTestBody 深度律——mock 唯一合法深度 2）、binding/assign（赋值目标规则——单字段形 self.field，We 与 Go 同律）、return（fnsText 栈的 hasRet 检查）、if/else-if（补尾 else E0202）、while/loop/break/continue（loopDepth）、defer（E0204 一层）、for、scope/scope resource/timeout、ExprStmt 与尾表达式律。
   来源：proposal 目标 1；design D1（fnsText 栈）、D6
   验证：控制流矩阵语料先红后绿；深度律正负形（mock 深度 0/2）
+  落地（2026-10-09，上半刀——T4 两复选框分两刀，match/模式族/test/mock 归下半）：blockLoopText（fctxLine 承 fn 体/defer 体两类上下文；inTestBody 1→2 else→0 深度律；双 `}` 闭口 + 分隔 E0105）、stmtText 关键字分发（22 词闭集逐词对账 parser.go:2158-2161；self.field 与裸名赋值双探头 = tokAhead 只读行走；mock 深度 0 报 E1802、深度 2 闩 T4-B）、returnText（E0401 双形 or 起 fnsText 空、E0402 fnsTopName）、if/else-if/else 块（else-折叠 P 行手术 = cnt==1 && 剥 `P block` 行 && `P exprstmt ` 前缀 && `P if ` 前缀，Go len(Items)==1 && ExprStmt && If 的字面等价；BlockExpr 锚点在闭括号后 cur）、while/loop/break/continue（loopDepth 存取）、deferText（direct 律 E0204/E0203、体上下文空名行 `;0;1`）、forText/forHeadText（`(` 元组形闩 pattern——T4-B）、scopeResText（head 深度只包绑定表、E0404 头措辞、`_` 拒绝）；timeout/ch18 复合 scope 形走 exprstmt → T5 闩（Go 同形）；消息拼写逐条对 parser.go 复核逮 em dash 误拼一枚（E0103/assignAfterExpr-E0105 的 `—` 与引号形——语料未命中处塔不设防，人工对账面）；语料 t4: 39/39 绿（红先态记档 /tmp/t4-red.log：reconciled 382/1343、t4 37/38 红——`t4:err-break-top` 红态即绿，顶层 fallthrough）；棘轮 381 → **523**（翻绿 141 = t4 38 + stdlib io/test/time 3 + conformance case 100；发散余量 821 = case 815 + stdlib 2 + wec 4：expr 689/test 49/pattern 2/docs 1 + 窗口未露 N 行同类 80）；塔 330.7s（T3 收口 247.7s——增量主项 wec:parse.we 自源 51.6KB → 151.3KB 在补记三-5 charAt O(R²) 面上的放大，前缀计时 600/1200/2400 行 = 4.5s/23.4s/>60s 复钉该面仍在；非 T4-A 回归——闩点在词法完成后极早处，慢全在词法扫描）；补记五
 - [ ] **match 语句与模式族**：PatLiteral/PatWildcard/PatBinding/PatOr/PatTuple/PatVariant（守卫形）；test 块（testModule 名尾律）与 mock 声明的解析面。
   来源：proposal 目标 1；design D4
   验证：模式矩阵语料先红后绿
