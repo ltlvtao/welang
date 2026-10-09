@@ -289,8 +289,11 @@ fn i64(v: Int64) -> String {
     return lexnum.int64ToString(v)
 }
 
-// namesLineOf looks one name up in the encoded module name space and
-// answers its declaration line, 0 when absent (lines are 1-based).
+// namesLineOf looks one name up in an encoded name list and answers its
+// declaration line, -1 when absent. Not 0: a top-level tuple binding
+// declares the empty name at line 0, and the reference's existence check
+// (map membership) still finds it — the second such binding is E0404
+// quoting line 0.
 fn namesLineOf(names: String, name: String) -> Int64 {
     let n = names.byteLength()
     var i: Int64 = 0
@@ -308,7 +311,123 @@ fn namesLineOf(names: String, name: String) -> Int64 {
         }
         i = nl + 1
     }
-    return 0
+    return -1
+}
+
+// nameListHas reports whether a "\n"-separated name list carries name as one
+// whole line (names hold no spaces or newlines, so the line IS the name).
+fn nameListHas(list: String, name: String) -> Bool {
+    let n = list.byteLength()
+    var i: Int64 = 0
+    while i < n {
+        let e = lineEndAt(list, i)
+        if list.byteSlice(i, e) == name {
+            return true
+        }
+        i = e + 1
+    }
+    return false
+}
+
+// nameListLen counts a "\n"-separated name list's elements.
+fn nameListLen(list: String) -> Int64 {
+    let n = list.byteLength()
+    var cnt: Int64 = 0
+    var i: Int64 = 0
+    while i < n {
+        if lexnum.byteAt(list, i) == 10 {
+            cnt = cnt + 1
+        }
+        i = i + 1
+    }
+    return cnt
+}
+
+// firstOnlyOf names the first element of a absent from b — the or-name law's
+// report names one differing name per side.
+fn firstOnlyOf(a: String, b: String) -> String {
+    let n = a.byteLength()
+    var i: Int64 = 0
+    while i < n {
+        let e = lineEndAt(a, i)
+        let nm = a.byteSlice(i, e)
+        if nameListHas(b, nm) == false {
+            return nm
+        }
+        i = e + 1
+    }
+    return ""
+}
+
+// namesAllOf reduces one branch's binds encoding to its ordered name list
+// (one name per line): the or-marker is stripped, because the name-set law
+// counts bindings inside nested or-branches too (the duplicate-name walk is
+// the one that skips them).
+fn namesAllOf(seg: String) -> String {
+    let n = seg.byteLength()
+    var out = ""
+    var i: Int64 = 0
+    while i < n {
+        let e = lineEndAt(seg, i)
+        var s = i
+        if s < e && lexnum.byteAt(seg, s) == 0x21 {
+            s = s + 1
+        }
+        var sp = s
+        while sp < e && lexnum.byteAt(seg, sp) != 32 {
+            sp = sp + 1
+        }
+        out = out + seg.byteSlice(s, sp) + "\n"
+        i = e + 1
+    }
+    return out
+}
+
+// markBinds prefixes every line of a binds encoding with the or-marker: the
+// duplicate-name walk skips marked lines (a branch set is the or-name law's
+// business, not a duplicate). Marking is idempotent — an or nested in
+// another or's branch atom already carries its marks, and a second would
+// corrupt the name the or-name law extracts.
+fn markBinds(binds: String) -> String {
+    let n = binds.byteLength()
+    var out = ""
+    var i: Int64 = 0
+    while i < n {
+        let e = lineEndAt(binds, i)
+        if i < e && lexnum.byteAt(binds, i) == 0x21 {
+            out = out + binds.byteSlice(i, e + 1)
+        } else {
+            out = out + "!" + binds.byteSlice(i, e + 1)
+        }
+        i = e + 1
+    }
+    return out
+}
+
+// segAt extracts the idx-th ";;\n"-separated segment — the per-branch binds
+// of an or-pattern (binds lines never contain a semicolon, so the separator
+// cannot collide).
+fn segAt(segs: String, idx: Int64) -> String {
+    let n = segs.byteLength()
+    var start: Int64 = 0
+    var k: Int64 = 0
+    var i: Int64 = 0
+    while i < n {
+        if i + 2 < n && lexnum.byteAt(segs, i) == 0x3B && lexnum.byteAt(segs, i + 1) == 0x3B && lexnum.byteAt(segs, i + 2) == 10 {
+            if k == idx {
+                return segs.byteSlice(start, i)
+            }
+            k = k + 1
+            start = i + 3
+            i = start
+            continue
+        }
+        i = i + 1
+    }
+    if k == idx {
+        return segs.byteSlice(start, n)
+    }
+    return ""
 }
 
 // hasHole reports whether a string literal's raw text carries an
@@ -605,7 +724,7 @@ impl Parser {
     // so the callers that run both check this one first.
     pub fn dupCheck(mut self, t: Token) {
         let prev = namesLineOf(self.namesText, t.text)
-        if prev != 0 {
+        if prev >= 0 {
             self.failTok(t, "E0404",
                 "duplicate name in one module — " + lexnum.quoteText(t.text) + " is already declared at line " + i64(prev) + "; one module has one name space")
         }
@@ -790,7 +909,7 @@ impl Parser {
                 return
             }
             if t.text == "test" {
-                self.bndLatch("WEC-PENDING test")
+                self.parseTestDecl(t.line, t.col)
                 return
             }
             if t.text == "mock" {
@@ -1434,9 +1553,7 @@ impl Parser {
             } else {
                 if w == "mock" {
                     if self.inTestBody == 2 {
-                        // the depth-2 positive rides the test/mock face
-                        self.bndLatch("WEC-PENDING test")
-                        return ""
+                        return self.mockDeclText()
                     }
                     self.failTok(t, "E1802",
                         "mock declaration outside a test block — a mock exists only as a direct item of a test block body; move it into the test block whose calls it should intercept")
@@ -1716,8 +1833,11 @@ impl Parser {
             return "P patbind " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n"
         }
         if t.kind == "(" {
-            self.bndLatch("WEC-PENDING pattern")
-            return ""
+            let (pt, pb) = self.letTupleText()
+            if self.stopped() {
+                return ""
+            }
+            return pt
         }
         if t.kind == "eof" {
             self.failTok(t, "E0105", "unexpected end of file — the \"for\" head takes an irrefutable pattern: a binding, the wildcard, or a tuple of them")
@@ -1772,7 +1892,7 @@ impl Parser {
                 return ""
             }
             let prev = namesLineOf(seen, nt.text)
-            if prev != 0 {
+            if prev >= 0 {
                 self.failTok(nt, "E0404",
                     "duplicate name in one module — the scope resource head binds " + lexnum.quoteText(nt.text) + " twice, first at line " + i64(prev) + "; a head binds each name at most once")
                 return ""
@@ -2773,7 +2893,7 @@ impl Parser {
             return ("", memberNames)
         }
         let prev = namesLineOf(memberNames, t.text)
-        if prev != 0 {
+        if prev >= 0 {
             self.failTok(t, "E0404",
                 "duplicate name in one module — " + lexnum.quoteText(t.text) + " is already declared at line " + i64(prev) + "; one module has one name space")
             return ("", memberNames)
@@ -3511,6 +3631,7 @@ impl Parser {
         var name = ""
         var nameLine: Int64 = 0
         var nameCol: Int64 = 0
+        var patSlot = "-\n"
         if t.kind == "ident" {
             self.checkCamel(t)
             if self.stopped() {
@@ -3528,16 +3649,20 @@ impl Parser {
                 self.next()
             } else {
                 if t.kind == "(" {
-                    self.bndLatch("WEC-PENDING pattern")
+                    let (pt, pb) = self.letTupleText()
+                    if self.stopped() {
+                        return ("", "", 0, 0)
+                    }
+                    patSlot = pt
+                } else {
+                    if t.kind == "eof" {
+                        self.failTok(t, "E0105", "unexpected end of file — a binding wants let|var name [: type] = expr")
+                        return ("", "", 0, 0)
+                    }
+                    self.failTok(t, "E0105",
+                        "unexpected token — " + lexnum.quoteText(t.text) + " fits no binding name production: the let name position takes an identifier or an irrefutable tuple pattern")
                     return ("", "", 0, 0)
                 }
-                if t.kind == "eof" {
-                    self.failTok(t, "E0105", "unexpected end of file — a binding wants let|var name [: type] = expr")
-                    return ("", "", 0, 0)
-                }
-                self.failTok(t, "E0105",
-                    "unexpected token — " + lexnum.quoteText(t.text) + " fits no binding name production: the let name position takes an identifier or an irrefutable tuple pattern")
-                return ("", "", 0, 0)
             }
         }
         var typText = "-\n"
@@ -3568,7 +3693,7 @@ impl Parser {
         if self.stopped() {
             return ("", "", 0, 0)
         }
-        let body = "P binding " + i64(kw.line) + " " + i64(kw.col) + " " + lexnum.esc(kw.text) + " " + lexnum.esc(name) + " " + i64(nameLine) + " " + i64(nameCol) + "\n" + "-\n" + typText + initText
+        let body = "P binding " + i64(kw.line) + " " + i64(kw.col) + " " + lexnum.esc(kw.text) + " " + lexnum.esc(name) + " " + i64(nameLine) + " " + i64(nameCol) + "\n" + patSlot + typText + initText
         return (body, name, nameLine, nameCol)
     }
 
@@ -3589,13 +3714,598 @@ impl Parser {
         self.astText = self.astText + "P toplet " + i64(line) + " " + i64(col) + " " + b01(isPub) + "\n" + body
     }
 
+    // letTupleText parses a let head's irrefutable tuple pattern — two or
+    // more elements of bindings, wildcards, and nested tuples; variant,
+    // literal, and or-patterns are match-only (chapter 4). The trailing
+    // comma closes without the two-element check, exactly as the reference
+    // routes it; the duplicate-name law runs once over the whole tuple.
+    pub fn letTupleText(mut self) -> (String, String) {
+        let open = self.cur
+        self.next()
+        if self.cur.kind == ")" {
+            self.failTok(open, "E0105",
+                "unexpected token — \"()\" fits no binding name production: the let position takes an identifier or an irrefutable tuple pattern")
+            return ("", "")
+        }
+        var text = "P pattuple " + i64(open.line) + " " + i64(open.col) + "\n"
+        var binds = ""
+        var count: Int64 = 0
+        while true {
+            let (et, eb) = self.irrefutableText()
+            if self.stopped() {
+                return ("", "")
+            }
+            text = text + et
+            binds = binds + eb
+            count = count + 1
+            if self.cur.kind == "," {
+                self.next()
+                if self.cur.kind == ")" {
+                    self.next()
+                    break
+                }
+                continue
+            }
+            if self.cur.kind == ")" {
+                if count < 2 {
+                    self.failTok(open, "E0105",
+                        "unexpected token — \"(\" fits no binding name production: a let tuple pattern holds two or more elements")
+                    return ("", "")
+                }
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a let tuple pattern closes with )")
+                return ("", "")
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no irrefutable pattern production: the let position takes bindings, wildcards, and tuples of them")
+            return ("", "")
+        }
+        self.checkDupBindsOf(binds)
+        if self.stopped() {
+            return ("", "")
+        }
+        return (text, binds)
+    }
+
+    // irrefutableText parses one element of a let tuple pattern.
+    pub fn irrefutableText(mut self) -> (String, String) {
+        let t = self.cur
+        if t.kind == "_" {
+            self.next()
+            return ("P patwild " + i64(t.line) + " " + i64(t.col) + "\n", "")
+        }
+        if t.kind == "ident" && isPascal(t.text) == false {
+            self.checkCamel(t)
+            if self.stopped() {
+                return ("", "")
+            }
+            self.next()
+            return ("P patbind " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n", t.text + " " + i64(t.line) + " " + i64(t.col) + "\n")
+        }
+        if t.kind == "(" {
+            return self.letTupleText()
+        }
+        if t.kind == "ident" {
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " fits no irrefutable pattern production: refutable patterns are match-only; the let position takes bindings, wildcards, and tuples of them")
+            return ("", "")
+        }
+        if t.kind == "eof" {
+            self.failTok(t, "E0105", "unexpected end of file — a let tuple pattern holds bindings, wildcards, and nested tuples")
+            return ("", "")
+        }
+        self.failTok(t, "E0105",
+            "unexpected token — " + lexnum.quoteText(t.text) + " fits no irrefutable pattern production: the let position takes bindings, wildcards, and tuples of them")
+        return ("", "")
+    }
+
+    // checkDupBindsOf enforces E0404 within one pattern walk: a name bound
+    // twice is rejected at its second binding. The binds encoding carries
+    // each binding as "name line col"; a line marked "!" sits under an
+    // or-branch and is skipped (branch sets are the or-name law's).
+    pub fn checkDupBindsOf(mut self, binds: String) {
+        let n = binds.byteLength()
+        var seen = ""
+        var i: Int64 = 0
+        while i < n {
+            let e = lineEndAt(binds, i)
+            if lexnum.byteAt(binds, i) != 0x21 {
+                var sp = i
+                while sp < e && lexnum.byteAt(binds, sp) != 32 {
+                    sp = sp + 1
+                }
+                let name = binds.byteSlice(i, sp)
+                if nameListHas(seen, name) {
+                    var sp2 = sp + 1
+                    while sp2 < e && lexnum.byteAt(binds, sp2) != 32 {
+                        sp2 = sp2 + 1
+                    }
+                    let bl = parseDec(binds, sp + 1, sp2)
+                    let bc = parseDec(binds, sp2 + 1, e)
+                    self.fail(bl, bc, "E0404",
+                        "duplicate name in one module — one pattern binds " + lexnum.quoteText(name) + " twice; a pattern binds each name at most once")
+                    return
+                }
+                seen = seen + name + "\n"
+            }
+            i = e + 1
+        }
+    }
+
+    // parsePatternText parses one full pattern — an atom, or a flat
+    // or-chain of atoms — answering its P lines, its binds encoding, and
+    // its anchor (the or form anchors at its first |). The name-set checks
+    // run only after every branch has parsed, per-branch duplicates first
+    // and the or-name law second, exactly the reference's order.
+    pub fn parsePatternText(mut self) -> (String, String, Int64, Int64) {
+        let (ft, fb, fl, fc) = self.patternAtomText()
+        if self.stopped() {
+            return ("", "", 0, 0)
+        }
+        if self.cur.kind != "|" {
+            self.checkDupBindsOf(fb)
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+            return (ft, fb, fl, fc)
+        }
+        let orLine = self.cur.line
+        let orCol = self.cur.col
+        var text = "P pator " + i64(orLine) + " " + i64(orCol) + "\n" + ft
+        var all = fb
+        var segs = fb
+        var branches: Int64 = 1
+        while self.cur.kind == "|" {
+            self.next()
+            let (bt, bb, bl, bc) = self.patternAtomText()
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+            text = text + bt
+            all = all + bb
+            segs = segs + ";;\n" + bb
+            branches = branches + 1
+        }
+        var bi: Int64 = 0
+        while bi < branches {
+            self.checkDupBindsOf(segAt(segs, bi))
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+            bi = bi + 1
+        }
+        let baseNames = namesAllOf(segAt(segs, 0))
+        bi = 1
+        while bi < branches {
+            let names = namesAllOf(segAt(segs, bi))
+            var same = nameListLen(baseNames) == nameListLen(names)
+            if same {
+                var j: Int64 = 0
+                let bn = names.byteLength()
+                while j < bn {
+                    let je = lineEndAt(names, j)
+                    if nameListHas(baseNames, names.byteSlice(j, je)) == false {
+                        same = false
+                        break
+                    }
+                    j = je + 1
+                }
+            }
+            if same == false {
+                let a = firstOnlyOf(baseNames, names)
+                let b2 = firstOnlyOf(names, baseNames)
+                self.fail(orLine, orCol, "E0302",
+                    "or-pattern branches must bind the same names — the branches bind different names (" + lexnum.quoteText(a) + " and " + lexnum.quoteText(b2) + "); whichever branch matches, the arm body must see one binding set")
+                return ("", "", 0, 0)
+            }
+            bi = bi + 1
+        }
+        return (text, markBinds(all), orLine, orCol)
+    }
+
+    // patternAtomText parses one non-or pattern: a literal, the wildcard, a
+    // binding name, a (possibly qualified) variant with optional payload
+    // sub-patterns, or a tuple.
+    pub fn patternAtomText(mut self) -> (String, String, Int64, Int64) {
+        let t = self.cur
+        if t.kind == "int" || t.kind == "float" || t.kind == "string" || t.kind == "rune" {
+            self.next()
+            return ("P patlit " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n", "", t.line, t.col)
+        }
+        if isKw(t, "true") || isKw(t, "false") {
+            self.next()
+            return ("P patlit " + i64(t.line) + " " + i64(t.col) + " bool " + lexnum.esc(t.text) + "\n", "", t.line, t.col)
+        }
+        if t.kind == "_" {
+            self.next()
+            return ("P patwild " + i64(t.line) + " " + i64(t.col) + "\n", "", t.line, t.col)
+        }
+        if t.kind == "ident" && isPascal(t.text) == false {
+            // a lowercase identifier followed by `.` qualifies a variant
+            let pk = self.peek()
+            if pk.kind == "." {
+                let qual = t.text
+                self.next()
+                self.next()
+                let nt = self.cur
+                if nt.kind != "ident" || isPascal(nt.text) == false {
+                    self.failTok(nt, "E0105",
+                        "unexpected token — " + lexnum.quoteText(nt.text) + " where the variant name goes: a qualified pattern is module.Variant or module.Variant(sub-patterns)")
+                    return ("", "", 0, 0)
+                }
+                return self.patVariantText(nt, true, qual)
+            }
+            self.checkCamel(t)
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+            self.next()
+            return ("P patbind " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n", t.text + " " + i64(t.line) + " " + i64(t.col) + "\n", t.line, t.col)
+        }
+        if t.kind == "ident" {
+            return self.patVariantText(t, false, "")
+        }
+        if t.kind == "(" {
+            return self.patTupleText(t)
+        }
+        if t.kind == "-" {
+            self.failTok(t, "E0105",
+                "unexpected token — \"-\" fits no pattern production: patterns take chapter-1 literals, which carry no sign")
+            return ("", "", 0, 0)
+        }
+        if t.kind == "eof" {
+            self.failTok(t, "E0105", "unexpected end of file — a match arm is pattern [if cond] => body")
+            return ("", "", 0, 0)
+        }
+        self.failTok(t, "E0105",
+            "unexpected token — " + lexnum.quoteText(t.text) + " fits no pattern production: patterns are chapter-1 literals, _, binding names, variants, and tuples of patterns")
+        return ("", "", 0, 0)
+    }
+
+    // patVariantText parses a variant pattern from its name token: bare (a
+    // unit variant), or with a parenthesized payload sub-pattern list. The
+    // qualified form carries its module qualifier's name.
+    pub fn patVariantText(mut self, t: Token, qualified: Bool, qual: String) -> (String, String, Int64, Int64) {
+        var text = "P patvariant " + i64(t.line) + " " + i64(t.col) + " " + b01(qualified) + " " + lexnum.esc(qual) + " " + lexnum.esc(t.text) + "\n"
+        var binds = ""
+        self.next()
+        if self.cur.kind != "(" {
+            return (text, binds, t.line, t.col)
+        }
+        self.next()
+        while true {
+            if self.cur.kind == ")" {
+                self.next()
+                return (text, binds, t.line, t.col)
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a payload sub-pattern list closes with )")
+                return ("", "", 0, 0)
+            }
+            let (at, ab, al, ac) = self.parsePatternText()
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+            text = text + at
+            binds = binds + ab
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == ")" {
+                self.next()
+                return (text, binds, t.line, t.col)
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a payload sub-pattern list: sub-patterns are comma-separated and the list closes with )")
+            return ("", "", 0, 0)
+        }
+        return (text, binds, t.line, t.col)
+    }
+
+    // patTupleText parses a tuple pattern of two or more sub-patterns: "()"
+    // is no pattern (the set has no unit pattern) and a one-element group is
+    // no pattern either.
+    pub fn patTupleText(mut self, open: Token) -> (String, String, Int64, Int64) {
+        self.next()
+        if self.cur.kind == ")" {
+            self.failTok(open, "E0105",
+                "unexpected token — \"()\" fits no pattern production: the pattern set has no unit pattern; use the wildcard _ for unit values")
+            return ("", "", 0, 0)
+        }
+        var text = "P pattuple " + i64(open.line) + " " + i64(open.col) + "\n"
+        var binds = ""
+        var count: Int64 = 0
+        while true {
+            let (et, eb, el, ec) = self.parsePatternText()
+            if self.stopped() {
+                return ("", "", 0, 0)
+            }
+            text = text + et
+            binds = binds + eb
+            count = count + 1
+            if self.cur.kind == "," {
+                self.next()
+                if self.cur.kind == ")" {
+                    self.next()
+                    return (text, binds, open.line, open.col)
+                }
+                continue
+            }
+            if self.cur.kind == ")" {
+                if count < 2 {
+                    self.failTok(open, "E0105",
+                        "unexpected token — \"(\" fits no pattern production: a tuple pattern holds two or more sub-patterns")
+                    return ("", "", 0, 0)
+                }
+                self.next()
+                return (text, binds, open.line, open.col)
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a tuple pattern closes with )")
+                return ("", "", 0, 0)
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a tuple pattern: sub-patterns are comma-separated and the pattern closes with )")
+            return ("", "", 0, 0)
+        }
+        return (text, binds, open.line, open.col)
+    }
+
+    // matchExprText parses `match scrutinee { arms }`: at least one arm,
+    // arms separated by line breaks with no separator token.
+    pub fn matchExprText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        let scrut = self.headExprText()
+        if self.stopped() {
+            return ""
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a match opens its arms with {")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a match's arm group opens")
+            return ""
+        }
+        let open = self.cur
+        self.next()
+        if self.cur.kind == "}" {
+            self.failTok(open, "E0301",
+                "match requires at least one arm — the brace group holds no arms; with zero arms no arm can be taken and the match could never produce a value")
+            return ""
+        }
+        var out = "P match " + i64(t.line) + " " + i64(t.col) + "\n" + scrut
+        while true {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a match closes with }")
+                return ""
+            }
+            let armText = self.matchArmText()
+            if self.stopped() {
+                return ""
+            }
+            out = out + armText
+            if self.cur.kind == "}" {
+                self.next()
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a match closes with }")
+                return ""
+            }
+            if self.brokeLine() == false {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no production: match arms are separated by newlines and carry no separator token")
+                return ""
+            }
+        }
+        return out
+    }
+
+    // matchArmText parses `pattern [if cond] => body` — the body is one
+    // expression (a block body arrives as a block expression), and the arm
+    // anchors at its pattern's first token (an or-chain at its first |).
+    pub fn matchArmText(mut self) -> String {
+        let (pt, pb, pl, pc) = self.parsePatternText()
+        if self.stopped() {
+            return ""
+        }
+        var out = "P arm " + i64(pl) + " " + i64(pc) + "\n" + pt
+        if isKw(self.cur, "if") {
+            self.next()
+            out = out + self.headExprText()
+            if self.stopped() {
+                return ""
+            }
+        } else {
+            out = out + "-\n"
+        }
+        if self.cur.kind != "=>" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a match arm is pattern [if cond] => body")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no production: an arm is pattern [if cond] => body")
+            return ""
+        }
+        self.next()
+        let savedValue = self.exprValue
+        self.exprValue = 1
+        let body = self.exprText()
+        self.exprValue = savedValue
+        if self.stopped() {
+            return ""
+        }
+        return out + body
+    }
+
+    // parseTestDecl parses `test "description" block` (chapter 20): the
+    // body is a function-body context under the display name "(test)" with
+    // no declared return — bare return exits it, `return e` is E0402 like
+    // any valueless function. The inTestBody handoff (1 around the call)
+    // lets the block mark itself as the test body's own — the single depth
+    // where a mock declaration is a legal direct item. E1801 rides the
+    // module-identity fact once the block has parsed, so the anchor is
+    // exact either way and no partial tree escapes the diagnostic.
+    pub fn parseTestDecl(mut self, line: Int64, col: Int64) {
+        self.next()
+        let t = self.cur
+        if t.kind != "string" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — a test block wants its description string")
+                return
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where a test block names its description string")
+            return
+        }
+        let desc = descText(t.text)
+        let descLine = t.line
+        let descCol = t.col
+        self.next()
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a test block wants its body block")
+                return
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a test block's body block opens")
+            return
+        }
+        let saved = self.inTestBody
+        self.inTestBody = 1
+        let (body, n) = self.blockLoopText(1, "(test);0;0")
+        self.inTestBody = saved
+        if self.stopped() {
+            return
+        }
+        if self.testModule == 0 {
+            self.fail(line, col, "E1801",
+                "test block outside a test module — this file's name does not end _test.we; the suffix is the module-identity fact that makes test blocks legal")
+            return
+        }
+        self.astText = self.astText + "P test " + i64(line) + " " + i64(col) + " " + lexnum.esc(desc) + " " + i64(descLine) + " " + i64(descCol) + "\n" + body
+    }
+
+    // mockDeclText parses chapter 20's mock declaration: `mock target(params)
+    // [-> type] [effect tags] { body }` — the caller has verified the depth
+    // (a direct item of a test block body; E1802 holds everywhere else). The
+    // target is a bare name or module.name. The signature restates the
+    // target's own, and the production orders the declared return before the
+    // effect segment — chapter 6's fn declaration reverses the two. The body
+    // is a function-body context under the target's display name (E0402's
+    // anchor); the module name space gains nothing.
+    pub fn mockDeclText(mut self) -> String {
+        let kw = self.cur
+        self.next()
+        let t = self.cur
+        if t.kind != "ident" {
+            if self.atEnd() {
+                self.failTok(t, "E0105", "unexpected end of file — a mock declaration wants its target function's name")
+                return ""
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " where a mock declaration names its target function")
+            return ""
+        }
+        self.next()
+        var target = t.text
+        var targetLine = t.line
+        var targetCol = t.col
+        var targetQual = ""
+        if self.cur.kind == "." {
+            self.next()
+            let nt = self.cur
+            if nt.kind != "ident" {
+                if self.atEnd() {
+                    self.failTok(nt, "E0105", "unexpected end of file — a mock's qualified target is module.name")
+                    return ""
+                }
+                self.failTok(nt, "E0105",
+                    "unexpected token — " + lexnum.quoteText(nt.text) + " where a mock's qualified target names its fn: the target is name or module.name")
+                return ""
+            }
+            targetQual = t.text
+            target = nt.text
+            targetLine = nt.line
+            targetCol = nt.col
+            self.next()
+        }
+        if self.cur.kind != "(" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a mock declaration wants its parameter list")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a mock declaration's parameter list opens")
+            return ""
+        }
+        let paramsText = self.annotatedParams()
+        if self.stopped() {
+            return ""
+        }
+        var retText = "-\n"
+        var hasRet: Int64 = 0
+        if self.cur.kind == "->" {
+            self.next()
+            retText = self.typeRefText()
+            hasRet = 1
+            if self.stopped() {
+                return ""
+            }
+        }
+        var effectTags = ""
+        var effectLine: Int64 = 0
+        var effectCol: Int64 = 0
+        if isKw(self.cur, "effect") {
+            let (tags, el, ec) = self.parseEffectSegment(false)
+            effectTags = tags
+            effectLine = el
+            effectCol = ec
+            if self.stopped() {
+                return ""
+            }
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a mock declaration wants its body block")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a mock declaration's body block opens")
+            return ""
+        }
+        var display = target
+        if targetQual != "" {
+            display = targetQual + "." + target
+        }
+        let bodyText = self.fnBlock(display, hasRet)
+        if self.stopped() {
+            return ""
+        }
+        var head = "P mock " + i64(kw.line) + " " + i64(kw.col) + " " + lexnum.esc(target) + " " + lexnum.esc(targetQual)
+        if effectTags != "" {
+            head = head + " " + effectTags
+        }
+        head = head + " " + i64(effectLine) + " " + i64(effectCol) + " " + i64(hasRet) + " " + i64(targetLine) + " " + i64(targetCol) + "\n"
+        return head + paramsText + retText + bodyText
+    }
+
     // exprText parses one expression — the minimal primary face plus the
-    // if expression, the one keyword-led form the statement family owns
-    // (chapter 3's if is a statement through its valueless arm): literal
-    // (int, float, rune, hole-free string, bool), identifier, and
-    // if/else chains. Anything the full expression grammar owns (operators,
-    // calls, groups, the interpolation hole, the other keyword-led forms)
-    // latches T5's pending marker rather than mis-parsing.
+    // keyword-led forms the statement family owns (chapter 3's if is a
+    // statement through its valueless arm; chapter 4's match): literal
+    // (int, float, rune, hole-free string, bool), identifier, if/else
+    // chains, and match with its arm family. Anything the full expression
+    // grammar owns (operators, calls, groups, the interpolation hole, the
+    // other keyword-led forms) latches T5's pending marker rather than
+    // mis-parsing.
     pub fn exprText(mut self) -> String {
         let t = self.cur
         if t.kind == "ident" {
@@ -3625,6 +4335,9 @@ impl Parser {
         }
         if t.kind == "keyword" && t.text == "if" {
             return self.ifExprText()
+        }
+        if t.kind == "keyword" && t.text == "match" {
+            return self.matchExprText()
         }
         if t.kind == "keyword" && (t.text == "true" || t.text == "false") {
             self.next()

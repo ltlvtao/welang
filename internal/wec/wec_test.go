@@ -522,6 +522,70 @@ func loadCorpus(t *testing.T) []entry {
 		entry{"t4:err-scope-underscore", "fn f() { scope resource(_ = g) { }\n }\n"},
 		entry{"t4:err-scope-dup", "fn f() { scope resource(h = g, h = g) { }\n }\n"},
 		entry{"t4:err-scope-camel", "fn f() { scope resource(H = g) { }\n }\n"},
+		// T4-B's pattern and test face: the let/for tuple pattern
+		// (irrefutable elements only), the match expression with its arm
+		// family (patterns, guards, or-chains under the two name-set laws
+		// E0302/E0404), and the test block with mock declarations. The
+		// tower's fixed input name never ends _test.we, so a green test
+		// block parses fully and then both sides report E1801
+		// identically — the P test/mock rows themselves are unobservable
+		// here (a disclosed corner; their spellings are pinned against
+		// the authority table by hand), while every diagnostic inside the
+		// block is observable because it latches before the module check.
+		entry{"t4b:let-tuple", "fn f() { let (a, b) = g\n }\n"},
+		entry{"t4b:let-tuple-three", "fn f() { let (a, b, c) = g\n }\n"},
+		entry{"t4b:let-tuple-nested", "fn f() { let (a, (b, _)) = g\n }\n"},
+		entry{"t4b:let-tuple-wild", "fn f() { let (_, x) = g\n }\n"},
+		entry{"t4b:let-tuple-trailing", "fn f() { let (a, b,) = g\n }\n"},
+		entry{"t4b:for-tuple", "fn f(m: Map<Int64, Int64>) { for (k, v) in m { }\n }\n"},
+		entry{"t4b:err-let-tuple-empty", "fn f() { let () = g\n }\n"},
+		entry{"t4b:err-let-tuple-single", "fn f() { let (a) = g\n }\n"},
+		entry{"t4b:err-let-tuple-pascal", "fn f() { let (A) = g\n }\n"},
+		entry{"t4b:err-let-tuple-dup", "fn f() { let (a, a) = g\n }\n"},
+		entry{"t4b:err-let-tuple-tail", "fn f() { let (a b) = g\n }\n"},
+		// Two top-level tuple lets: the tuple form declares the empty name
+		// at line 0, so the second binding's declare finds it — E0404 at
+		// the synthesized 0:0 position quoting line 0. Pins the absent
+		// sentinel of the We-side name lookup (-1, not 0).
+		entry{"t4b:err-topletpat-dup", "let (a, b) = f\nlet (c, d) = g\n"},
+		entry{"t4b:match-literal", "fn f(x: Int64) -> Int64 { match x { 1 => 2\n_ => 3\n }\n }\n"},
+		entry{"t4b:match-string", "fn f(s: String) -> Int64 { match s { \"a\" => 1\n_ => 0\n }\n }\n"},
+		entry{"t4b:match-rune", "fn f(r: Rune) -> Int64 { match r { 'a' => 1\n_ => 0\n }\n }\n"},
+		entry{"t4b:match-bool", "fn f(b: Bool) -> Int64 { match b { true => 1\nfalse => 0\n }\n }\n"},
+		entry{"t4b:match-binding", "fn f(x: Int64) -> Int64 { match x { n => n\n }\n }\n"},
+		entry{"t4b:match-variant", "fn f(o: Opt) -> Int64 { match o { Some(n) => n\nNone => 0\n }\n }\n"},
+		entry{"t4b:match-variant-empty-args", "fn f(o: Opt) -> Int64 { match o { Some() => 1\nNone => 0\n }\n }\n"},
+		entry{"t4b:match-variant-qual", "fn f(o: Q) -> Int64 { match o { std.Q(n) => n\n }\n }\n"},
+		entry{"t4b:match-tuple-pat", "fn f(p: (Int64, Int64)) -> Int64 { match p { (a, b) => a\n }\n }\n"},
+		entry{"t4b:match-or", "fn f(x: Int64) -> Int64 { match x { 1 | 2 => 0\n_ => 9\n }\n }\n"},
+		entry{"t4b:match-or-names-ok", "fn f(o: Opt) -> Int64 { match o { Some(n) | Query(n) => n\n }\n }\n"},
+		entry{"t4b:match-guard", "fn f(x: Int64, c: Bool) -> Int64 { match x { n if c => n\n_ => 0\n }\n }\n"},
+		entry{"t4b:match-stmt", "fn f(x: Int64) { match x { _ => g\n }\n }\n"},
+		entry{"t4b:err-match-empty", "fn f(x: Int64) -> Int64 { match x { }\n }\n"},
+		entry{"t4b:err-match-nosep", "fn f(x: Int64) -> Int64 { match x { 1 => 2 _ => 3\n }\n }\n"},
+		entry{"t4b:err-match-noarrow", "fn f(x: Int64) -> Int64 { match x { 1 2\n }\n }\n"},
+		entry{"t4b:err-match-nobrace", "fn f(x: Int64) -> Int64 { match x 1\n }\n"},
+		entry{"t4b:err-pat-negative", "fn f(x: Int64) -> Int64 { match x { -1 => 0\n_ => 1\n }\n }\n"},
+		entry{"t4b:err-pat-or-dup", "fn f(p: (Int64, Int64)) -> Int64 { match p { (a, a) | b => a\n }\n }\n"},
+		entry{"t4b:err-pat-or-names", "fn f(o: Opt) -> Int64 { match o { Some(n) | None => n\n }\n }\n"},
+		// An or nested inside another or's branch atom (via tuple
+		// elements): the inner or's binds already carry the or-ancestor
+		// mark, and the outer or's name law must strip exactly one mark —
+		// a second marking would leak "!n" into the E0302 message. The
+		// inner ors keep their own name sets legal, so the error the
+		// reference reports is the outer violation.
+		entry{"t4b:err-pat-or-nested-mark", "fn f(x: Int64) -> Int64 { match x { ((Some(n) | Query(n), 5) | n, 6) | q => n\n_ => 0\n }\n }\n"},
+		entry{"t4b:err-pat-variant-tail", "fn f(o: Opt) -> Int64 { match o { Some(n => n\n }\n }\n"},
+		entry{"t4b:test-block", "test \"d\" { let x = 1\n }\n"},
+		entry{"t4b:test-mock", "test \"d\" { mock g() { }\n }\n"},
+		entry{"t4b:test-mock-full", "test \"d\" { mock io greet(x: Int64) -> Int64 effect io { return x\n }\n }\n"},
+		entry{"t4b:err-test-nodesc", "test 1 { }\n"},
+		entry{"t4b:err-test-nobody", "test \"d\" 1\n"},
+		entry{"t4b:err-test-eof", "test"},
+		entry{"t4b:err-mock-return", "test \"d\" { mock g() { return 1\n }\n }\n"},
+		entry{"t4b:err-mock-noparams", "test \"d\" { mock g { }\n }\n"},
+		entry{"t4b:err-mock-badqual", "test \"d\" { mock std.io. { }\n }\n"},
+		entry{"t4b:err-mock-nobody", "test \"d\" { mock g() 1\n }\n"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
@@ -706,7 +770,7 @@ func window(s string, i int) string {
 // face lands (T6). B3b's lexical-only TestLexReconciliation is retired
 // into this test: the lexical comparison is the parse-section-empty prefix
 // of the full output, so asserting both would assert a fraction twice.
-const reconciledFloor = 523
+const reconciledFloor = 600
 
 // TestOutputReconciliation is the B3c differential bar (design D5): for
 // every admitted corpus entry, the wec artifact's FULL serialized output —
