@@ -102,6 +102,76 @@ fn render(l: Lexer) -> String {
     return out
 }
 
+// holes walks one string literal's raw text (token text, quotes included)
+// and reports its interpolation-hole regions — the port of lex.Holes. The
+// walk is consumeStringLit's own loop: past the opening quote, the closing
+// quote ends it, a backslash rides one escape, and a `$` followed by `{`
+// opens a hole whose braces consumeHole balances. The caller holds a green
+// token, so the walk cannot fail and the latch stays unread. Each region
+// renders as one H row — the `$`'s byte offset in the token text, the byte
+// offset just past the balancing `}` (the span covers `${ … }` whole), the
+// hole's line, and the column of the character after `${` (the `$`'s own
+// column plus two, where the region's first token sits). The offsets index
+// the token text; the caller shifts them onto the inner text.
+pub fn holes(text: String, line: Int64, col: Int64) -> String {
+    let l = Lexer {
+        src: text, n: text.byteLength(), rn: text.runeCount(),
+        off: 0, ri: 0, line: line, col: col,
+        failed: false, errLine: 0, errCol: 0, errCode: "", errMsg: "",
+        outText: "", outTail: "", docsText: "", docsCount: 0,
+        docOpen: false, docLast: 0, pendStart: 0, pendEnd: 0, pendBody: "",
+    }
+    l.advance() // opening "
+    var out = ""
+    while true {
+        let c = l.codeHere()
+        if c == 34 {
+            return out
+        }
+        if c == 92 {
+            l.consumeEscape()
+        } else if c == 36 && l.codeNext() == 123 {
+            let holeLine = l.line
+            let holeCol = l.col
+            let start = l.off
+            l.advance() // '$'
+            l.advance() // '{'
+            l.consumeHole(holeLine, holeCol, line, col)
+            out = out + "H " + lexnum.int64ToString(start) + " " + lexnum.int64ToString(l.off) + " " + lexnum.int64ToString(holeLine) + " " + lexnum.int64ToString(holeCol + 2) + "\n"
+        } else {
+            l.advance()
+        }
+    }
+    return out // unreachable: the loop above only exits by return
+}
+
+// scanAt lexes one interpolation-hole region with its position rebased
+// onto the region's own first character — the port of lex.ScanAt. The
+// answer is the serialization run renders, minus the docs section
+// (documentation units are the file scan's; a region is one line of a
+// literal): the T rows under a tokens header, or the single E line when
+// the region itself fails to lex — the caller recognizes the E shape and
+// re-latches the diagnostic at its rebased position. Not a reconciliation
+// face of its own: the tower reconciles the region's tokens through the
+// child parser's output.
+pub fn scanAt(src: String, line: Int64, col: Int64) -> String {
+    let l = Lexer {
+        src: src, n: src.byteLength(), rn: src.runeCount(),
+        off: 0, ri: 0, line: line, col: col,
+        failed: false, errLine: 0, errCol: 0, errCode: "", errMsg: "",
+        outText: "", outTail: "", docsText: "", docsCount: 0,
+        docOpen: false, docLast: 0, pendStart: 0, pendEnd: 0, pendBody: "",
+    }
+    l.checkEncoding()
+    if l.failed == false {
+        l.scanAll()
+    }
+    if l.failed {
+        return "E " + lexnum.int64ToString(l.errLine) + " " + lexnum.int64ToString(l.errCol) + " " + l.errCode + " " + lexnum.esc(l.errMsg) + "\n"
+    }
+    return "tokens\n" + l.outText + l.outTail
+}
+
 // isKeyword is chapter 1's fully-reserved closed set (41 words). A single
 // equality chain: the corpus stop-faces rule out a List<String> table in
 // this build, and the linear chain is the zero-mechanism form.

@@ -217,3 +217,24 @@ T4 的两枚复选框本就是两条垂直可验的验收线，按框拆两刀�
 5. **tryTypeArgs 闩律**：bnd 闩不随 savedPos 回退卷回（Go recover 只吞诊断 panic、bnd panic re-panic 的镜像）；诊断闩五字段（failed/errLine/errCol/errCode/errMsg）随快照回卷；committed = 子句成功且后续 `(`/`{`——提交后 isPascal 检查不退（`a<B> {` 两侧同报 E0105 构造头消息）。
 6. **形外形状人工对账**（塔不设防面，补记五-4 纪律）：`(std.Point) { x: 1 }`（构造锚 `)` 位 = p.last）、`(id)<Int64>(1)`（组折叠 Ident 在 Go 侧断言成立 ⇒ 投机合法）、`(a) < b`（非 Pascal 子句回退为比较）——三形冒烟逐字段对照；语料仅覆盖其中间接形，塔防缺位由此条披露。
 7. **误判教训（在案）**：30s 探针二分把 parse.we 自源的既知 O(R²) 慢面误读为「零分配死循环」——RSS 采样窗口内分配增量低于 ps 显示精度即显「冻结」，而 never-free 运行时的真死循环必然 RSS 单调涨；判据应为输出无进展 + 多窗口 RSS，且探针 124 = 超时 ≠ 死锁。塔本身是权威计时器：该条目在 776.9s 内完成。
+
+### 补记八（T5-B 落地·词法两面与插值洞，2026-10-10）
+
+1. **签名偏差**：D3 草案的 `holes(name, …)`/`scanAt(name, …)` 落地皆去 name 参数——区域词法错经 scanAt 的 E 行在 holeExprText 重闩为解析器自身诊断（fail 至再基位），name 无消费位；Go 的 name 属 lex.go 原函数签名，We 侧以 E 行形承载同等信息。
+2. **偏移算术（holedLiteralText）**：H 行偏移索引 token 文本（含引号），段文活在内文（不含引号）⇒ 每偏移**移一**——前段 `text[1+prev..start]`（至 `$` 止）、区域文 `text[start+2..hclose-1]`（`${` 与 `}` 之间）、后段自 `hclose-1` 续；H 行 end = 平衡 `}` 后一字节（span 盖 `${ … }` 全体）、Col = 洞列+2（`${` 后首字符列——恰为区域首词锚位）。holes 空答时回退纯字面量形——hasHole 见开洞符而游走无区域的唯一形状，绿 token 内不可达（每个裸 `$` 邻接都是洞开口），防御镜像。
+3. **`${}` 自陷拆串**：空区域 E0105 消息写作 `"the $" + "{} region is empty…"`——字面拼合会在 lex.we 自源内开真洞（塔含 wec:lex.we 自源对账面），与 B3b 的 E0007 消息拆串同案。
+4. **闩传播序**：子解析器闩回传 **bnd 先于诊断**——bndLatch 在 failed 已置时拒闩，故子 bnd 闩只能早于子诊断；对应 Go 的 bstop 抢占诊断 panic（bstop 与 stop 谁先 panic 谁传播）。
+5. **停面 J 两处**：`lex.holes(…)` 与 `tokAt(…)` 的调用结果照补记二-3 先 `let` 绑定再读字段（调用结果是安全快照）。
+6. **区域编码检查不可达**：`t5b:hole-interior-bom` 红态即绿——文件级 checkEncoding 先拒 BOM（E0001 单行态两侧同形），洞区域再基的 checkEncoding 从真实输入不可达，保留为纯防御镜像（与 Go 形一致）。
+7. **塔跑超时教训**：红先跑被 Go 默认 10m 测试超时杀于 600s（T5-A 终跑 776.9s 已越界）——塔跑必须显式 `-timeout`（本仓纪律 40m）；红态事实（13 枚 `N WEC-PENDING hole` 闩形态发散）在杀点前已齐，红先纪律未受损。
+8. **【既有编译器缺陷·待 follow-up 登记】`let` 持引用跨调用不入 GC root——wec:lex.we 错锚的成因，非移植缺陷**：
+   - 现象：塔面 wec:lex.we 三行错锚（`P while 619 9`→`626 27`、`P exprstmt 621 13`/`P if 621 13`→`625 26`），结构与子树逐字节正确；其余 1485 面全绿。
+   - 证据链五环：
+     ① **IR**——whileText 的 `let t = self.cur` 编译为 SSA 裸指针（`%v10909 = load ptr`），跨 next/headExprText/blockLoopText 全程；函数体零 `__we_root_push`。表达式核（ifText/binaryText/postfixText/exprText/blockLoopText/returnText）全零 push；全模块 63 push 皆紧跟 `__we_alloc`（构造窗）。与 gc.c 头注「构造协议在评估字段前 root 一切活值，故入口即安全点」的设计假设吻合——**该假设只覆盖构造点，不覆盖 let 持有引用跨任意调用的窗口**。
+     ② **运行时**——插桩 rt-gc.c（collect 处 `__builtin_return_address(0..2)`）实测全程**恰一次**收集，点火于 `__we_alloc` ← `parse.tokAt`（Token 构造）期中解析深处；setarch 去 ASLR（PIE 基 0x555555554000）符号化钉死调用链。
+     ③ **值吻合**——被清扫的两盒（while 关键词 Token、if 关键词 Token 的旧盒）被随后的 Token 分配复用：`10`@625:26 取其一（if 行读得 625 26）、`=`@626:27 取另一（while 行读得 626 27）——**错锚值即复用者的位置**；exprstmt 行锚随 if 行复制。
+     ④ **前缀二分**——200–1200 行前缀全对账、唯 1297 全量发散；1200 前缀同样在 tokAt 同位点火同一收集却对账 ⇒ 可观测性取决于清扫后自由链的复用布局（首中分配、最新块优先清扫）——**其余 1485 面绿是自由链运气，非正确性证明**。
+     ⑤ **独立探针**——构造结果 let 跨调用正确 root（探针 A/B 值全对）；缺口特定于**字段读 let 且字段在窗口内被重绑**（`self.last = self.cur; self.cur = tokAt(…)` 后，旧盒仅余调用方 SSA 一径可达）。
+   - 交叉归因：**T5-A 已提交产物**（`778f1e1`，当时塔全绿）喂当前 1297 行 lex.we 输入，**逐字节复现同三行**——缺陷在 T5-B 之前已入库；T5-B 的 lex.we +69 行只是移动堆布局，把复用运气翻到坏侧。
+   - 处置：本变更不修（编译器行为变更须独立 openspec 变更，属 B1 生成器 rooting 面）；wec 侧不改写为标量锚捕获（数百站点偏离 Go 镜像形，且掩盖缺陷——差分塔的价值就是让编译器缺陷现形）。wec:lex.we 以「已披露的预期发散」入塔账（floor 1486 承载，wec_test.go 注释同记），缺陷待 follow-up 登记、修复后面自动翻绿。
+9. **参考再生纪律（教训，在案）**：dump 参考的 `go test` 必须自**仓库根**跑——模块外 cwd 下静默失败（输出被吞）导致 want.txt 陈旧、二分两轮白费；与「退出码判定不许带管道」（B1b T8-2 教训）并列的方法论条目。

@@ -694,6 +694,29 @@ func loadCorpus(t *testing.T) []entry {
 		entry{"t5:err-keyword-expr", "let x = import\n"},
 		entry{"t5:err-rparen-begin", "let x = )\n"},
 		entry{"t5:deep-args-binary", "let x = f(1 + 2, g(3 * 4))\n"},
+		// T5-B's interpolation-hole face: the ${} regions parsed as
+		// expressions — several holes with runs between them, a nested
+		// literal and a nested hole inside a region (the region re-lex and
+		// the child parser both recurse), calls and member chains inside,
+		// escape decoding in the runs, a bare '$' staying run text, and on
+		// the error side the two E0105 shapes (empty region, trailing
+		// token), the region's own re-lex error re-latched at its rebased
+		// position, the value-context '=' residue (E0103), and an interior
+		// BOM failing the region's encoding check.
+		entry{"t5b:hole-basic", "let s = \"a${1 + 1}b\"\n"},
+		entry{"t5b:hole-multi", "let s = \"${f()}x${g()}\"\n"},
+		entry{"t5b:hole-nested-string", "let s = \"${\"x\"}\"\n"},
+		entry{"t5b:hole-nested-hole", "let s = \"${\"a${1}b\"}\"\n"},
+		entry{"t5b:hole-call", "let s = \"${f(1, g(2))}\"\n"},
+		entry{"t5b:hole-member", "let s = \"${p.x}\"\n"},
+		entry{"t5b:hole-escape-run", "let s = \"a\\t${1}b\\n\"\n"},
+		entry{"t5b:hole-dollar-run", "let s = \"cost: $5 ${1}\"\n"},
+		entry{"t5b:hole-arg", "let s = f(\"${a}\")\n"},
+		entry{"t5b:hole-interior-bom", "let s = \"${1\uFEFF}\"\n"},
+		entry{"t5b:err-hole-empty", "let s = \"${}\"\n"},
+		entry{"t5b:err-hole-trailing", "let s = \"${1 2}\"\n"},
+		entry{"t5b:err-hole-lex", "let s = \"${1__0}\"\n"},
+		entry{"t5b:err-hole-assign", "let s = \"${x = 1}\"\n"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
@@ -878,7 +901,18 @@ func window(s string, i int) string {
 // face lands (T6). B3b's lexical-only TestLexReconciliation is retired
 // into this test: the lexical comparison is the parse-section-empty prefix
 // of the full output, so asserting both would assert a fraction twice.
-const reconciledFloor = 1356
+//
+// T5-B raises the floor to 1486 = 1498 corpus − 11 docs-face entries (T6)
+// − wec:lex.we. That last entry went red not through the port: a
+// pre-existing compiler defect — let-bound record references are not
+// rooted on the GC shadow stack across calls, so a mid-parse collection
+// sweeps them and later same-size allocations reuse the boxes; the grown
+// lex.we tilted the heap layout into the unlucky reuse (the committed
+// T5-A artifact reproduces the same corrupted rows on the new input byte
+// for byte; full evidence in the wec-parser change's design notes). The
+// entry returns green once that defect is fixed; until then the floor
+// carries it as a disclosed, expected divergence.
+const reconciledFloor = 1486
 
 // TestOutputReconciliation is the B3c differential bar (design D5): for
 // every admitted corpus entry, the wec artifact's FULL serialized output —
