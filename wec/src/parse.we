@@ -4298,112 +4298,1009 @@ impl Parser {
         return head + paramsText + retText + bodyText
     }
 
-    // exprText parses one expression — the minimal primary face plus the
-    // keyword-led forms the statement family owns (chapter 3's if is a
-    // statement through its valueless arm; chapter 4's match): literal
-    // (int, float, rune, hole-free string, bool), identifier, if/else
-    // chains, and match with its arm family. Anything the full expression
-    // grammar owns (operators, calls, groups, the interpolation hole, the
-    // other keyword-led forms) latches T5's pending marker rather than
-    // mis-parsing.
+    // exprText parses one full expression — the reference's parseExpr: the
+    // twelve-level precedence climb over the closed table, unary prefix,
+    // the postfix chain, and the primary family. The composed rows are
+    // pre-order by construction: every parent row is prepended at the
+    // point its operator or postfix token is consumed, its operands'
+    // already-composed rows following.
     pub fn exprText(mut self) -> String {
-        let t = self.cur
-        if t.kind == "ident" {
-            self.next()
-            if self.afterPrimary() == false {
+        return self.binaryText(12)
+    }
+
+    // binaryText is precedence climbing over the closed table (the
+    // reference's parseBinary). The loop head carries the two
+    // line-joining decision points: at depth zero a token on a new line
+    // ends the expression, and a `=` after a complete expression is the
+    // assignment rule — the statement context's assignment attempt
+    // (E0105) or the value context's E0103. Levels 9 and 12 are
+    // non-associative: a same-level operator chaining a legal
+    // continuation is E0104 at the second operator.
+    pub fn binaryText(mut self, level: Int64) -> String {
+        if level == 2 {
+            return self.unaryText()
+        }
+        var lhs = self.binaryText(level - 1)
+        if self.stopped() {
+            return ""
+        }
+        while true {
+            if self.atEnd() {
+                return lhs
+            }
+            if self.depth == 0 && self.brokeLine() {
+                return lhs
+            }
+            if self.cur.kind == "=" {
+                if self.exprValue == 0 {
+                    self.failTok(self.cur, "E0105",
+                        "unexpected token — \"=\" after a complete expression statement: assignment targets are bare names (the one field form, self.field, belongs to a method receiver)")
+                    return ""
+                }
+                self.failTok(self.cur, "E0103",
+                    "assignment is not an expression — \"=\" cannot appear in an expression position: assignment is a statement, not an expression")
                 return ""
             }
-            return "P ident " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n"
+            let op = self.cur
+            if binLevel(op.kind) != level {
+                return lhs
+            }
+            self.next()
+            let rhs = self.binaryText(level - 1)
+            if self.stopped() {
+                return ""
+            }
+            let head = "P binary " + i64(op.line) + " " + i64(op.col) + " " + lexnum.esc(op.text) + "\n"
+            if level == 9 || level == 12 {
+                // Non-associative: one operator per group.
+                if self.atEnd() == false {
+                    if self.depth == 0 && self.brokeLine() {
+                        return head + lhs + rhs
+                    }
+                    if binLevel(self.cur.kind) == level {
+                        if self.cur.kind == ".." {
+                            self.failTok(self.cur, "E0104",
+                                "chained non-associative operator — \"..\" chains a non-associative level; each range must be a single explicit group")
+                            return ""
+                        }
+                        self.failTok(self.cur, "E0104",
+                            "chained non-associative operator — " + lexnum.quoteText(self.cur.text) + " chains a non-associative level; write the split form, for example (a < b) && (b < c)")
+                        return ""
+                    }
+                }
+                return head + lhs + rhs
+            }
+            lhs = head + lhs + rhs
+        }
+        return lhs
+    }
+
+    // unaryText parses prefix `!`, `-`, `~` (level 2); prefix operators
+    // bind looser than postfix, so their operand carries the whole chain.
+    pub fn unaryText(mut self) -> String {
+        let t = self.cur
+        if t.kind == "!" || t.kind == "-" || t.kind == "~" {
+            self.next()
+            let x = self.unaryText()
+            if self.stopped() {
+                return ""
+            }
+            return "P unary " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n" + x
+        }
+        return self.postfixText()
+    }
+
+    // postfixText parses the left-associative postfix chain (level 1):
+    // .name, (args), the propagation `?`, the speculative explicit
+    // application `<`, and the construction brace. The bareness trackers
+    // carry the two postfix gates the stream cannot recover from rows
+    // alone: bareName holds the ident while the node is exactly a bare
+    // identifier (the `<` gate), chainText the dotted path while the node
+    // is a bare ident/member chain (the construction gate — its final
+    // segment must be PascalCase).
+    pub fn postfixText(mut self) -> String {
+        let (first, bare0, chain0) = self.primaryText()
+        if self.stopped() {
+            return ""
+        }
+        var node = first
+        var bareName = bare0
+        var chainText = chain0
+        while true {
+            if self.atEnd() {
+                return node
+            }
+            if self.depth == 0 && self.brokeLine() {
+                return node
+            }
+            let t = self.cur
+            if t.kind == "." {
+                self.next()
+                let nt = self.cur
+                if nt.kind != "ident" {
+                    self.failTok(nt, "E0105",
+                        "unexpected token — " + lexnum.quoteText(nt.text) + " after \".\": member names are identifiers")
+                    return ""
+                }
+                node = "P member " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(nt.text) + " " + i64(nt.line) + " " + i64(nt.col) + "\n" + node
+                if chainText != "" {
+                    chainText = chainText + "." + nt.text
+                }
+                bareName = ""
+                self.next()
+                continue
+            }
+            if t.kind == "(" {
+                let args = self.callArgsText()
+                if self.stopped() {
+                    return ""
+                }
+                node = "P call " + i64(t.line) + " " + i64(t.col) + " 0 0\n" + node + args
+                bareName = ""
+                chainText = ""
+                continue
+            }
+            if t.kind == "?" {
+                node = "P prop " + i64(t.line) + " " + i64(t.col) + "\n" + node
+                self.next()
+                bareName = ""
+                chainText = ""
+                continue
+            }
+            if t.kind == "<" {
+                // Explicit type arguments reach a bare-name head only —
+                // obj.m<T>() keeps the comparison reading. The attempt is
+                // speculative: a shape that does not commit restores the
+                // stream and the comparison levels take the tokens.
+                if bareName == "" {
+                    return node
+                }
+                let (nm, il, ic) = identRowInfo(node)
+                let next = self.tryTypeArgsText(node, nm, il, ic)
+                if self.stopped() {
+                    return ""
+                }
+                if next == "" {
+                    return node
+                }
+                node = next
+                bareName = ""
+                chainText = ""
+                continue
+            }
+            if t.kind == "[" {
+                self.failTok(t, "E0105",
+                    "unexpected token — \"[\" fits no postfix production: postfix is .name or (args); indexing is by named methods (the collections chapter)")
+                return ""
+            }
+            if t.kind == "{" {
+                // A control-flow head ends at its body brace — never a
+                // construction. The suspension binds at every depth.
+                if self.noBrace > 0 {
+                    return node
+                }
+                // Construction: a bare name/member chain whose final name
+                // is PascalCase — the head is a type reference.
+                if chainText == "" || isPascal(afterLastDot(chainText)) == false {
+                    self.failTok(t, "E0105",
+                        "unexpected token — \"{\" after a complete expression: construction heads are PascalCase type references (chapter 8)")
+                    return ""
+                }
+                node = self.constructText(t, chainText, "", 0, 0, self.last.line, self.last.col)
+                if self.stopped() {
+                    return ""
+                }
+                bareName = ""
+                chainText = ""
+                continue
+            }
+            return node
+        }
+        return node
+    }
+
+    // tryTypeArgsText speculatively parses an explicit generic clause on a
+    // bare-name postfix head: `name<T…>(args)` — a call whose ArgLine
+    // anchors at the clause's closing `>` — or `Name<T…> { … }` — a
+    // construction with the same anchor. The attempt commits only when
+    // the clause's closer is followed by ( or { under the postfix
+    // continuation rule, and an empty clause is no explicit form at all.
+    // Anything else restores the stream and answers empty (no explicit
+    // form); a diagnostic raised before the commit is rolled back with
+    // the stream (the reference's recover), one raised after it stands,
+    // and the pending latch propagates either way (the reference re-panics
+    // its NotImplemented face).
+    pub fn tryTypeArgsText(mut self, idRow: String, idName: String, idLine: Int64, idCol: Int64) -> String {
+        let savedPos = self.pos
+        let savedCur = self.cur
+        let savedLast = self.last
+        let savedFailed = self.failed
+        let savedErrLine = self.errLine
+        let savedErrCol = self.errCol
+        let savedErrCode = self.errCode
+        let savedErrMsg = self.errMsg
+        var committed: Int64 = 0
+        let args = self.genericArgsText()
+        if self.stopped() {
+            if committed == 1 {
+                return ""
+            }
+            if self.bnd != 0 {
+                return ""
+            }
+            self.pos = savedPos
+            self.cur = savedCur
+            self.last = savedLast
+            self.failed = savedFailed
+            self.errLine = savedErrLine
+            self.errCol = savedErrCol
+            self.errCode = savedErrCode
+            self.errMsg = savedErrMsg
+            return ""
+        }
+        if args == "" {
+            // no clause, or an empty clause: no explicit form at all
+            self.pos = savedPos
+            self.cur = savedCur
+            self.last = savedLast
+            return ""
+        }
+        // The postfix continuation rule holds after the clause too: at
+        // depth zero a token on a new line ends the expression.
+        if self.depth == 0 && self.brokeLine() {
+            self.pos = savedPos
+            self.cur = savedCur
+            self.last = savedLast
+            return ""
+        }
+        let cl = self.last
+        if self.cur.kind == "(" {
+            committed = 1
+            let op = self.cur
+            let callArgs = self.callArgsText()
+            if self.stopped() {
+                return ""
+            }
+            return "P call " + i64(op.line) + " " + i64(op.col) + " " + i64(cl.line) + " " + i64(cl.col) + "\n" + idRow + callArgs + args
+        }
+        if self.cur.kind == "{" {
+            // The head suspension mirrored for the speculative form: a
+            // control-flow head's body brace backs the attempt out.
+            if self.noBrace > 0 {
+                self.pos = savedPos
+                self.cur = savedCur
+                self.last = savedLast
+                return ""
+            }
+            committed = 1
+            if isPascal(idName) == false {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — \"{\" after a complete expression: construction heads are PascalCase type references (chapter 8)")
+                return ""
+            }
+            return self.constructText(self.cur, idName, args, cl.line, cl.col, idLine, idCol)
+        }
+        self.pos = savedPos
+        self.cur = savedCur
+        self.last = savedLast
+        return ""
+    }
+
+    // constructText parses chapter 8's construction and update braces: the
+    // dotted head's final segment is the type name, the earlier segments
+    // the qualifier; the field list is comma- or newline-separated with a
+    // uniform trailing comma, and the update base is one postfix
+    // expression after `with &`. argLine/argCol carry the explicit
+    // generic clause's closer when the lookahead path handed the shape
+    // over (0 0 on the plain path); hl/hc anchor the head's own name.
+    pub fn constructText(mut self, open: Token, pathText: String, typeArgsText: String, argLine: Int64, argCol: Int64, hl: Int64, hc: Int64) -> String {
+        var out = "P construct " + i64(hl) + " " + i64(hc) + " " + lexnum.esc(beforeLastDot(pathText)) + " " + lexnum.esc(afterLastDot(pathText)) + " " + i64(argLine) + " " + i64(argCol) + "\n" + typeArgsText
+        self.next()
+        self.depth = self.depth + 1
+        var baseText = "-\n"
+        while true {
+            if self.cur.kind == "}" {
+                self.next()
+                self.depth = self.depth - 1
+                return out + baseText
+            }
+            if isKw(self.cur, "with") {
+                self.next()
+                if self.cur.kind != "&" {
+                    if self.atEnd() {
+                        self.failTok(self.cur, "E0105", "unexpected end of file — an update base is with & followed by one postfix expression")
+                        return ""
+                    }
+                    self.failTok(self.cur, "E0105",
+                        "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no production here: an update base is with & followed by one postfix expression")
+                    return ""
+                }
+                self.next()
+                let savedValue = self.exprValue
+                self.exprValue = 1
+                baseText = self.postfixText()
+                self.exprValue = savedValue
+                if self.stopped() {
+                    return ""
+                }
+                if self.cur.kind != "}" {
+                    if self.atEnd() {
+                        self.failTok(self.cur, "E0105", "unexpected end of file — a construction closes with }")
+                        return ""
+                    }
+                    self.failTok(self.cur, "E0105",
+                        "unexpected token — " + lexnum.quoteText(self.cur.text) + " after the update base: a construction closes with }")
+                    return ""
+                }
+                self.next()
+                self.depth = self.depth - 1
+                return out + baseText
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a construction closes with }")
+                return ""
+            }
+            let ft = self.cur
+            if ft.kind != "ident" {
+                self.failTok(ft, "E0105",
+                    "unexpected token — " + lexnum.quoteText(ft.text) + " where a field name goes: field initializers are name: value pairs")
+                return ""
+            }
+            self.next()
+            if self.cur.kind != ":" {
+                self.failTok(ft, "E0105",
+                    "unexpected token — field " + lexnum.quoteText(ft.text) + " wants its value: field initializers are name: value pairs")
+                return ""
+            }
+            self.next()
+            out = out + "P fieldinit " + i64(ft.line) + " " + i64(ft.col) + " " + lexnum.esc(ft.text) + "\n"
+            let savedValue = self.exprValue
+            self.exprValue = 1
+            out = out + self.exprText()
+            self.exprValue = savedValue
+            if self.stopped() {
+                return ""
+            }
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == "}" || isKw(self.cur, "with") {
+                continue
+            }
+            // a newline before the next field name continues the list
+            if self.cur.kind == "ident" && self.brokeLine() {
+                continue
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a construction closes with }")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a field initializer list: fields are name: value pairs separated by commas or line breaks")
+            return ""
+        }
+        return out
+    }
+
+    // listLitText parses `[e1, …, en]`, n zero or more, with the uniform
+    // trailing comma. The brackets are a paren region — line breaks
+    // inside fold.
+    pub fn listLitText(mut self, open: Token) -> String {
+        var out = "P listlit " + i64(open.line) + " " + i64(open.col) + "\n"
+        self.next()
+        self.depth = self.depth + 1
+        while true {
+            if self.cur.kind == "]" {
+                self.next()
+                self.depth = self.depth - 1
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a list literal closes with ]")
+                return ""
+            }
+            let savedValue = self.exprValue
+            self.exprValue = 1
+            out = out + self.exprText()
+            self.exprValue = savedValue
+            if self.stopped() {
+                return ""
+            }
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == "]" {
+                self.next()
+                self.depth = self.depth - 1
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a list literal closes with ]")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a list literal: elements are comma-separated expressions and the literal closes with ]")
+            return ""
+        }
+        return out
+    }
+
+    // tupleTailText parses a tuple expression's remainder after the first
+    // comma and closes the paren group (the caller opened the depth; this
+    // closes it). The tuple node and the E0602 arity report both anchor at
+    // the group's opening paren.
+    pub fn tupleTailText(mut self, open: Token, firstRows: String) -> String {
+        var out = "P tuple " + i64(open.line) + " " + i64(open.col) + "\n" + firstRows
+        var count: Int64 = 1
+        while true {
+            self.next()
+            if self.cur.kind == ")" {
+                self.next()
+                self.depth = self.depth - 1
+                self.tupleArity(open, count, "expression")
+                if self.stopped() {
+                    return ""
+                }
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a tuple expression closes with )")
+                return ""
+            }
+            let savedValue = self.exprValue
+            self.exprValue = 1
+            out = out + self.exprText()
+            self.exprValue = savedValue
+            if self.stopped() {
+                return ""
+            }
+            count = count + 1
+            if self.cur.kind == "," {
+                continue
+            }
+            if self.cur.kind == ")" {
+                self.next()
+                self.depth = self.depth - 1
+                self.tupleArity(open, count, "expression")
+                if self.stopped() {
+                    return ""
+                }
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a tuple expression closes with )")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where ) closes the tuple")
+            return ""
+        }
+        return out
+    }
+
+    // callArgsText consumes `( … )` with comma-separated expressions and a
+    // uniform trailing comma; inside, line breaks are insignificant. The
+    // arguments are value positions.
+    pub fn callArgsText(mut self) -> String {
+        self.next()
+        self.depth = self.depth + 1
+        var out = ""
+        while true {
+            if self.cur.kind == ")" {
+                self.next()
+                self.depth = self.depth - 1
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a call argument list closes with )")
+                return ""
+            }
+            let savedValue = self.exprValue
+            self.exprValue = 1
+            out = out + self.exprText()
+            self.exprValue = savedValue
+            if self.stopped() {
+                return ""
+            }
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == ")" {
+                self.next()
+                self.depth = self.depth - 1
+                return out
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a call argument list closes with )")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a call argument list: arguments are comma-separated expressions and the list closes with )")
+            return ""
+        }
+        return out
+    }
+
+    // primaryText parses one primary expression, answering its rows plus
+    // the two bareness trackers the postfix gates read (both empty unless
+    // the primary is a bare identifier). fnBrace is one-shot: only this
+    // primary — the short closure body's own leading brace — gets the
+    // function-block reading.
+    pub fn primaryText(mut self) -> (String, String, String) {
+        let t = self.cur
+        let fnBrace = self.fnBrace
+        self.fnBrace = 0
+        if t.kind == "ident" {
+            self.next()
+            return ("P ident " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.text) + "\n", t.text, t.text)
         }
         if t.kind == "int" || t.kind == "float" || t.kind == "rune" {
             self.next()
-            if self.afterPrimary() == false {
-                return ""
-            }
-            return "P literal " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n"
+            return ("P literal " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n", "", "")
         }
         if t.kind == "string" {
             if hasHole(t.text) {
                 self.bndLatch("WEC-PENDING hole")
-                return ""
+                return ("", "", "")
             }
             self.next()
-            if self.afterPrimary() == false {
-                return ""
+            return ("P literal " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n", "", "")
+        }
+        if t.kind == "keyword" {
+            if t.text == "true" || t.text == "false" {
+                self.next()
+                return ("P literal " + i64(t.line) + " " + i64(t.col) + " bool " + lexnum.esc(t.text) + "\n", "", "")
             }
-            return "P literal " + i64(t.line) + " " + i64(t.col) + " " + lexnum.esc(t.kind) + " " + lexnum.esc(t.text) + "\n"
+            if t.text == "if" {
+                return (self.ifExprText(), "", "")
+            }
+            if t.text == "match" {
+                return (self.matchExprText(), "", "")
+            }
+            if t.text == "scope" {
+                // the resource form is chapter 13's statement — it
+                // produces no value; the compound forms are chapter 18's
+                // value-carrying expressions
+                if isKw(self.peek(), "resource") {
+                    self.failTok(t, "E0202",
+                        "valueless form in value position — " + lexnum.quoteText(t.text) + " produces no value and cannot stand in " + self.valSite + "; valueless forms are statements")
+                    return ("", "", "")
+                }
+                return (self.scopeCompoundText(), "", "")
+            }
+            if t.text == "task" {
+                return (self.taskText(), "", "")
+            }
+            if t.text == "select" {
+                return (self.selectText(), "", "")
+            }
+            if t.text == "while" || t.text == "loop" || t.text == "break" || t.text == "continue" || t.text == "defer" || t.text == "for" {
+                // ratified valueless statement forms. Inside a short
+                // closure's maximal body break/continue hit the
+                // closure-body loop reset first: E0201's position fact
+                // outranks E0202's.
+                if (t.text == "break" || t.text == "continue") && self.shortBody > 0 {
+                    self.failTok(t, "E0201",
+                        "break or continue outside a loop — " + lexnum.quoteText(t.text) + " stands in a block that is not inside a loop body; bare break and continue control the innermost enclosing while or loop")
+                    return ("", "", "")
+                }
+                self.failTok(t, "E0202",
+                    "valueless form in value position — " + lexnum.quoteText(t.text) + " produces no value and cannot stand in " + self.valSite + "; valueless forms are statements")
+                return ("", "", "")
+            }
+            if t.text == "fn" {
+                // an expression fn is a closure: the full form opens its
+                // parameter list right after the keyword. peek is bound
+                // first — a call result's field read is a stop face, while
+                // a let-bound record's field reads are green.
+                let pk = self.peek()
+                if pk.kind == "(" {
+                    return (self.fullClosureText(t), "", "")
+                }
+                if pk.kind == "eof" {
+                    self.failTok(pk, "E0105", "unexpected end of file — an expression fn is a closure, fn(name: type, …) [-> type] { body }")
+                    return ("", "", "")
+                }
+                self.failTok(t, "E0105",
+                    "unexpected token — " + lexnum.quoteText(pk.text) + " where a closure's parameter list opens: an expression fn is a closure, fn(name: type, …) [-> type] { body }")
+                return ("", "", "")
+            }
+            self.failTok(t, "E0105",
+                "unexpected token — " + lexnum.quoteText(t.text) + " cannot begin an expression: expressions are identifiers, literals, (e), { block }, and unary ! - ~")
+            return ("", "", "")
         }
-        if t.kind == "keyword" && t.text == "if" {
-            return self.ifExprText()
-        }
-        if t.kind == "keyword" && t.text == "match" {
-            return self.matchExprText()
-        }
-        if t.kind == "keyword" && (t.text == "true" || t.text == "false") {
+        if t.kind == "(" {
             self.next()
-            if self.afterPrimary() == false {
-                return ""
+            self.depth = self.depth + 1
+            if self.cur.kind == ")" {
+                // the unit value: the one value of the unit type
+                let u = "P unit " + i64(t.line) + " " + i64(t.col) + "\n"
+                self.next()
+                self.depth = self.depth - 1
+                return (u, "", "")
             }
-            return "P literal " + i64(t.line) + " " + i64(t.col) + " bool " + lexnum.esc(t.text) + "\n"
+            let savedValue = self.exprValue
+            self.exprValue = 1
+            let e = self.exprText()
+            self.exprValue = savedValue
+            if self.stopped() {
+                return ("", "", "")
+            }
+            if self.cur.kind == "," {
+                return (self.tupleTailText(t, e), "", "")
+            }
+            if self.cur.kind != ")" {
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — the group closes with )")
+                    return ("", "", "")
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " where ) closes the group")
+                return ("", "", "")
+            }
+            self.next()
+            self.depth = self.depth - 1
+            // grouping folds away: grouping is binding — the inner
+            // expression's bareness survives the fold, keeping the
+            // postfix gates reachable through a group (`(f)<T>(1)` stays
+            // an explicit application, `(std.Point) { … }` a
+            // construction), so the trackers are read back from the
+            // folded rows
+            let ch = chainRowText(e)
+            var nm = ch
+            if beforeLastDot(ch) != "" {
+                nm = ""
+            }
+            return (e, nm, ch)
         }
-        self.bndLatch("WEC-PENDING expr")
-        return ""
+        if t.kind == "{" {
+            if fnBrace == 1 {
+                // a short closure's brace-led body is a function body block
+                let (blk, n) = self.blockLoopText(1, "(closure);0;0")
+                if self.stopped() {
+                    return ("", "", "")
+                }
+                return ("P blockexpr " + i64(t.line) + " " + i64(t.col) + "\n" + blk, "", "")
+            }
+            let (blk, n) = self.blockLoopText(0, "")
+            if self.stopped() {
+                return ("", "", "")
+            }
+            return ("P blockexpr " + i64(t.line) + " " + i64(t.col) + "\n" + blk, "", "")
+        }
+        if t.kind == "[" {
+            return (self.listLitText(t), "", "")
+        }
+        if t.kind == "|" {
+            // a short closure in an operator's operand slot is
+            // unreachable — the parenthesized spelling is the ratified one
+            if operandSlot(self.last.kind) {
+                self.failTok(t, "E0105",
+                    "unexpected token — \"|\" fits no production here: a short closure in operand position must be parenthesized, as in 1 + (|x| x)")
+                return ("", "", "")
+            }
+            return (self.shortClosureText(t), "", "")
+        }
+        if t.kind == "||" {
+            // maximal munch leaves no zero-parameter short closure token
+            self.failTok(t, "E0105",
+                "unexpected token — \"||\" is the logical-or operator: no zero-parameter short closure exists; a zero-parameter closure is written in the full form fn() { ... }")
+            return ("", "", "")
+        }
+        self.failTok(t, "E0105",
+            "unexpected token — " + lexnum.quoteText(t.text) + " cannot begin an expression: expressions are identifiers, literals, (e), { block }, and unary ! - ~")
+        return ("", "", "")
     }
 
-    // afterPrimary decides whether the expression face ends at the token
-    // under the cursor — the reference's parseBinary and parsePostfix loop
-    // heads folded into one gate (design D8's statement-side boundary):
-    // end of file, the depth-zero line-break boundary, the enclosing
-    // regions' closing delimiters, and — the postfix switch's default arm —
-    // every token that continues no production, keywords included (so a
-    // keyword after a head reports at the body-block check, not here). The
-    // continuing faces are T5's and latch pending; two faces are real here
-    // because the reference raises them before any T5 production could
-    // see the token: `[` fails in the postfix loop itself, and `=` keeps
-    // the two-context residue rule (an assignment attempt on a non-name
-    // target in statement position, E0103 in a value position).
-    pub fn afterPrimary(mut self) -> Bool {
-        if self.atEnd() {
-            return true
+    // fullClosureText parses the full closure form `fn(params) [-> type]
+    // { body }`. A closure carries no effect segment — the body is a
+    // function-body context under the closure's own name.
+    pub fn fullClosureText(mut self, t: Token) -> String {
+        self.next()
+        var out = "P closure " + i64(t.line) + " " + i64(t.col) + " 0\n"
+        out = out + self.annotatedParams()
+        if self.stopped() {
+            return ""
         }
-        if self.depth == 0 && self.brokeLine() {
-            return true
-        }
-        let k = self.cur.kind
-        if k == "}" || k == ")" || k == "," {
-            return true
-        }
-        if k == "{" {
-            if self.noBrace > 0 {
-                return true
+        var retText = "-\n"
+        var hasRet: Int64 = 0
+        if self.cur.kind == "->" {
+            self.next()
+            retText = self.typeRefText()
+            if self.stopped() {
+                return ""
             }
-            self.bndLatch("WEC-PENDING expr")
-            return false
+            hasRet = 1
         }
-        if k == "=" {
-            if self.exprValue == 0 {
-                self.failTok(self.cur, "E0105",
-                    "unexpected token — \"=\" after a complete expression statement: assignment targets are bare names (the one field form, self.field, belongs to a method receiver)")
-                return false
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a closure wants its body block")
+                return ""
             }
-            self.failTok(self.cur, "E0103",
-                "assignment is not an expression — \"=\" cannot appear in an expression position: assignment is a statement, not an expression")
-            return false
-        }
-        if k == "[" {
             self.failTok(self.cur, "E0105",
-                "unexpected token — \"[\" fits no postfix production: postfix is .name or (args); indexing is by named methods (the collections chapter)")
-            return false
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a closure's body block opens")
+            return ""
         }
-        if k == "." || k == "(" || k == "?" || k == "<" ||
-            k == "*" || k == "/" || k == "%" || k == "+" || k == "-" ||
-            k == "<<" || k == ">>" || k == "&" || k == "^" || k == "|" ||
-            k == "<=" || k == ">" || k == ">=" || k == "==" || k == "!=" ||
-            k == "&&" || k == "||" || k == ".." {
-            self.bndLatch("WEC-PENDING expr")
-            return false
+        let (body, n) = self.blockLoopText(1, "(closure);" + i64(hasRet) + ";0")
+        if self.stopped() {
+            return ""
         }
-        return true
+        return out + retText + body
+    }
+
+    // shortClosureText parses the short form `|p1, …, pk| body` (k at
+    // least one). Parameters are bare names or name: type pairs; the body
+    // is one maximal expression normalized to a one-item block. A
+    // brace-led body gets the function-block reading (fnBrace), and the
+    // closure-body loop reset makes break/continue in the maximal body
+    // report E0201 ahead of E0202.
+    pub fn shortClosureText(mut self, t: Token) -> String {
+        self.next()
+        var out = "P closure " + i64(t.line) + " " + i64(t.col) + " 1\n"
+        if self.cur.kind == "|" {
+            self.failTok(self.cur, "E0105",
+                "unexpected token — \"|\" fits no production here: no zero-parameter short closure exists; a zero-parameter closure is written in the full form fn() { ... }")
+            return ""
+        }
+        while true {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a short closure's parameter list closes with |")
+                return ""
+            }
+            let nt = self.cur
+            if nt.kind != "ident" {
+                self.failTok(nt, "E0105",
+                    "unexpected token — " + lexnum.quoteText(nt.text) + " in a short closure's parameter list: parameters are name or name: type pairs")
+                return ""
+            }
+            self.checkCamel(nt)
+            if self.stopped() {
+                return ""
+            }
+            self.next()
+            out = out + "P param 0 0 " + lexnum.esc(nt.text) + " " + i64(nt.line) + " " + i64(nt.col) + "\n"
+            var typText = "-\n"
+            if self.cur.kind == ":" {
+                self.next()
+                typText = self.typeRefText()
+                if self.stopped() {
+                    return ""
+                }
+            }
+            out = out + typText
+            if self.cur.kind == "," {
+                self.next()
+                continue
+            }
+            if self.cur.kind == "|" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a short closure's parameter list closes with |")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " in a short closure's parameter list: parameters are name or name: type pairs")
+            return ""
+        }
+        let savedLoop = self.loopDepth
+        let savedDirect = self.direct
+        self.loopDepth = 0
+        self.direct = 1
+        self.shortBody = self.shortBody + 1
+        self.fnBrace = 1
+        let bt = self.cur
+        let savedValue = self.exprValue
+        self.exprValue = 1
+        let body = self.exprText()
+        self.exprValue = savedValue
+        self.shortBody = self.shortBody - 1
+        self.fnBrace = 0
+        self.loopDepth = savedLoop
+        self.direct = savedDirect
+        if self.stopped() {
+            return ""
+        }
+        return out + "-\n" + "P block " + i64(t.line) + " " + i64(t.col) + "\n" + "P exprstmt " + i64(bt.line) + " " + i64(bt.col) + "\n" + body
+    }
+
+    // taskText parses `task effect tags block`: the body is a
+    // function-body context under the task's own name (returns carry the
+    // block's value, the loop depth resets).
+    pub fn taskText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        if isKw(self.cur, "effect") == false {
+            self.failTok(t, "E1601",
+                "task block without an effect segment — the task keyword is followed directly by its block, leaving the body's calls answerable to no declaration; write the segment of the chapter 16 spelling: task effect tag1 tag2 ... followed by the block")
+            return ""
+        }
+        let (tags, el, ec) = self.parseEffectSegment(false)
+        if self.stopped() {
+            return ""
+        }
+        let (body, n) = self.blockLoopText(1, "(task);1;0")
+        if self.stopped() {
+            return ""
+        }
+        return "P task " + i64(t.line) + " " + i64(t.col) + " " + tags + " " + i64(el) + " " + i64(ec) + "\n" + body
+    }
+
+    // scopeCompoundText parses chapter 18's scope forms — bare, timeout(n),
+    // collectAll, timeout(n) collectAll — as the expression the value
+    // positions carry. The clause order is fixed; the body is a plain
+    // block.
+    pub fn scopeCompoundText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        var timeoutText = "-\n"
+        if isKw(self.cur, "timeout") {
+            self.next()
+            if self.cur.kind != "(" {
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — a scope timeout clause is timeout(n), milliseconds")
+                    return ""
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " where \"(\" opens the scope timeout clause: the clause is timeout(n), milliseconds")
+                return ""
+            }
+            self.next()
+            timeoutText = self.headExprText()
+            if self.stopped() {
+                return ""
+            }
+            if self.cur.kind != ")" {
+                if self.atEnd() {
+                    self.failTok(self.cur, "E0105", "unexpected end of file — the scope timeout clause closes with )")
+                    return ""
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " where the scope timeout clause closes with )")
+                return ""
+            }
+            self.next()
+        }
+        var collectAllBit: Int64 = 0
+        if isKw(self.cur, "collectAll") {
+            self.next()
+            collectAllBit = 1
+        }
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a scope wants its body block")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where the scope body opens")
+            return ""
+        }
+        let (body, n) = self.blockLoopText(0, "")
+        if self.stopped() {
+            return ""
+        }
+        return "P scopeexpr " + i64(t.line) + " " + i64(t.col) + " " + i64(collectAllBit) + "\n" + timeoutText + body
+    }
+
+    // selectText parses `select { cases }`: at least two cases, separated
+    // by line breaks with no separator token. Fewer than two is E1612 at
+    // the select keyword.
+    pub fn selectText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        if self.cur.kind != "{" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a select opens its cases with {")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a select's case group opens")
+            return ""
+        }
+        self.next()
+        var out = "P select " + i64(t.line) + " " + i64(t.col) + "\n"
+        var cases: Int64 = 0
+        while true {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a select closes with }")
+                return ""
+            }
+            if isKw(self.cur, "case") == false {
+                if self.cur.kind == "}" {
+                    self.next()
+                    break
+                }
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a select case begins: a case is case name = source => body")
+                return ""
+            }
+            out = out + self.selectCaseText()
+            if self.stopped() {
+                return ""
+            }
+            cases = cases + 1
+            if self.cur.kind == "}" {
+                self.next()
+                break
+            }
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a select closes with }")
+                return ""
+            }
+            if self.brokeLine() == false {
+                self.failTok(self.cur, "E0105",
+                    "unexpected token — " + lexnum.quoteText(self.cur.text) + " fits no production: select cases are separated by newlines and carry no separator token")
+                return ""
+            }
+        }
+        if cases < 2 {
+            self.failTok(t, "E1612",
+                "select holds fewer than two cases — one case waiting on one source is a plain call wearing syntax; call the wait source directly, or add the second case the construct exists to race")
+            return ""
+        }
+        return out
+    }
+
+    // selectCaseText parses `case name = source => body` (or the wildcard
+    // `case _ = source => body`). The pattern is a bare binding name or
+    // the wildcard — anything else is E1611 at the case keyword.
+    pub fn selectCaseText(mut self) -> String {
+        let t = self.cur
+        self.next()
+        var wildcard: Int64 = 0
+        var name = ""
+        if self.cur.kind == "_" {
+            wildcard = 1
+            self.next()
+        } else {
+            if self.cur.kind == "ident" && isCamel(self.cur.text) {
+                name = self.cur.text
+                self.next()
+            } else {
+                self.failTok(t, "E1611",
+                    "select case pattern is not a binding or the wildcard — the case carries a pattern beyond a bare binding name or the wildcard _, and a no-match policy exists for no rule here; bind the whole yield to a name or discard it with _, and match inside the body if the yield needs splitting")
+                return ""
+            }
+        }
+        if self.cur.kind != "=" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a select case is case name = source => body")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a select case's = goes: a case is case name = source => body")
+            return ""
+        }
+        self.next()
+        let savedValue = self.exprValue
+        self.exprValue = 1
+        let source = self.exprText()
+        self.exprValue = savedValue
+        if self.stopped() {
+            return ""
+        }
+        if self.cur.kind != "=>" {
+            if self.atEnd() {
+                self.failTok(self.cur, "E0105", "unexpected end of file — a select case is case name = source => body")
+                return ""
+            }
+            self.failTok(self.cur, "E0105",
+                "unexpected token — " + lexnum.quoteText(self.cur.text) + " where a select case's => goes: a case is case name = source => body")
+            return ""
+        }
+        self.next()
+        let savedValue2 = self.exprValue
+        self.exprValue = 1
+        let body = self.exprText()
+        self.exprValue = savedValue2
+        if self.stopped() {
+            return ""
+        }
+        return "P selectcase " + i64(t.line) + " " + i64(t.col) + " " + i64(wildcard) + " " + lexnum.esc(name) + "\n" + source + body
     }
 }
 
@@ -4412,6 +5309,156 @@ impl Parser {
 // and appends what it returns. The empty source parses to the file line
 // alone; a latched parse answers the diagnostic E line or the N line;
 // everything else is the ast section's P-line family.
+// binLevel is chapter 2's closed twelve-level precedence table; higher is
+// looser. Levels 9 (the comparisons) and 12 (the range) are the
+// non-associative ones. Zero answers "no binary operator".
+fn binLevel(kind: String) -> Int64 {
+    if kind == "*" || kind == "/" || kind == "%" {
+        return 3
+    }
+    if kind == "+" || kind == "-" {
+        return 4
+    }
+    if kind == "<<" || kind == ">>" {
+        return 5
+    }
+    if kind == "&" {
+        return 6
+    }
+    if kind == "^" {
+        return 7
+    }
+    if kind == "|" {
+        return 8
+    }
+    if kind == "<" || kind == "<=" || kind == ">" || kind == ">=" || kind == "==" || kind == "!=" {
+        return 9
+    }
+    if kind == "&&" {
+        return 10
+    }
+    if kind == "||" {
+        return 11
+    }
+    if kind == ".." {
+        return 12
+    }
+    return 0
+}
+
+// operandSlot reports whether a token kind places the next position in an
+// operator's operand slot: a prefix or binary operator immediately before
+// `|` means the short-closure form is unreachable there — the
+// parenthesized spelling is the ratified one.
+fn operandSlot(kind: String) -> Bool {
+    if kind == "!" || kind == "~" {
+        return true
+    }
+    return binLevel(kind) > 0
+}
+
+// afterLastDot returns the segment after the final dot (the whole string
+// when no dot rides it).
+fn afterLastDot(s: String) -> String {
+    var i = s.byteLength() - 1
+    while i >= 0 {
+        if lexnum.byteAt(s, i) == 0x2E {
+            return s.byteSlice(i + 1, s.byteLength())
+        }
+        i = i - 1
+    }
+    return s
+}
+
+// beforeLastDot returns the prefix before the final dot (empty when no
+// dot rides the string).
+fn beforeLastDot(s: String) -> String {
+    var i = s.byteLength() - 1
+    while i >= 0 {
+        if lexnum.byteAt(s, i) == 0x2E {
+            return s.byteSlice(0, i)
+        }
+        i = i - 1
+    }
+    return ""
+}
+
+// identRowInfo reads a bare identifier back out of its rendered rows —
+// the group's fold answer. Grouping folds away, so `(x)` IS the ident x:
+// the postfix faces that gate on a bare-name head (the explicit
+// application `<`, the construction brace) stay reachable through a
+// group. The answer is the name and its position when the rows are
+// exactly one `P ident` line; the empty name refuses.
+fn identRowInfo(rows: String) -> (String, Int64, Int64) {
+    if hasPrefix(rows, "P ident ") == false {
+        return ("", 0, 0)
+    }
+    let end = lineEndAt(rows, 0)
+    // exactly one line, and a fifth field (the escaped name) present
+    if end != rows.byteLength() - 1 {
+        return ("", 0, 0)
+    }
+    var i: Int64 = 8
+    let e1 = fieldEnd(rows, i, end)
+    let ln = parseDec(rows, i, e1)
+    i = e1 + 1
+    let e2 = fieldEnd(rows, i, end)
+    let cl = parseDec(rows, i, e2)
+    i = e2 + 1
+    // The name field runs to the line's end, so its exclusive end equals
+    // end; presence is the start staying inside the line, not the end.
+    if i >= end {
+        return ("", 0, 0)
+    }
+    let e3 = fieldEnd(rows, i, end)
+    return (unesc(rows, i, e3), ln, cl)
+}
+
+// rowNameField reads a P ident/member row's name field — the fifth field,
+// after P, the node name, and the two position fields.
+fn rowNameField(line: String, end: Int64) -> String {
+    var i: Int64 = 0
+    var f: Int64 = 0
+    while f < 4 {
+        i = fieldEnd(line, i, end) + 1
+        f = f + 1
+    }
+    if i >= end {
+        return ""
+    }
+    let e = fieldEnd(line, i, end)
+    return unesc(line, i, e)
+}
+
+// chainRowText reconstructs a bare ident/member chain's dotted path from
+// its rendered rows — the group's fold answer for the construction gate.
+// The rows of exactly a bare chain are member rows (outermost first)
+// ending in the root ident row; anything else is no chain. Grouping folds
+// away (the ident-row answer above), so the postfix gates read the chain
+// back out of the rows.
+fn chainRowText(rows: String) -> String {
+    let end = lineEndAt(rows, 0)
+    if end == rows.byteLength() - 1 {
+        // one line: a lone ident row is a one-segment chain
+        if hasPrefix(rows, "P ident ") {
+            return rowNameField(rows, end)
+        }
+        return ""
+    }
+    if hasPrefix(rows, "P member ") == false {
+        return ""
+    }
+    let nm = rowNameField(rows, end)
+    if nm == "" {
+        return ""
+    }
+    let sub = chainRowText(rows.byteSlice(end + 1, rows.byteLength()))
+    if sub == "" {
+        return ""
+    }
+    return sub + "." + nm
+}
+
 pub fn run(toksText: String, docsText: String) -> String {
     let p = Parser {
         toksText: toksText, docsText: docsText, pos: 0,

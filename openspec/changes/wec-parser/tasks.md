@@ -48,9 +48,10 @@
 
 ## T5 表达式与洞
 
-- [ ] **表达式核**：parseExpr 十二级优先级爬升（非结合级 9/12 的 E0104 链式判 + depth==0 行续判 + `=` 非表达式 E0103）、unary（!/−/~）、postfix 链（call/member/index）、primary（ident/literal 前缀 tuple/construct/闭包/list 字面/blockExpr/if-expr/match-expr/task/scope/select）。
+- [x] **表达式核**：parseExpr 十二级优先级爬升（非结合级 9/12 的 E0104 链式判 + depth==0 行续判 + `=` 非表达式 E0103）、unary（!/−/~）、postfix 链（call/member/index）、primary（ident/literal 前缀 tuple/construct/闭包/list 字面/blockExpr/if-expr/match-expr/task/scope/select）。
   来源：今日事实 4；design D6
   验证：表达式密集语料（conformance 源大头）先红后绿；E0103/E0104 矩阵
+  落地（2026-10-10）：exprText→binaryText(12) 十二级爬升（binLevel 表 + 级 9/12 非结合 E0104 双消息形 + depth==0 行续 + `=` 双语境 E0103 值位/E0105 语句位）、unaryText、postfixText（bareName/chainText 活追踪 + `.`/`(`/`?`/`<`/`[`/`{` 六臂）、primaryText（ident/literal/true-false/if/match/task/scope 双复合/select/`(` 群折叠-元组-unit/`{` blockexpr/`[` list/`|` 短闭包/fn 全闭包/值无语句族 E0202 + break/continue 的 E0201 先序）、tryTypeArgsText（savedPos+cur+last+五诊断闩快照、committed 律、bnd 闩不随回退卷回）、constructText/listLitText/tupleTailText/callArgsText/fullClosure/shortClosure/task/scopeCompound/select 十二族；**两枚收口期缺陷**：① 新停面 J 复发——primaryText fn 臂 `self.peek().kind`（emitMemberValue 链根须绑定），补记二-3 绕行（先 `let pk = self.peek()` 再读）② 行尾字段 presence 判据——identRowInfo/rowNameField 以排他终界 `e >= end` 判缺席而 name 恒为行尾字段 ⇒ 恒空 ⇒ isPascal("") 假 ⇒ 投机构造门误杀 `Name<T…> { … }`（首绿跑 1351 逮出：t5:construct-generic + 5 枝 case 同构）；判据改起点 `i >= end`；语料 t5: 96/96 绿（红先态 /tmp/t5-red.log：reconciled 602/1484、t5 94/96 红——`err-e0103-value`（T4 `=` 值位臂）与 `err-index`（补记五-3 `[` 停点）两枚红态即绿）；棘轮 600 → **1356**（翻绿 756 = t5 96 + case 652 + stdlib 4 + wec 自源 4——四源自 parse.we 起全量解析即绿；余量 128 = case 117 洞面 T5-B + 11 docs 面 T6，零其他）；终跑 PASS 776.9s（T4-B 490.9s——parse.we 自源 179.6KB → 222.5KB 在补记三-5 charAt O(R²) 面上的放大，同案待裁定）；补记七
 - [ ] **词法两面 + 插值洞**：lex.we 增 `holes`/`scanAt`（design D3——复用扫描核，`run` 面字节不动）；parseHoles（H 行族消耗、区域内偏移移一、Col = 洞列 +2）+ parseHole 子解析器（共享 valSite/depth/fnsText、namesText 新建；空区域 E0105、尾随词 E0105）。
   来源：proposal 目标 2、今日事实 5；design D3
   验证：洞语料（平衡/嵌套/多洞/洞内调用）先红后绿；lex 对账面零漂（`run` 字节不动由塔全量钉住）
