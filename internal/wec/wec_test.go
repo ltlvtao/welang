@@ -717,6 +717,30 @@ func loadCorpus(t *testing.T) []entry {
 		entry{"t5b:err-hole-trailing", "let s = \"${1 2}\"\n"},
 		entry{"t5b:err-hole-lex", "let s = \"${1__0}\"\n"},
 		entry{"t5b:err-hole-assign", "let s = \"${x = 1}\"\n"},
+		// T6's documentation-attachment face: each /// unit resolves
+		// against the first top-level item whose start line is strictly
+		// past the unit's end (the attach index is the docattach row's
+		// fifth field, its L lines re-emitted verbatim under the row),
+		// a unit with no following item is the E0405 orphan at its first
+		// line column 1, and a parse error anywhere in the file preempts
+		// the attach pass entirely (the reference attaches only after a
+		// clean item loop). The bnd entries carry the parameter-position
+		// mut — the reference's one NotImplemented boundary — through
+		// the tokens+docs passthrough to the N row, alone and under a
+		// /// unit (the docs section survives; no docattach rows do).
+		entry{"t6:docs-attach-first", "/// one\n/// two\nlet x = 1\n"},
+		entry{"t6:docs-attach-mid", "let a = 1\n/// mid\nfn f() { }\n"},
+		entry{"t6:docs-two-units", "/// u1\nlet a = 1\n/// u2\nlet b = 2\n"},
+		entry{"t6:docs-multi-lines", "/// l1\n/// l2\n/// l3\nlet x = 1\n"},
+		entry{"t6:docs-gap", "/// d\n\n\nlet x = 1\n"},
+		entry{"t6:docs-last-item", "let a = 1\n/// tail\nfn f() { }\n"},
+		entry{"t6:err-docs-orphan", "let x = 1\n/// dangling\n"},
+		entry{"t6:err-docs-orphan-only", "/// only\n"},
+		entry{"t6:err-docs-then-parse", "/// d\nlet x = (\n"},
+		entry{"t6:bnd-mut-param", "fn f(mut x: Int64) { }\n"},
+		entry{"t6:bnd-mut-param-late", "fn f(a: Int64, mut b: Int64) { }\n"},
+		entry{"t6:bnd-mut-param-pub", "pub fn f(mut x: Int64) { }\n"},
+		entry{"t6:bnd-docs-passthru", "/// d\nfn f(mut x: Int64) { }\n"},
 	)
 	lib, err := filepath.Glob(filepath.Join("..", "..", "stdlib", "src", "*.we"))
 	if err != nil {
@@ -902,17 +926,17 @@ func window(s string, i int) string {
 // into this test: the lexical comparison is the parse-section-empty prefix
 // of the full output, so asserting both would assert a fraction twice.
 //
-// T5-B raises the floor to 1486 = 1498 corpus − 11 docs-face entries (T6)
-// − wec:lex.we. That last entry went red not through the port: a
-// pre-existing compiler defect — let-bound record references are not
-// rooted on the GC shadow stack across calls, so a mid-parse collection
-// sweeps them and later same-size allocations reuse the boxes; the grown
-// lex.we tilted the heap layout into the unlucky reuse (the committed
-// T5-A artifact reproduces the same corrupted rows on the new input byte
-// for byte; full evidence in the wec-parser change's design notes). The
-// entry returns green once that defect is fixed; until then the floor
-// carries it as a disclosed, expected divergence.
-const reconciledFloor = 1486
+// T6 raises the floor to 1510 = 1511 admitted corpus − wec:lex.we alone.
+// That one entry is red not through the port: a pre-existing compiler
+// defect — let-bound record references are not rooted on the GC shadow
+// stack across calls, so a mid-parse collection sweeps them and later
+// same-size allocations reuse the boxes; the grown lex.we tilted the
+// heap layout into the unlucky reuse (the committed T5-A artifact
+// reproduces the same corrupted rows on the new input byte for byte;
+// full evidence in the wec-parser change's design notes). The entry
+// returns green once that defect is fixed; until then the floor carries
+// it as the one disclosed, expected divergence.
+const reconciledFloor = 1510
 
 // TestOutputReconciliation is the B3c differential bar (design D5): for
 // every admitted corpus entry, the wec artifact's FULL serialized output —

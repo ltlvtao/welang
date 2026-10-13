@@ -59,15 +59,18 @@
 
 ## T6 docs 附着 + bnd 面 + 全量对账 + 突变电池 + 零漂移
 
-- [ ] **attachDocs + NotImplemented 面**：itemStartsText 消耗（首个大于 EndLine 的行定附着，E0405 孤儿 docs）；DocAttach 的 P 行族；bnd 闩全链（参数位 `mut` → tokens/docs 透传 + N 行）。
+- [x] **attachDocs + NotImplemented 面**：itemStartsText 消耗（首个大于 EndLine 的行定附着，E0405 孤儿 docs）；DocAttach 的 P 行族；bnd 闩全链（参数位 `mut` → tokens/docs 透传 + N 行）。
   来源：今日事实 1、2；design D4、D6
   验证：docs 语料（stdlib 源为主）+ bnd 语料先红后绿
-- [ ] **全量逐字节对账**：语料 1105 条四态全绿（词法错 E 单行 / 解析错 tokens+docs+E / bnd tokens+docs+N / 成功至 ast 段尾）；条目四态分布记账。
+  落地（2026-10-10）：attachDocs 落 parseFile 尾闩位（`stopped()==false && docsText != ""` 守卫——解析先停则附着不跑，镜像 Go 的 post-item pass 被诊断 panic 先决，`t6:err-docs-then-parse` 钉）；D 行族游走 = start/end 双字段 + L 行族携至下一 D 行或段尾（两段 L 行同形故逐字搬运免重转义）；itemStartsText 线性扫**首个 > EndLine** 者定 idx（序数即附着索引——`docs-attach-mid` 钉 idx=1）；孤儿 E0405@StartLine:1（消息逐字含 `///`）；行族单次拼接种进 P file 行后（astText 首行界三段 byteSlice——每解析一次恰一次，无累积面）；`WEC-PENDING docs` 占位闩摘除 ⇒ **wec/src 内 WEC-PENDING grep 归零**（移植无剩余停面）；bnd 面 T2 已落链（t2:n-mut-param 在册单形），t6 补三形 = late 位/pub 前缀/docs 透传（docs 段随 tokens 透传而 docattach 行不生——bnd 中止先于附着）；语料 t6: 13 枚；红先态 /tmp/t6-red.log = **8 红**（6 附着 + 2 孤儿，全死 `N WEC-PENDING docs` 闩 vs 参考 ast 段/E0405）+ **5 红态即绿**（4 bnd 形——T2 链吻合本批补覆盖；err-docs-then-parse——解析错先于附着，闩位结构保证）；聚焦绿 13/13（/tmp/t6-green-focused.log）；补记九
+- [x] **全量逐字节对账**：语料 1105 条四态全绿（词法错 E 单行 / 解析错 tokens+docs+E / bnd tokens+docs+N / 成功至 ast 段尾）；条目四态分布记账。
   来源：proposal 目标 4；design D5
   验证：`go test ./internal/wec/ -count=1` 全量绿
-- [ ] **突变电池 ≥6 枚 + 零漂移**：D7 候选池实跑取 ≥6，逐枚「施加 → 击杀 → 还原 → 复跑绿」判决表入补记；conformance 933 `-count=1` 零改写、`go build ./...`、`go vet ./...`、`gofmt -l`（refr/ 外 0 文件）、`git diff --check` 净。
+  落地（2026-10-10）：语料 as-built **1512 载入 / 1511 放行**（剔 1 仍 #30 十三值角）；`reconciled 1510 of 1511` **PASS 755.4s**（/tmp/t6-green.log）——11 枚 docs 面全翻绿（case:doc-* 五对 + check-e0405 + fmt 两枚 + doc-output-dir/doc-check-clean），唯 wec:lex.we 预期发散（补记八-8 编译器缺陷，floor 1510 承载）；四态分布（参考侧全语料记账）= **词法错 97 / 解析错 445 / NotImplemented 5 / 成功 965**（notimpl 5 = t2:n-mut-param + t6 bnd 四枚）；前缀分布 = literal 50lex/29parse/2ok、t2 18/37/1ni、t3 57/87、t4 22/17、t4b 19/25、t5 51/45、t5b 9/4/1lex、t6 6/3/4ni、lextest 34lex/2parse、case 770ok/196parse/12lex、wec 4ok、stdlib 7ok；棘轮 1486 → **1510**
+- [x] **突变电池 ≥6 枚 + 零漂移**：D7 候选池实跑取 ≥6，逐枚「施加 → 击杀 → 还原 → 复跑绿」判决表入补记；conformance 933 `-count=1` 零改写、`go build ./...`、`go vet ./...`、`gofmt -l`（refr/ 外 0 文件）、`git diff --check` 净。
   来源：proposal 目标 5、6；design D7
   验证：判决表 + 各命令退出码 0 + testdata 零改动
+  落地（2026-10-10）：**8/8 全击杀**（池全量跑、超 ≥6 门槛）——击杀层全为塔层（八枚皆 We 合法码的语义突变 ⇒ 构建零死，与 B3b M5 surrogate 的构建期死互补）；击杀数 = 1510 − reconciled：M3 1041 / M2 872 / M6 130 / M7 16 / M4 13 / M1 9 / M8 5 / M5 1（外科单杀 t2:err-byval-pub）；判决表（as-built 锚点/首发发散/层）与三处 D7 偏差入补记九；三段法由副本隔离承载（rsync 副本剔 .git+wec/build，施加与击杀跑皆在副本内，还原 = 真树零染——收口前 git status 复核三处修改皆 T6 本身；「还原后复跑绿」= 真树终跑 floor 1510 断言面 /tmp/t6-final-tower.log）；M4 锚点锐化（裸锚 `if prev >= 0` 三命中：dupCheck/memberNames/scope-resource 头 → 加 namesLineOf 前缀行唯一化）+ python 断言 count==1 防呆；判决与日志 /tmp/t6mut/M*.verdict、M*.log；零漂移五项 = conformance exit 0（462.3s 含八塔挤载，testdata porcelain 0 行）+ build/vet exit 0 + gofmt 0 文件 + `git diff --check` 净
 
 ## T7 审查与归档
 

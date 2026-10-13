@@ -238,3 +238,24 @@ T4 的两枚复选框本就是两条垂直可验的验收线，按框拆两刀�
    - 交叉归因：**T5-A 已提交产物**（`778f1e1`，当时塔全绿）喂当前 1297 行 lex.we 输入，**逐字节复现同三行**——缺陷在 T5-B 之前已入库；T5-B 的 lex.we +69 行只是移动堆布局，把复用运气翻到坏侧。
    - 处置：本变更不修（编译器行为变更须独立 openspec 变更，属 B1 生成器 rooting 面）；wec 侧不改写为标量锚捕获（数百站点偏离 Go 镜像形，且掩盖缺陷——差分塔的价值就是让编译器缺陷现形）。wec:lex.we 以「已披露的预期发散」入塔账（floor 1486 承载，wec_test.go 注释同记），缺陷待 follow-up 登记、修复后面自动翻绿。
 9. **参考再生纪律（教训，在案）**：dump 参考的 `go test` 必须自**仓库根**跑——模块外 cwd 下静默失败（输出被吞）导致 want.txt 陈旧、二分两轮白费；与「退出码判定不许带管道」（B1b T8-2 教训）并列的方法论条目。
+
+### 补记九（T6 落地·docs 附着、bnd 面与突变电池，2026-10-10）
+
+1. **attachDocs 面**：附着判定 = itemStartsText 线性扫**首个严格大于 EndLine** 的行（序数即附着索引——Go itemStarts 数组同序扫描的镜像）；孤儿（扫尾无命中）→ E0405@uStart:1（消息逐字含 `///`）；D 行族两字段 + L 行族整体携行至下一 D 行或段尾——两段 L 行同逃逸形 ⇒ **逐字搬运免重转义**；行族**单次拼接**种进 `P file` 行后（astText 首行界三段 byteSlice，每次 run 恰一次、无累积面）；`stopped()==false && docsText != ""` 双守卫 = Go 侧附着在 item 循环全净后才跑的镜像（诊断 panic 先决，`t6:err-docs-then-parse` 钉：解析错两侧同出 E 行、无 docattach 行）。
+2. **bnd 链全形**：参数位 `mut` 闩 T2 已落（t2:n-mut-param 单形在册），T6 补 late 位/pub 前缀/docs 透传三形；透传形里 docs 段随 tokens 原样出场而 docattach 行不生——**bnd 中止先于附着 pass**（Go run() 的 bnd 检查次序镜像）；参考侧 NotImplemented 单边界（mut 参数）与塔四态里的 notimpl 5 枚（t2 一 + t6 四）逐枚对齐。
+3. **全量对账**：四态分布与棘轮 1486 → 1510 见 tasks.md T6 第二框；塔绿跑 PASS 755.4s（/tmp/t6-green.log），唯 wec:lex.we 预期发散（补记八-8 编译器缺陷，floor 1510 承载）；电池后真树终跑复绿（floor 断言面，/tmp/t6-final-tower.log）。
+4. **突变电池判决表**（D7 池全量 8 枚实跑；击杀数 = 基线 1510 − reconciled，wec:lex.we 两态皆发散不计入；击杀跑 = 副本内全量塔）：
+
+   | # | 突变（as-built 锚点） | 首发发散 | reconciled | 击杀 | 层 |
+   | --- | --- | --- | --- | --- | --- |
+   | M1 | binLevel `* / %`↔`+ -` 两级换值（parse.we） | t5:prec-mul-add | 1501/1511 | 9 | 塔 |
+   | M2 | brokeLine `>`→`>=`（parse.we） | t3:sum-bare | 638/1511 | 872 | 塔 |
+   | M3 | isPascal 首字母域 65–90→97–122（parse.we） | t2:fn-param | 469/1511 | 1041 | 塔 |
+   | M4 | dupCheck `prev >= 0`→`prev > 999999`（parse.we） | t2:err-e0404-fn | 1497/1511 | 13 | 塔 |
+   | M5 | byval-pub 拒收块整删（parse.we） | t2:err-byval-pub | 1509/1511 | 1 | 塔 |
+   | M6 | holeCol `+2`→`+3`（lex.we） | t5b:hole-basic | 1380/1511 | 130 | 塔 |
+   | M7 | itemStartsText 追加整删（parse.we） | t6:docs-attach-first | 1494/1511 | 16 | 塔 |
+   | M8 | `level == 9 || level == 12`→`== 12`（parse.we binaryText） | t5:err-nonaloc-cmp | 1505/1511 | 5 | 塔 |
+
+5. **与 D7 草案的三处 as-built 偏差**：M3 非「isPascal/isCamel 互换」而单换 isPascal 域（isCamel 不动——首字母域对调即使 Pascal 位收 camel 拒 Pascal，E0011/E0012 矩阵同面发散，单点更小）；M5 非「换序收词」而整删拒收块（换序需移两段收词逻辑，删块是同面最小单点——t2:err-byval-pub 的诊断消失即击杀）；M8 实锚在 binaryText 非结合级判定（效果 = 级 9 比较链放行、级 12 `..` 链仍拦）。
+6. **方法论（B3b 先例的沿用与扩展）**：三段「施加→击杀→还原→复跑绿」由**副本隔离**承载——rsync 副本（剔 .git 与 wec/build）内施加 + 全量塔击杀，真树全程零染（收口前 git status 复核三处修改皆 T6 本身），「还原后复跑绿」= 真树终跑（floor 1510 断言面）；M4 裸锚 `if prev >= 0` 在 parse.we 三处命中（dupCheck:770 / scope-resource 头 / memberNames）→ 锚点加 namesLineOf 前缀行唯一化 + python 断言 count==1 防呆（B3b M4 同案教训）；八塔并行挤 8 核每塔 1884s+（单跑 755s），conformance 挤载 462.3s 仍 exit 0——零改写结论不受挤载影响。

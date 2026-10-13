@@ -819,8 +819,9 @@ impl Parser {
     }
 
     // parseFile parses the module: top-level items separated by line
-    // breaks. The documentation attachment pass is T6's face; a source
-    // carrying /// units latches pending rather than attaching wrong.
+    // breaks, then the documentation attachment pass — a source whose
+    // parse stopped anywhere never attaches (the reference runs the pass
+    // only after a clean item loop, so a parse error preempts it).
     pub fn parseFile(mut self) {
         self.astText = "P file 0 0 " + i64(self.testModule) + "\n"
         while self.atEnd() == false {
@@ -845,8 +846,65 @@ impl Parser {
             }
         }
         if self.stopped() == false && self.docsText != "" {
-            self.bndLatch("WEC-PENDING docs")
+            self.attachDocs()
         }
+    }
+
+    // attachDocs resolves each /// unit against the next top-level item —
+    // the reference's post-item pass. Each D row in the docs section is
+    // one unit; the first item-start line strictly past the unit's end
+    // line is the attach index (the item's ordinal), and a unit with no
+    // such item is the E0405 orphan at its first line, column 1. The
+    // docattach rows sit between the P file row and the item rows — the
+    // walk splices them after the ast text's first line, once. A unit's
+    // L rows are its content in already-escaped form and both sections
+    // spell a content line identically, so they carry over verbatim.
+    pub fn attachDocs(mut self) {
+        var rows = ""
+        var p: Int64 = 0
+        let dn = self.docsText.byteLength()
+        while p < dn {
+            let dEnd = lineEndAt(self.docsText, p)
+            var i = p + 2
+            let e1 = fieldEnd(self.docsText, i, dEnd)
+            let uStart = parseDec(self.docsText, i, e1)
+            i = e1 + 1
+            let e2 = fieldEnd(self.docsText, i, dEnd)
+            let uEnd = parseDec(self.docsText, i, e2)
+            // the unit's L rows run to the next D row or the section's end
+            p = dEnd + 1
+            var lEnd = p
+            while lEnd < dn {
+                if self.docsText.byteSlice(lEnd, lEnd + 2) == "D " {
+                    break
+                }
+                lEnd = lineEndAt(self.docsText, lEnd) + 1
+            }
+            let unit = self.docsText.byteSlice(p, lEnd)
+            p = lEnd
+            var idx: Int64 = -1
+            var q: Int64 = 0
+            var n: Int64 = 0
+            let sn = self.itemStartsText.byteLength()
+            while q < sn {
+                let sEnd = fieldEnd(self.itemStartsText, q, sn)
+                let ln = parseDec(self.itemStartsText, q, sEnd)
+                if ln > uEnd {
+                    idx = n
+                    break
+                }
+                n = n + 1
+                q = sEnd + 1
+            }
+            if idx < 0 {
+                self.fail(uStart, 1, "E0405",
+                    "orphan documentation comment — the /// unit documents no following top-level item; add the declaration or use ordinary // comments")
+                return
+            }
+            rows = rows + "P docattach 0 0 " + i64(uStart) + " " + i64(uEnd) + " " + i64(idx) + "\n" + unit
+        }
+        let fEnd = lineEndAt(self.astText, 0)
+        self.astText = self.astText.byteSlice(0, fEnd + 1) + rows + self.astText.byteSlice(fEnd + 1, self.astText.byteLength())
     }
 
     // parseItem dispatches one top-level item by its keyword; a non-item
